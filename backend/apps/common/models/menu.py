@@ -43,11 +43,11 @@ class ConfigMenu(models.Model):
         if user.is_superuser:
             return {k: True for k in permisos}
 
-        # 🔹 Permisos desde tabla legacy (ejemplo)
+        # 🔹 Permisos desde tabla azul (ejemplo)
         # Ajusta el query EXACTAMENTE a tu estructura real
         from django.db import connections
 
-        with connections["legacy"].cursor() as cursor:
+        with connections["azul"].cursor() as cursor:
                 # leer, editar, insertar, importar, manual, admin
             url_pattern = f'%{url}%'
             cursor.execute("""

@@ -1,8 +1,11 @@
+# backend\config\db_router.py
 class MultiDBRouter:
     APP_DB_MAP = {
         "authentication": "default",
         "security": "default",
-        "common": "legacy",
+        "common": "azul",
+        "operaciones": "default",
+        "empleados": "azul",
         # "reports": "reporting",
         # "audit": "audit",
     }

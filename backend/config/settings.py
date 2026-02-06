@@ -56,12 +56,14 @@ INSTALLED_APPS = [
     # Third-party
     "rest_framework",
     "corsheaders",
+    'drf_spectacular',
     
     # Local apps
     'apps.authentication',
     'apps.common',
     'apps.security',
     'apps.operaciones',
+    'apps.empleados',
 ]
 
 MIDDLEWARE = [
@@ -101,20 +103,35 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
-
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'App Cinco API',
+    'DESCRIPTION': 'Documentación de endpoints - App Cinco',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SECURITY': [{'BearerAuth': []}],
+    'COMPONENTS': {
+        'securitySchemes': {
+            'BearerAuth': {
+                'type': 'http',
+                'scheme': 'bearer',
+                'bearerFormat': 'JWT',
+            }
+        }
+    }
+}
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
-
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
     },
-    # 'azul': {
-    'legacy': {
+    # 'legacy': {
+    'azul': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': os.environ.get('DB_AZUL_NAME', 'cinco-api'),
         'USER': os.environ.get('DB_AZUL_USER', 'root'),
@@ -132,7 +149,6 @@ DATABASE_ROUTERS = ['config.db_router.MultiDBRouter']
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
-
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -153,23 +169,19 @@ AUTH_PASSWORD_VALIDATORS = [
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 
 LANGUAGE_CODE = 'es-co'
-
 TIME_ZONE = 'America/Bogota'
-
 USE_I18N = True
-
 USE_TZ = True
 
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
-
 # STATIC_URL = '/home/admcinco/app_cinco/backend/static/'
 STATIC_URL = os.getenv('BASE_PATH') + 'static/'
 # STATIC_ROOT = '/home/admcinco/app_cinco/backend/static'
 STATIC_ROOT = os.getenv('BASE_PATH') + 'static/'
 
-# DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 #SECURE_HSTS_SECONDS = 31536000
 #SECURE_HSTS_INCLUDE_SUBDOMAINS = True

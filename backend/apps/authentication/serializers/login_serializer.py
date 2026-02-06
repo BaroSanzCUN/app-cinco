@@ -19,3 +19,13 @@ class LoginSerializer(serializers.Serializer):
 
         data["user"] = user
         return data
+    
+class LoginRequestSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    password = serializers.CharField()
+
+class LoginResponseSerializer(serializers.Serializer):
+    access = serializers.CharField()
+    refresh = serializers.CharField()
+    user = serializers.DictField()
+

@@ -1,2 +1,2 @@
-from .login_views import LoginView
-from .refresh_views import RefreshTokenView
+from .login_view import LoginView
+from .refresh_view import RefreshTokenView

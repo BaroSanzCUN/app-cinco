@@ -1,7 +1,7 @@
 from apps.common.models import ConfigMenu
 
 def build_menu_for_user(user):
-    menus = ConfigMenu.objects.using("legacy").filter(estado="ACTIVO").order_by("area", "carpeta", "nombre")
+    menus = ConfigMenu.objects.using("azul").filter(estado="ACTIVO").order_by("area", "carpeta", "nombre")
 
     response = []
 

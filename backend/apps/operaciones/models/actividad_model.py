@@ -1,3 +1,4 @@
+# from encodings.punycode import T
 from django.db import models
 from django.utils import timezone
 
@@ -11,13 +12,32 @@ class Actividad(models.Model):
         ('cancelada', 'Cancelada'),
     ]
     
-    nombre = models.CharField(max_length=200)
-    descripcion = models.TextField(blank=True, null=True)
+    id = models.AutoField(primary_key=True)
+    fecha_creacion = models.DateTimeField(default=timezone.now)
     estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='pendiente')
-    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    # responsable -> empleado asignado (relacionar)
+    responsable = models.CharField(max_length=100, blank=True, null=True)
+    ot = models.CharField(max_length=100, unique=True, null=True)
+    direccion = models.CharField(max_length=255, blank=True, null=True)
+    area = models.CharField(max_length=100, blank=True, null=True)
+    # 
+    zona = models.CharField(max_length=100, blank=True, null=True)
+    # 
+    nodo = models.CharField(max_length=100, blank=True, null=True)
+    fin_estimado = models.DateTimeField(blank=True, null=True)
+    fin_real = models.DateTimeField(blank=True, null=True)
+    # edit -> updated_by (relacionar)
+    edit = models.CharField(max_length=100, blank=True, null=True)
+    # fecha_edit -> updated_at 
+    fecha_edit = models.DateTimeField(blank=True, null=True)
+    
+    # relacion de responsable y edit con modelo Empleado
+    
     
     class Meta:
+        db_table = 'operaciones_actividades'
+        app_label = 'operaciones'
         verbose_name = 'Actividad'
         verbose_name_plural = 'Actividades'
-        ordering = ['-fecha_creacion']
+        ordering = ['-id']
     

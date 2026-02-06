@@ -1,0 +1,1 @@
+from .empleado_serializer import EmpleadoSerializer
