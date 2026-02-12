@@ -126,11 +126,21 @@ SPECTACULAR_SETTINGS = {
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 DATABASES = {
+    # 'default': {
+    #     'ENGINE': 'django.db.backends.sqlite3',
+    #     'NAME': BASE_DIR / 'db.sqlite3',
+    # },
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': os.environ.get('BD_NAME', 'db_cincosas'),
+        'USER': os.environ.get('BD_USER', 'root'),
+        'PASSWORD': os.environ.get('BD_PASSWORD', ''),
+        'HOST': os.environ.get('BD_HOST', '127.0.0.1'),
+        'PORT': os.environ.get('BD_PORT', '3306'),
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+        }
     },
-    # 'legacy': {
     'azul': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': os.environ.get('DB_AZUL_NAME', 'cinco-api'),

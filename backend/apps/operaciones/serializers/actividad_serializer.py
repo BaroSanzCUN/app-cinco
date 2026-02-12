@@ -28,7 +28,9 @@ class ActividadCreateSerializer(serializers.ModelSerializer):
         fields = (
             'ot',
             'responsable_id',
-            'fin_estimado',
+            'fecha_inicio',
+            'fecha_fin_estimado',
+            'fecha_fin_real',
             'detalle',
             'ubicacion'
         )
@@ -52,6 +54,7 @@ class ActividadSerializer(serializers.ModelSerializer):
             return {
                 "nombre": obj.responsable_snapshot.nombre,
                 "area": obj.responsable_snapshot.area,
+                "carpeta": obj.responsable_snapshot.carpeta,
                 "cargo": obj.responsable_snapshot.cargo,
                 "movil": obj.responsable_snapshot.movil,
             }

@@ -17,8 +17,9 @@ class Actividad(models.Model):
 
     responsable_id = models.IntegerField()
 
-    fin_estimado = models.DateTimeField(blank=True, null=True)
-    fin_real = models.DateTimeField(blank=True, null=True)
+    fecha_inicio = models.DateTimeField(blank=True, null=True)
+    fecha_fin_estimado = models.DateTimeField(blank=True, null=True)
+    fecha_fin_real = models.DateTimeField(blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.IntegerField(null=True, blank=True)
@@ -60,6 +61,8 @@ class ActividadUbicacion(models.Model):
     )
 
     direccion = models.CharField(max_length=255)
+    coordenada_x = models.CharField(max_length=100)
+    coordenada_y = models.CharField(max_length=100)
     zona = models.CharField(max_length=100)
     nodo = models.CharField(max_length=100)
 

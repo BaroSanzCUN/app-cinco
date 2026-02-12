@@ -29,7 +29,7 @@ class Empleado(models.Model):
     zona_nodo = models.CharField(max_length=100, blank=True, null=True)
     area = models.CharField(max_length=100, blank=True, null=True)
     carpeta = models.CharField(max_length=100, blank=True, null=True)
-    sede = models.CharField(max_length=100, blank=True, null=False, choices=SEDE_CHOICES, default='BOGOTA')
+    sede = models.CharField(max_length=100, blank=True, null=False, choices=SEDE_CHOICES, default='MEDELLIN')
     movil = models.CharField(max_length=100, blank=True, null=True)
     cargo = models.CharField(max_length=100, blank=True, null=True)
     funcion_cargo = models.CharField(max_length=255, blank=True, null=True)
