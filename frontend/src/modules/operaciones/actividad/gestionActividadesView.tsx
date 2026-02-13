@@ -1,38 +1,35 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { PlusIcon } from "@/icons";
-import ModalActividad from "./modalActividad";
+import { useEffect, useState } from "react";
+import ModalActividad from "./ModalActividad";
+import Alert from "@/components/ui/alert/Alert";
+import Badge from "@/components/ui/badge/Badge";
 import { ColumnDef } from "@tanstack/react-table";
 import { DataTable } from "@/components/common/DataTable";
+import { useActividadStore } from "@/store/actividad.store";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import { ActividadFormData } from "@/schemas/actividades.schema";
-import ESTADOS from "@/utils/estados";
-import { useActividadStore } from "@/store/actividad.store";
-import Button from "@/components/ui/button/Button";
 
 
 const GestionActividadesView = () => {
-    // const [actividades, setActividades] = useState<ActividadFormData[]>([]);
     const breadcrumbTitles = ["Operaciones", "Gestión de Actividades"];
     const { loadActividades, actividades } = useActividadStore();
+    const [showAlert, setShowAlert] = useState(false);
 
     useEffect(() => {
         loadActividades();
+        
+        const timer = setTimeout(() => {
+            setShowAlert(false);
+        }, 5000); // Ocultar alerta después de 5 segundos
+        
+        return () => clearTimeout(timer);
     }, [loadActividades]);
 
     const handleEditarActividad = (id: any) => {
         alert(`Editar actividad ${id}`);
     }
-
-    // const ESTADOS: Record<string, string> = {
-    //     'pendiente': 'bg-yellow-400/50', // amarillo
-    //     'en_progreso': 'bg-blue-500/50', // azul
-    //     'completada': 'bg-green-500/50', // verde
-    //     'cancelada': 'bg-red-500/50', // rojo
-    //     'pausada': 'bg-yellow-700/50', // amarillo oscuro
-    //     'reprogramada': 'bg-orange-500/50', // naranja
-    // }
 
     // {
     //     "id": 3,
@@ -78,10 +75,26 @@ const GestionActividadesView = () => {
             // accessorKey: "id",
             cell: ({ row }) => {
                 const id = row.original.id;
+
+                if (id === undefined) {
+                    return null;
+                }
+
+                const actividad = {
+                    id: id as number,
+                    ot: row.original.ot,
+                    estado: row.original.estado,
+                    // responsable_snapshot: row.original.responsable_snapshot,
+                    responsable_id: row.original.responsable_id,
+                    fecha_inicio: row.original.fecha_inicio,
+                    fecha_fin_estimado: row.original.fecha_fin_estimado,
+                    fecha_fin_real: row.original.fecha_fin_real,
+                    detalle: row.original.detalle,
+                    ubicacion: row.original.ubicacion,
+                }
+
                 return (
-                    <Button variant="primary" size="sm" onClick={() => handleEditarActividad(id)}>
-                        editar
-                    </Button>
+                    <ModalActividad mode="edit" actividad={actividad} textButton="Editar" />
                 );
 
             }
@@ -95,11 +108,17 @@ const GestionActividadesView = () => {
             accessorKey: "estado",
             cell: ({ row }) => {
                 const estado = row.original.estado || "Sin estado";
-                const color = ESTADOS[estado] || "bg-gray-400/50"; // color por defecto si el estado no está definido
                 return (
-                    <span
-                        className={`px-2 py-1 rounded-full text-xs ${color}`}
-                    >{estado || "Sin estado"}</span>
+                    <Badge
+                        size="sm"
+                        color={
+                            estado == "completada"
+                                ? "success"
+                                : estado == "pendiente"
+                                ? "warning"
+                                : "error"
+                        }
+                    >{estado}</Badge>
                 );
             },
         },
@@ -127,7 +146,18 @@ const GestionActividadesView = () => {
                     </p>
                 </div>
                 
-                <ModalActividad iconButton={<PlusIcon />} textButton="Actividad" />
+                <ModalActividad mode="create" iconButton={<PlusIcon />} textButton="Actividad"  />
+
+                {showAlert &&
+                    <Alert
+                        variant="success"
+                        title="Actividad Creada"
+                        message="La actividad ha sido creada exitosamente."
+                        // showLink={true}
+                        // linkHref="/"
+                        // linkText="Learn more"
+                    />
+                }
 
                 <div className="mt-10">
                     <DataTable

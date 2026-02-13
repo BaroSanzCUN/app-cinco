@@ -69,10 +69,10 @@ export const ActividadSchema = z.object({
   
   responsable_id: z
     .number()
-    .int()
-    .positive("Debe seleccionar un responsable"),
-
-
+    .nullish(),
+    // .int()
+    // .positive("Debe seleccionar un responsable"),
+    
   fecha_inicio: z
     .string()
     .min(1, "La fecha de inicio es requerida")
@@ -80,7 +80,7 @@ export const ActividadSchema = z.object({
       message: "Fecha de inicio inválida",
     }),
   
-    fecha_fin_estimado: z
+  fecha_fin_estimado: z
     .string()
     .min(1, "La fecha de fin estimada es requerida")
     .refine((v) => !isNaN(Date.parse(v)), {
