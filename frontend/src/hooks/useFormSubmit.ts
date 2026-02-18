@@ -11,7 +11,7 @@ type SubmitOptions<T> = {
 
 export function useFormSubmit<T>() {
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Record<string, any> | null>(null);
   const [data, setData] = useState<any>(null);
 
   const submit = async (formData: T, options: SubmitOptions<T>) => {
@@ -26,21 +26,20 @@ export function useFormSubmit<T>() {
       });
 
       setData(response.data);
-      
-      if (options.onSuccess) {
-        options.onSuccess(response.data);
-      }
-      
+
+      options.onSuccess?.(response.data);
+
       return response.data;
+
     } catch (err: any) {
-      const errorMessage = err.response?.data?.message || 'Error desconocido';
-      setError(errorMessage);
-      
-      if (options.onError) {
-        options.onError(err);
-      }
-      
-      throw err;
+      const backendErrors = err.response?.data || null;
+
+      setError(backendErrors);
+
+      options.onError?.(backendErrors);
+
+      throw backendErrors;
+
     } finally {
       setIsLoading(false);
     }

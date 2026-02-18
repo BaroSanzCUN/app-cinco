@@ -1,28 +1,43 @@
 
-
-from rest_framework.views import APIView
+from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
+from drf_spectacular.utils import extend_schema
+from rest_framework.viewsets import ModelViewSet
 
-from apps.operaciones.services import crear
+from apps.operaciones.serializers.actividad_serializer import (
+    ActividadSerializer,
+    ActividadCreateSerializer
+)
+from apps.operaciones.services.actividad_service import ActividadService
 
-class ActividadesView(APIView):
-    authentication_classes = []
+
+class ActividadViewSet(ModelViewSet):
     permission_classes = [AllowAny]
-    # permission_classes = []
-    
-    ## Crear endpoints para:
-    #1 crear una nueva actividad
-    #2 listar todas las actividades
-    #3 obtener actividades de un area específica
-    #4 obtener actividades de un empleado específico
-    #5 obtener actividades de una movil (puede abarcar varias actividades y empleados)
-    #6 actualizar el estado de una actividad
-    
-    
-    # 1 Crear una nueva actividad
-    def create(self, request):
-        data = request.data
-        nueva_actividad = crear(data)
-        return Response({"actividad": nueva_actividad.id}, status=201)
-    
+
+    def get_queryset(self):
+        return ActividadService.listar().select_related(
+            'detalle',
+            'ubicacion',
+            'responsable_snapshot'
+        )
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return ActividadCreateSerializer
+        return ActividadSerializer
+
+    @extend_schema(
+        summary="Crear una nueva actividad",
+        tags=["operaciones"],
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        actividad = ActividadService.crear(self, serializer.validated_data)
+
+        return Response(
+            ActividadSerializer(actividad).data,
+            status=status.HTTP_201_CREATED
+        )

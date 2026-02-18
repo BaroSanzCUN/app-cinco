@@ -1,5 +1,5 @@
 import { Metadata } from "next";
-import GestionActividadesView from "@/modules/operaciones/gestionActividadesView";
+import GestionActividadesView from "@/modules/operaciones/actividad/gestionActividadesView";
 
 export const metadata: Metadata = {
     title: "Gestión de Actividades - CINCO SAS",

@@ -22,7 +22,7 @@ class MenuView(APIView):
             401: {"detail": "No se proporcionaron credenciales de autenticación."},
             403: {"detail": "No tiene permiso para realizar esta acción."},
         },
-        tags=["Security"],
+        tags=["security"],
     )
     def get(self, request):
         menu = build_menu_for_user(request.user)

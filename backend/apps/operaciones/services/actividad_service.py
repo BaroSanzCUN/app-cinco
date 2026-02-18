@@ -1,34 +1,56 @@
-from apps.operaciones.models import Actividad
+from django.db import transaction
+from django.utils import timezone
 
-#1 crear una nueva actividad
-#2 listar todas las actividades
-#3 obtener actividades de un area específica
-#4 obtener actividades de un empleado específico
-#5 obtener actividades de una movil (puede abarcar varias actividades y empleados)
-#6 actualizar actividad
+from apps.operaciones.models import (
+    Actividad,
+    ActividadDetalle,
+    ActividadUbicacion,
+    ActividadResponsableSnapshot
+)
+from apps.empleados.services import EmpleadoService
 
-def crear(data):
-    # Lógica para crear una nueva actividad
-    return Actividad.objects.create(**data)
+class ActividadService:
 
-def listar():
-    # Lógica para listar todas las actividades
-    return Actividad.objects.all()
+    # @staticmethod
+    def crear(self, data: dict) -> Actividad:
+        detalle_data = data.pop('detalle')
+        ubicacion_data = data.pop('ubicacion')
 
-def obtener_por_area(area_id):
-    # Lógica para obtener actividades de un área específica
-    pass
-    # return ActividadModel.objects.filter(area_id=area_id)
+        with transaction.atomic():
+            # 1️⃣ Obtener empleado desde otra DB
+            empleado = EmpleadoService().obtener_basico(data['responsable_id'])
+            
+            # datos de la sesión actual
+            data['created_by'] = self.request.user.id
+            data['updated_by'] = self.request.user.id
+            
+            actividad = Actividad.objects.create(**data)
 
-def obtener_por_empleado(empleado_id):
-    # Lógica para obtener actividades de un empleado específico
-    pass
-    # return ActividadModel.objects.filter(responsable=empleado_id)
+            # 3️⃣ Snapshot del responsable
+            ActividadResponsableSnapshot.objects.create(
+                actividad=actividad,
+                empleado_id=empleado['id'],
+                nombre=empleado['nombre'],
+                area=empleado['area'],
+                carpeta=empleado['carpeta'],
+                cargo=empleado['cargo'],
+                movil=empleado['movil'],
+            )
 
-# def obtener_por_movil(movil_id):
-#     # Lógica para obtener actividades de una móvil específica
-#     pass
+            # 4️⃣ Ubicación
+            ActividadUbicacion.objects.create(
+                actividad=actividad,
+                **ubicacion_data
+            )
 
-def actualizar(actividad_id, data):
-    # Lógica para actualizar una actividad
-    pass
+            # 5️⃣ Detalle
+            ActividadDetalle.objects.create(
+                actividad=actividad,
+                **detalle_data
+            )
+
+            return actividad
+
+    @staticmethod
+    def listar():
+        return Actividad.objects.filter(is_deleted=False)

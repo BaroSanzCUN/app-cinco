@@ -33,7 +33,7 @@ const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(
     if (disabled) {
       textareaClasses += ` bg-gray-100 opacity-50 text-gray-500 border-gray-300 cursor-not-allowed dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700`;
     } else if (error) {
-      textareaClasses += ` bg-transparent text-gray-400 border-gray-300 focus:border-error-300 focus:ring-3 focus:ring-error-500/10 dark:border-gray-700 dark:bg-gray-900 dark:text-white/90 dark:focus:border-error-800`;
+      textareaClasses += ` bg-transparent text-gray-400 border-error-500 focus:border-error-300 focus:ring-3 focus:ring-error-500/10 dark:border-error-700 dark:bg-gray-900 dark:text-white/90 dark:focus:border-error-800`;
     } else if (success) {
       textareaClasses += ` text-success-500 border-success-400 focus:ring-success-500/10 focus:border-success-300 dark:text-success-400 dark:border-success-500`;
     } else {
@@ -46,16 +46,17 @@ const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(
           ref={ref}
           placeholder={placeholder}
           rows={rows}
-          value={value}
+          value={value ?? ""}
           defaultValue={defaultValue}
           onChange={handleChange}
           disabled={disabled}
           className={textareaClasses}
+          aria-invalid={error ? "true" : "false"}
           {...props}
         />
         {hint && (
           <p
-            className={`mt-2 text-sm ${
+            className={`text-xs ${
               error
                 ? "text-error-400"
                 : success

@@ -1,1 +1,1 @@
-from .actividad_view import ActividadesView
+from .actividad_view import ActividadViewSet

@@ -1,6 +1,7 @@
-from django.urls import path
-from apps.operaciones.views import ActividadesView
+from rest_framework.routers import DefaultRouter
+from apps.operaciones.views import ActividadViewSet
 
-urlpatterns = [
-    path("actividades/", ActividadesView.as_view(), name="actividades"),
-]
+router = DefaultRouter()
+router.register(r'actividades', ActividadViewSet, basename='actividades')
+
+urlpatterns = router.urls

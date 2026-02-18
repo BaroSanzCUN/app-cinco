@@ -4,7 +4,7 @@ import 'flatpickr/dist/flatpickr.css';
 import Label from './Label';
 import { CalenderIcon } from '../../icons';
 import Hook = flatpickr.Options.Hook;
-import DateOption = flatpickr.Options.DateOption;
+import { DateOption } from 'flatpickr/dist/types/options';
 
 type PropsType = {
   id: string;
@@ -16,6 +16,7 @@ type PropsType = {
   hint?: string;
   error?: boolean;
   success?: boolean;
+  options?: Partial<flatpickr.Options.Options>;
 };
 
 export default function DatePicker({
@@ -28,23 +29,40 @@ export default function DatePicker({
   hint,
   error,
   success,
+  options = {}
 }: PropsType) {
   useEffect(() => {
-    const flatPickr = flatpickr(`#${id}`, {
+    if (typeof window === "undefined") return;
+  
+    const flatPickrInstance = flatpickr(`#${id}`, {
       mode: mode || "single",
-      static: true,
-      monthSelectorType: "static",
-      dateFormat: "Y-m-d",
+      // monthSelectorType: "static",
+      // dateFormat: "Y-m-d",
       defaultDate,
       onChange,
+      disableMobile: false,
+      // altInput: true,
+      locale: {
+        firstDayOfWeek: 1, // Lunes como primer día de la semana
+        weekdays: {
+          shorthand: ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'],
+          longhand: ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'],
+        },
+        months: {
+          shorthand: ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'],
+          longhand: ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'],
+        },
+      },
+      appendTo: document.body, // ✅ aquí sí
+      ...options,
     });
-
+  
     return () => {
-      if (!Array.isArray(flatPickr)) {
-        flatPickr.destroy();
+      if (!Array.isArray(flatPickrInstance)) {
+        flatPickrInstance.destroy();
       }
     };
-  }, [mode, onChange, id, defaultDate]);
+  }, [mode, onChange, id, defaultDate, options]);
 
   return (
     <div>

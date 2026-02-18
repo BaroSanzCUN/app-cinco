@@ -1,11 +1,8 @@
-
 from rest_framework import serializers
+from apps.empleados.models import Empleado
 
-
-class EmpleadoSerializer(serializers.Serializer):
-    
-    
-    
-    def serialize(self, empleado):
-        # Lógica para serializar un empleado
-        pass
+class EmpleadoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Empleado
+        # Aquí defines los campos que quieres exponer en la API
+        fields = ['id', 'cedula', 'nombre', 'apellido', 'area', 'carpeta', 'cargo', 'movil', 'supervisor', 'estado', 'link_foto']
