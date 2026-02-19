@@ -49,13 +49,20 @@ class LoginView(APIView):
 
         access = generate_access_token(user)
         refresh = generate_refresh_token(user)
-
+        
+        # Get employee photo
+        # employee = user.empleado
+        # foto = employee.foto or employee.link_foto if employee else None
         return Response({
             "access": access,
             "refresh": refresh.token,
             "user": {
                 "id": user.id,
                 "username": user.username,
-                "is_superuser": user.is_superuser
+                "nombre": user.first_name,
+                "apellido": user.last_name,
+                "email": user.email,
+                "is_superuser": user.is_superuser,
+                # "foto": foto
             }
         })

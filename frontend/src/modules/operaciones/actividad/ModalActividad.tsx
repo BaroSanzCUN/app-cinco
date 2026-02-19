@@ -28,8 +28,6 @@ const ModalActividad = ({
     const { isOpen, openModal, closeModal } = useModal();
     const { handleSubmit, isLoading, error } = useActividadSubmit();
 
-    console.log({actividad, error})
-
     const defaultValues =
         mode === "edit" && actividad
             ? actividadEditDefaultValues(actividad)

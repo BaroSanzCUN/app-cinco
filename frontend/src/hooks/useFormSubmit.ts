@@ -1,17 +1,18 @@
 // app/hooks/useFormSubmit.ts
 import api from '@/lib/api';
 import { useState } from 'react';
+import { classifyError, createApiError, getErrorMessage, extractValidationErrors, ApiErrorDetail } from '@/lib/errorHandler';
 
 type SubmitOptions<T> = {
   endpoint: string;
   method?: 'POST' | 'PUT' | 'PATCH';
   onSuccess?: (data: any) => void;
-  onError?: (error: any) => void;
+  onError?: (error: ApiErrorDetail) => void;
 };
 
 export function useFormSubmit<T>() {
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Record<string, any> | null>(null);
+  const [error, setError] = useState<ApiErrorDetail | null>(null);
   const [data, setData] = useState<any>(null);
 
   const submit = async (formData: T, options: SubmitOptions<T>) => {
@@ -26,19 +27,17 @@ export function useFormSubmit<T>() {
       });
 
       setData(response.data);
-
       options.onSuccess?.(response.data);
-
       return response.data;
 
     } catch (err: any) {
-      const backendErrors = err.response?.data || null;
+      // Aquí err ya viene clasificado desde el interceptor
+      const errorDetail = err.type ? err : classifyError(err);
+      
+      setError(errorDetail);
+      options.onError?.(errorDetail);
 
-      setError(backendErrors);
-
-      options.onError?.(backendErrors);
-
-      throw backendErrors;
+      throw errorDetail;
 
     } finally {
       setIsLoading(false);
