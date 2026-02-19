@@ -123,7 +123,7 @@ api.interceptors.response.use(
         });
 
         saveTokens(res.data);
-        const newAccessToken = res.data.access_token;
+        const newAccessToken = res.data.access || res.data.access_token;
         processQueue(null, newAccessToken);
 
         original.headers.Authorization = `Bearer ${newAccessToken}`;

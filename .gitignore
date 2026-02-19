@@ -103,3 +103,5 @@ yarn.lock
 
 # Ignorar configuraciones de Docker (si usas)
 docker-compose.override.yml
+
+tmp/

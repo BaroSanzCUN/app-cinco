@@ -102,13 +102,23 @@ export function createApiError(error: any): ApiError {
 
 /**
  * Obtiene el mensaje de error más apropiado según el tipo
+ * Prioriza mensajes específicos del backend (Django)
  */
 export function getErrorMessage(errorDetail: ApiErrorDetail): string {
+  // Priorizar mensajes específicos del backend
+  if (errorDetail.detail) {
+    return errorDetail.detail;
+  }
+  if (errorDetail.message && errorDetail.message !== "Error desconocido") {
+    return errorDetail.message;
+  }
+
+  // Fallback a mensajes genéricos
   switch (errorDetail.type) {
     case ApiErrorType.VALIDATION:
       return "Por favor, revisa los datos ingresados";
     case ApiErrorType.AUTHENTICATION:
-      return "Tu sesión ha expirado. Por favor, inicia sesión nuevamente";
+      return "Credenciales inválidas o sesión expirada";
     case ApiErrorType.AUTHORIZATION:
       return "No tienes permisos para realizar esta acción";
     case ApiErrorType.NOT_FOUND:
@@ -124,7 +134,7 @@ export function getErrorMessage(errorDetail: ApiErrorDetail): string {
     case ApiErrorType.TIMEOUT:
       return "La solicitud tomó demasiado tiempo. Por favor, intenta nuevamente";
     default:
-      return errorDetail.message || "Ocurrió un error inesperado";
+      return "Ocurrió un error inesperado";
   }
 }
 
