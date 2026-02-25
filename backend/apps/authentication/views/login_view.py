@@ -3,11 +3,13 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.contrib.auth import authenticate
+from django.conf import settings
 from drf_spectacular.utils import extend_schema
 
 from apps.authentication.services import (
     generate_access_token, 
-    generate_refresh_token
+    generate_refresh_token,
+    get_device_fingerprint
 )
 from apps.authentication.serializers import (
     LoginRequestSerializer,
@@ -47,15 +49,19 @@ class LoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        access = generate_access_token(user)
+        # Generar fingerprint del dispositivo para seguridad adicional
+        fingerprint = get_device_fingerprint(request)
+        
+        # Generar tokens con fingerprint
+        access = generate_access_token(user, fingerprint)
         refresh = generate_refresh_token(user)
         
         # Get employee photo
         # employee = user.empleado
         # foto = employee.foto or employee.link_foto if employee else None
-        return Response({
-            "access": access,
-            "refresh": refresh.token,
+        
+        # Crear respuesta solo con datos del usuario
+        response = Response({
             "user": {
                 "id": user.id,
                 "username": user.username,
@@ -66,3 +72,26 @@ class LoginView(APIView):
                 # "foto": foto
             }
         })
+        
+        # Establecer tokens en cookies httpOnly (protección XSS)
+        secure_cookie = getattr(settings, 'SECURE_COOKIE', not settings.DEBUG)
+        
+        response.set_cookie(
+            key='access_token',
+            value=access,
+            httponly=True,  # No accesible desde JavaScript
+            secure=secure_cookie,  # Solo HTTPS en producción
+            samesite='Lax',  # Protección CSRF
+            max_age=15 * 60  # 15 minutos
+        )
+        
+        response.set_cookie(
+            key='refresh_token',
+            value=refresh.token,
+            httponly=True,
+            secure=secure_cookie,
+            samesite='Lax',
+            max_age=7 * 24 * 60 * 60  # 7 días
+        )
+        
+        return response

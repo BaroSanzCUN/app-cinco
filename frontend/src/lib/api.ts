@@ -1,6 +1,6 @@
 // app/lib/api.ts
 import axios from "axios";
-import { clearTokens, getTokens, saveTokens } from "@/utils/storage";
+import { clearUser } from "@/utils/storage";
 import { classifyError, ApiErrorType } from "@/lib/errorHandler";
 
 const baseURL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/";
@@ -8,6 +8,7 @@ const baseURL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/";
 const api = axios.create({
   baseURL,
   timeout: 10000, // 10 segundos
+  withCredentials: true, // Envía cookies automáticamente
   headers: {
     "Content-Type": "application/json",
   },
@@ -16,6 +17,16 @@ const api = axios.create({
 const refreshApi = axios.create({
   baseURL,
   timeout: 10000,
+  withCredentials: true, // Envía cookies automáticamente
+  headers: {
+    "Content-Type": "application/json",
+  },
+});
+
+const csrfApi = axios.create({
+  baseURL,
+  timeout: 10000,
+  withCredentials: true,
   headers: {
     "Content-Type": "application/json",
   },
@@ -28,21 +39,39 @@ let failedQueue: Array<{
   config: any;
 }> = [];
 
-const processQueue = (error: any, token: string | null) => {
+const processQueue = (error: any) => {
   failedQueue.forEach(({ resolve, reject, config }) => {
     if (error) {
       reject(error);
       return;
     }
 
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-
+    // Ya no necesitamos agregar token manualmente, se envía en cookies
     resolve(api(config));
   });
 
   failedQueue = [];
+};
+
+const getCookieValue = (name: string): string | null => {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(new RegExp(`(^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[2]) : null;
+};
+
+let csrfPromise: Promise<void> | null = null;
+
+const ensureCsrfToken = async (): Promise<void> => {
+  if (getCookieValue("csrftoken")) return;
+  if (!csrfPromise) {
+    csrfPromise = csrfApi
+      .get("/auth/csrf/")
+      .then(() => undefined)
+      .finally(() => {
+        csrfPromise = null;
+      });
+  }
+  await csrfPromise;
 };
 
 /**
@@ -61,20 +90,26 @@ const normalizeUrl = (url: string): string => {
   return url.endsWith("/") ? url : url + "/";
 };
 
-// Interceptor para agregar token automáticamente
+// Interceptor para normalizar URLs
 api.interceptors.request.use(
-  (config) => {
+  async (config) => {
     // Normalizar URL
     if (config.url) {
       config.url = normalizeUrl(config.url);
     }
 
-    if (typeof window !== "undefined") {
-      const { accessToken } = getTokens();
-      if (accessToken) {
-        config.headers.Authorization = `Bearer ${accessToken}`;
+    // Las cookies se envían automáticamente con withCredentials: true
+    const method = (config.method || "get").toLowerCase();
+    const needsCsrf = ["post", "put", "patch", "delete"].includes(method);
+    if (needsCsrf) {
+      await ensureCsrfToken();
+      const csrfToken = getCookieValue("csrftoken");
+      if (csrfToken) {
+        config.headers = config.headers || {};
+        config.headers["X-CSRFToken"] = csrfToken;
       }
     }
+
     return config;
   },
   (error) => Promise.reject(error)
@@ -105,39 +140,26 @@ api.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        const { refreshToken } = getTokens();
+        // Llamar al endpoint de refresh - las cookies se envían automáticamente
+        await refreshApi.post("/auth/refresh/");
 
-        if (!refreshToken) {
-          clearTokens();
-          if (
-            typeof window !== "undefined" &&
-            window.location.pathname !== "/login"
-          ) {
-            window.location.href = "/login";
-          }
-          return Promise.reject(error);
-        }
+        // Las nuevas cookies se establecen automáticamente en la respuesta
+        processQueue(null);
 
-        const res = await refreshApi.post("/auth/refresh/", {
-          refresh_token: refreshToken,
-        });
-
-        saveTokens(res.data);
-        const newAccessToken = res.data.access || res.data.access_token;
-        processQueue(null, newAccessToken);
-
-        original.headers.Authorization = `Bearer ${newAccessToken}`;
+        // Reintentar la petición original
         return api(original);
-      } catch (refreshError) {
-        processQueue(refreshError, null);
-        clearTokens();
+      } catch (refreshError: any) {
+        // Clasificar el error del refresh
+        const classifiedRefreshError = classifyError(refreshError);
+        processQueue(classifiedRefreshError);
+        clearUser(); // Limpiar datos del usuario
         if (
           typeof window !== "undefined" &&
           !window.location.pathname.includes("/login")
         ) {
           window.location.href = "/login";
         }
-        return Promise.reject(refreshError);
+        return Promise.reject(classifiedRefreshError);
       } finally {
         isRefreshing = false;
       }

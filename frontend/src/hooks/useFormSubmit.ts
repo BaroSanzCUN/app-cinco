@@ -31,8 +31,16 @@ export function useFormSubmit<T>() {
       return response.data;
 
     } catch (err: any) {
-      // Aquí err ya viene clasificado desde el interceptor
-      const errorDetail = err.type ? err : classifyError(err);
+      // Clasificar el error si no viene clasificado desde el interceptor
+      let errorDetail: ApiErrorDetail;
+      
+      if (err && typeof err === 'object' && err.type) {
+        // Ya está clasificado
+        errorDetail = err;
+      } else {
+        // Necesita ser clasificado
+        errorDetail = classifyError(err);
+      }
       
       setError(errorDetail);
       options.onError?.(errorDetail);

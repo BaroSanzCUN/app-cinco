@@ -35,6 +35,11 @@ export interface ApiError extends Error {
  * Clasifica el tipo de error basado en el estado HTTP y contenido
  */
 export function classifyError(error: any): ApiErrorDetail {
+  // Si el error ya está clasificado, devolverlo
+  if (error && typeof error === 'object' && error.type && error.status !== undefined) {
+    return error as ApiErrorDetail;
+  }
+
   const status = error?.response?.status || 0;
   const data = error?.response?.data;
   const message = data?.message || data?.detail || error?.message || "Error desconocido";
@@ -79,7 +84,7 @@ export function classifyError(error: any): ApiErrorDetail {
     status,
     message,
     detail: data?.detail,
-    errors: data?.errors || data,
+    errors: data?.errors || (typeof data === 'object' && !data.detail && !data.message ? data : undefined),
     timestamp: new Date().toISOString(),
   };
 }

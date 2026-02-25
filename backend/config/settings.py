@@ -38,11 +38,29 @@ ALLOWED_HOSTS = [
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True  # Permite envío de cookies entre dominios
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "https://frontend.cincosas.com",
 ]
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:3000",
+    "https://frontend.cincosas.com",
+]
+
+# Configuración de cookies seguras
+SECURE_COOKIE = not DEBUG  # Solo HTTPS en producción
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SAMESITE = 'Lax'  # Protección contra CSRF
+CSRF_COOKIE_HTTPONLY = False  # Necesario para leer el token en el frontend
+
+if DEBUG:
+    CSRF_COOKIE_SAMESITE = 'Lax'
+else:
+    CSRF_COOKIE_SAMESITE = 'None'
 
 # Application definition
 INSTALLED_APPS = [

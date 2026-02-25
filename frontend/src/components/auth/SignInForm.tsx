@@ -31,16 +31,27 @@ export default function SignInForm() {
   });
 
   const onSubmit = async (data: LoginFormValues) => {
-    await submit(data, {
-      endpoint: "/auth/login",
-      onSuccess: (response) => {
-        login(response);
-        router.replace("/");
-      },
-      onError: (error) => {
-        console.error("Error al iniciar sesión:", error);
-      },
-    });
+    try {
+      await submit(data, {
+        endpoint: "/auth/login",
+        onSuccess: (response) => {
+          login(response);
+          router.replace("/");
+        },
+        onError: (error) => {
+          console.error("Error al iniciar sesión:", {
+            type: error.type,
+            status: error.status,
+            message: error.message,
+            detail: error.detail,
+            errors: error.errors
+          });
+        },
+      });
+    } catch (error) {
+      // El error ya fue manejado por useFormSubmit
+      // Solo lo capturamos aquí para prevenir errores no capturados
+    }
   };
 
   const handleForgotPassword = () => {

@@ -2,7 +2,7 @@
 
 import React, { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { getTokens, getUser } from "@/utils/storage";
+import { getUser } from "@/utils/storage";
 import { useAuthStore } from "@/store/auth.store";
 
 type RequireAuthProps = {
@@ -15,15 +15,17 @@ export default function RequireAuth({ children }: RequireAuthProps) {
   const setAuthenticated = useAuthStore((state) => state.setAuthenticated);
 
   useEffect(() => {
-    const { accessToken } = getTokens();
+    // Los tokens están en cookies httpOnly
+    // Verificamos si hay datos de usuario guardados
+    const user = getUser();
 
-    if (!accessToken) {
+    if (!user) {
+      // Si no hay usuario, redirigir al login
       router.replace("/login");
       return;
     }
 
-    // Restaurar usuario desde localStorage
-    const user = getUser();
+    // Restaurar estado de autenticación
     setAuthenticated(true, user);
   }, [router, setAuthenticated]);
 

@@ -2,8 +2,9 @@
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from django.conf import settings
 from drf_spectacular.utils import extend_schema
-from apps.authentication.services import rotate_refresh_token
+from apps.authentication.services import rotate_refresh_token, get_device_fingerprint
 from apps.authentication.serializers import (
     RefreshTokenRequestSerializer,
     RefreshTokenResponseSerializer,
@@ -25,20 +26,48 @@ class RefreshTokenView(APIView):
         auth=[],
     )
     def post(self, request):
-        refresh_token = request.data.get("refresh_token")
+        # Leer refresh_token desde cookies
+        refresh_token = request.COOKIES.get('refresh_token')
 
         if not refresh_token:
             return Response(
-                {"detail": "refresh_token is required"},
+                {"detail": "refresh_token cookie is required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Generar fingerprint del dispositivo
+        fingerprint = get_device_fingerprint(request)
+
         try:
-            tokens = rotate_refresh_token(refresh_token)
+            tokens = rotate_refresh_token(refresh_token, fingerprint)
         except ValueError as e:
             return Response(
                 {"detail": str(e)},
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        return Response(tokens, status=status.HTTP_200_OK)
+        # Crear respuesta vacía (tokens van en cookies)
+        response = Response({"detail": "Tokens refreshed successfully"}, status=status.HTTP_200_OK)
+        
+        # Establecer nuevos tokens en cookies
+        secure_cookie = getattr(settings, 'SECURE_COOKIE', not settings.DEBUG)
+        
+        response.set_cookie(
+            key='access_token',
+            value=tokens['access_token'],
+            httponly=True,
+            secure=secure_cookie,
+            samesite='Lax',
+            max_age=15 * 60  # 15 minutos
+        )
+        
+        response.set_cookie(
+            key='refresh_token',
+            value=tokens['refresh_token'],
+            httponly=True,
+            secure=secure_cookie,
+            samesite='Lax',
+            max_age=7 * 24 * 60 * 60  # 7 días
+        )
+        
+        return response
