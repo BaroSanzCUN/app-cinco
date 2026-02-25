@@ -24,7 +24,7 @@ export default function UserDropdown() {
     return user?.email || user?.username || "";
   }, [user]);
 
-  const avatarSrc = user?.foto || "/images/user/owner.jpg";
+  const avatarSrc = user?.foto || "/images/user/owner.png";
 
   function toggleDropdown(e: React.MouseEvent<HTMLButtonElement, MouseEvent>) {
     e.stopPropagation();

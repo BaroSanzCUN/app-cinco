@@ -15,9 +15,11 @@ const HomePage = () => {
           <h3 className="mb-4 font-semibold text-gray-800 text-theme-xl dark:text-white/90 sm:text-2xl">
             Bienvenido a CINCO SAS
           </h3>
-          {/* <p className="text-sm text-gray-500 dark:text-gray-400 sm:text-base">
-            Esta es la página principal de CINCO SAS. Explore nuestros servicios y ofertas.
-          </p> */}
+
+          <p className="text-sm text-gray-500 dark:text-gray-400 sm:text-base">
+            Explora tu panel de control y gestiona tus operaciones de manera eficiente.
+          </p>
+
         </div>
       </div>
     </div>
