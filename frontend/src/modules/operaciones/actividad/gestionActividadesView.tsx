@@ -84,7 +84,7 @@ const GestionActividadesView = () => {
                     id: id as number,
                     ot: row.original.ot,
                     estado: row.original.estado,
-                    // responsable_snapshot: row.original.responsable_snapshot,
+                    responsable_snapshot: row.original.responsable_snapshot,
                     responsable_id: row.original.responsable_id,
                     fecha_inicio: row.original.fecha_inicio,
                     fecha_fin_estimado: row.original.fecha_fin_estimado,

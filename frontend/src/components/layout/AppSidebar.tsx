@@ -7,36 +7,29 @@ import { usePathname } from "next/navigation";
 import { useSidebar } from "../../context/SidebarContext";
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import {
-  BoxCubeIcon,
-  CalenderIcon,
   ChevronDownIcon,
-  GridIcon,
   HorizontaLDots,
-  ListIcon,
-  PageIcon,
-  PieChartIcon,
-  PlugInIcon,
-  TableIcon,
-  UserCircleIcon,
 } from "../../icons/index";
 
 type NavItem = {
   name: string;
   icon?: React.ReactNode;
   path?: string;
-  subItems?: { name: string; path: string; pro?: boolean; new?: boolean }[];
+  subItems?: { name: string; path: string; new?: boolean }[];
 };
 
 const navItems: NavItem[] = [
   {
     // icon: <GridIcon />,
     name: "Operaciones",
-    subItems: [{ name: "Gestión de Actividades", path: "/operaciones/gestion-actividades", pro: false }],
+    subItems: [
+      { name: "Gestión de Actividades", path: "/operaciones/gestion-actividades" }
+    ],
   },
   // {
   //   icon: <GridIcon />,
   //   name: "Dashboard",
-  //   subItems: [{ name: "Ecommerce", path: "/", pro: false }],
+  //   subItems: [{ name: "Ecommerce", path: "/" }],
   // }
 ];
 
@@ -45,8 +38,8 @@ const othersItems: NavItem[] = [
   //   // icon: <PieChartIcon />,
   //   name: "Charts",
   //   subItems: [
-  //     { name: "Line Chart", path: "/line-chart", pro: false },
-  //     { name: "Bar Chart", path: "/bar-chart", pro: false },
+  //     { name: "Line Chart", path: "/line-chart" },
+  //     { name: "Bar Chart", path: "/bar-chart" },
   //   ],
   // }
 ];

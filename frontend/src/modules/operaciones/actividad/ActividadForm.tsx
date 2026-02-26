@@ -1,25 +1,29 @@
 "use client";
 
-import { useEffect } from "react";
 import {
     ActividadSchema,
     ActividadFormData
 } from "@/schemas/actividades.schema";
+import Form from "@/components/form/Form";
+import { useEffect, useState } from "react";
+import Label from "@/components/form/Label";
+import { Empleado } from "@/types/empleado";
+import { preloadAvatar } from "@/utils/avatar";
+import Button from "@/components/ui/button/Button";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, Controller } from "react-hook-form";
-
-import Form from "@/components/form/Form";
-import Label from "@/components/form/Label";
 import Input from "@/components/form/input/InputField";
 import DatePicker from "@/components/form/date-picker";
 import TextArea from "@/components/form/input/TextArea";
-import Button from "@/components/ui/button/Button";
+import { getEmpleadoById } from "@/services/empleado.service";
+import EmployeeSearchInput from "@/components/form/EmployeeSearchInput";
 
 interface ActividadFormProps {
     defaultValues: ActividadFormData;
     onSubmit: (data: ActividadFormData) => void;
     isLoading?: boolean;
     backendErrors?: Record<string, any> | null;
+    mode?: "create" | "edit";
 }
 
 const ActividadForm = ({
@@ -27,13 +31,17 @@ const ActividadForm = ({
     onSubmit,
     isLoading,
     backendErrors,
+    mode = "create",
 }: ActividadFormProps) => {
+
+    const [selectedEmployee, setSelectedEmployee] = useState<Empleado | null>(null);
 
     const {
         control,
         handleSubmit,
         reset,
         setError,
+        setValue,
         formState: { errors },
     } = useForm<ActividadFormData>({
         resolver: zodResolver(ActividadSchema),
@@ -41,7 +49,61 @@ const ActividadForm = ({
     });
 
     useEffect(() => {
+        let isActive = true;
+
         reset(defaultValues);
+        
+        // Si hay un responsable_id en los valores por defecto (modo edición), 
+        // crear un objeto Empleado para mostrarlo en el buscador
+        if (defaultValues.responsable_id && defaultValues.responsable_id > 0) {
+            // Primero, crear un empleado base del snapshot si existe
+            let empleadoBase: Empleado | null = null;
+            
+            if (defaultValues.responsable_snapshot) {
+                empleadoBase = {
+                    id: defaultValues.responsable_id,
+                    cedula: "", // No disponible en el snapshot
+                    nombre: defaultValues.responsable_snapshot.nombre.split(" ")[0] || "",
+                    apellido: defaultValues.responsable_snapshot.nombre.split(" ").slice(1).join(" ") || "",
+                    area: defaultValues.responsable_snapshot.area,
+                    carpeta: defaultValues.responsable_snapshot.carpeta,
+                    cargo: defaultValues.responsable_snapshot.cargo,
+                    movil: defaultValues.responsable_snapshot.movil,
+                    estado: "ACTIVO",
+                    link_foto: undefined,
+                };
+                // Mostrar inmediatamente el snapshot
+                setSelectedEmployee(empleadoBase);
+            }
+
+            // Precargar datos completos del empleado (incluye foto y cédula)
+            const preloadEmployee = async () => {
+                try {
+                    const empleadoFull = await getEmpleadoById(defaultValues.responsable_id);
+                    if (!isActive) return;
+
+                    // Combinar datos del snapshot con los datos completos
+                    setSelectedEmployee({
+                        ...empleadoBase,
+                        ...empleadoFull,
+                    });
+
+                    // Precargar la foto
+                    preloadAvatar(empleadoFull.link_foto);
+                } catch (error) {
+                    console.error("Error preloading employee:", error);
+                    // Si falla, mantener el snapshot que ya fue mostrado
+                }
+            };
+
+            preloadEmployee();
+        } else {
+            setSelectedEmployee(null);
+        }
+
+        return () => {
+            isActive = false;
+        };
     }, [defaultValues, reset]);
 
     useEffect(() => {
@@ -81,6 +143,7 @@ const ActividadForm = ({
                                 placeholder="OT de la actividad"
                                 error={!!errors.ot}
                                 hint={errors.ot ? errors.ot.message : undefined}
+                                disabled={mode === "edit"}
                             />
                         )}
                     />
@@ -110,20 +173,31 @@ const ActividadForm = ({
 
                 {/* Responsable */}
                 <div className="col-span-2 md:col-span-1">
-                    <Label htmlFor="responsable_id">Responsable</Label>
                     <Controller
                         name="responsable_id"
                         control={control}
                         render={({ field }) => (
-                            <Input
-                                {...field}
-                                type="number"
-                                id="responsable_id"
-                                placeholder="Responsable de la actividad"
+                            <EmployeeSearchInput
+                                label="Responsable"
+                                placeholder="Buscar responsable..."
+                                value={selectedEmployee}
+                                onChange={(empleado) => {
+                                    setSelectedEmployee(empleado);
+                                    field.onChange(empleado?.id ?? null);
+                                    // También actualizar el snapshot si es necesario
+                                    if (empleado) {
+                                        setValue("responsable_snapshot", {
+                                            nombre: `${empleado.nombre} ${empleado.apellido}`,
+                                            area: empleado.area || "",
+                                            carpeta: empleado.carpeta || "",
+                                            cargo: empleado.cargo || "",
+                                            movil: empleado.movil || "",
+                                        });
+                                    }
+                                }}
                                 error={!!errors.responsable_id}
-                                hint={errors.responsable_id ? errors.responsable_id.message : undefined}
-                                onChange={(e) => field.onChange(e.target.valueAsNumber)}
-                                value={field.value ?? ""}
+                                hint={errors.responsable_id ? String(errors.responsable_id.message) : "Busca por nombre, cédula, cargo o móvil"}
+                                name="responsable_id"
                             />
                         )}
                     />
@@ -137,9 +211,9 @@ const ActividadForm = ({
                         control={control}
                         render={({ field }) => (
                             <DatePicker
-                                {...field}
                                 id="fecha_fin_estimado"
                                 placeholder="Selecciona una fecha"
+                                defaultDate={field.value ? new Date(field.value) : undefined}
                                 onChange={(dates: Date[] | Date) => {
                                     const value = Array.isArray(dates) ? dates[0] : dates;
                                     field.onChange(value ? value.toISOString().split("T")[0] : "");
@@ -159,9 +233,9 @@ const ActividadForm = ({
                         control={control}
                         render={({ field }) => (
                             <DatePicker
-                                {...field}
                                 id="fecha_fin_real"
                                 placeholder="Selecciona una fecha"
+                                defaultDate={field.value ? new Date(field.value) : undefined}
                                 onChange={(dates: Date[] | Date) => {
                                     const value = Array.isArray(dates) ? dates[0] : dates;
                                     field.onChange(value ? value.toISOString().split("T")[0] : "");
