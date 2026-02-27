@@ -140,7 +140,7 @@ const EmployeeSearchInput: React.FC<EmployeeSearchInputProps> = ({
       {label && (
         <label className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
           {label}
-          {required && <span className="text-error-500 ml-1">*</span>}
+          {required && <span className="text-error-400 ml-1">*</span>}
         </label>
       )}
 

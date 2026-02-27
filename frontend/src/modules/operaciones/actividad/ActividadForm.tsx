@@ -131,7 +131,7 @@ const ActividadForm = ({
 
                 {/* OT */}
                 <div className="col-span-2 md:col-span-1">
-                    <Label htmlFor="ot">OT</Label>
+                    <Label htmlFor="ot">OT - ID  <strong className="text-red-400">*</strong></Label>
                     <Controller
                         name="ot"
                         control={control}
@@ -151,7 +151,7 @@ const ActividadForm = ({
 
                 {/* Fecha de Actividad */}
                 <div className="col-span-2 md:col-span-1">
-                    <Label htmlFor="fecha_inicio_actividad">Fecha de Inicio</Label>
+                    <Label htmlFor="fecha_inicio_actividad">Fecha de Inicio <strong className="text-red-400">*</strong></Label>
                     <Controller
                         name="fecha_inicio"
                         control={control}
@@ -195,6 +195,7 @@ const ActividadForm = ({
                                         });
                                     }
                                 }}
+                                required
                                 error={!!errors.responsable_id}
                                 hint={errors.responsable_id ? String(errors.responsable_id.message) : "Busca por nombre, cédula, cargo o móvil"}
                                 name="responsable_id"
@@ -205,7 +206,7 @@ const ActividadForm = ({
 
                 {/* Fecha de Fin Estimada */}
                 <div className="col-span-2 md:col-span-1">
-                    <Label htmlFor="fecha_fin_estimado">Fecha de Fin Estimada</Label>
+                    <Label htmlFor="fecha_fin_estimado">Fecha de Fin Estimada <strong className="text-red-400">*</strong></Label>
                     <Controller
                         name="fecha_fin_estimado"
                         control={control}
@@ -249,7 +250,7 @@ const ActividadForm = ({
 
                 {/* Tipo de Actividad */}
                 <div className="col-span-2 md:col-span-1">
-                    <Label htmlFor="tipo_actividad">Tipo de Actividad</Label>
+                    <Label htmlFor="tipo_actividad">Tipo de Actividad <strong className="text-red-400">*</strong></Label>
                     <Controller
                         name="detalle.tipo_trabajo"
                         control={control}
@@ -269,7 +270,7 @@ const ActividadForm = ({
 
                 {/* Descripción */}
                 <div className="col-span-2">
-                    <Label htmlFor="descripcion">Descripción</Label>
+                    <Label htmlFor="descripcion">Descripción <strong className="text-red-400">*</strong></Label>
                     <Controller
                         name="detalle.descripcion"
                         control={control}
@@ -289,7 +290,7 @@ const ActividadForm = ({
                 
                 {/* Ubicación */}
                 <div className="col-span-2">
-                    <Label htmlFor="ubicacion">Ubicación</Label>
+                    <Label htmlFor="ubicacion">Dirección <strong className="text-red-400">*</strong></Label>
                     <Controller
                         name="ubicacion.direccion"
                         control={control}
@@ -309,7 +310,7 @@ const ActividadForm = ({
 
                 {/* Coordenada X */}
                 <div className="col-span-2 md:col-span-1">
-                    <Label htmlFor="coordenada_x">Coordenada X</Label>
+                    <Label htmlFor="coordenada_x">Latitud / Coordenada X <strong className="text-red-400">*</strong></Label>
                     <Controller
                         name="ubicacion.coordenada_x"
                         control={control}
@@ -319,7 +320,7 @@ const ActividadForm = ({
                                 type="text"
                                 id="coordenada_x"
                                 name="ubicacion.coordenada_x"
-                                placeholder="Coordenada X"
+                                placeholder="Ej: 6.212698"
                                 error={!!errors.ubicacion?.coordenada_x}
                                 hint={errors.ubicacion?.coordenada_x ? errors.ubicacion.coordenada_x.message : undefined}
                             />
@@ -329,7 +330,7 @@ const ActividadForm = ({
 
                 {/* Coordenada Y */}
                 <div className="col-span-2 md:col-span-1">
-                    <Label htmlFor="coordenada_y">Coordenada Y</Label>
+                    <Label htmlFor="coordenada_y">Longitud / Coordenada Y <strong className="text-red-400">*</strong></Label>
                     <Controller
                         name="ubicacion.coordenada_y"
                         control={control}
@@ -339,7 +340,7 @@ const ActividadForm = ({
                                 type="text"
                                 id="coordenada_y"
                                 name="ubicacion.coordenada_y"
-                                placeholder="Coordenada Y"
+                                placeholder="Ej: -75.593246"
                                 error={!!errors.ubicacion?.coordenada_y}
                                 hint={errors.ubicacion?.coordenada_y ? errors.ubicacion.coordenada_y.message : undefined}
                             />
@@ -349,7 +350,7 @@ const ActividadForm = ({
 
                 {/* Zona */}
                 <div className="col-span-2 md:col-span-1">
-                    <Label htmlFor="zona">Zona</Label>
+                    <Label htmlFor="zona">Zona <strong className="text-red-400">*</strong></Label>
                     <Controller
                         name="ubicacion.zona"
                         control={control}
@@ -369,7 +370,7 @@ const ActividadForm = ({
 
                 {/* Nodo */}
                 <div className="col-span-2 md:col-span-1">
-                    <Label htmlFor="nodo">Nodo</Label>
+                    <Label htmlFor="nodo">Nodo <strong className="text-red-400">*</strong></Label>
                     <Controller
                         name="ubicacion.nodo"
                         control={control}
