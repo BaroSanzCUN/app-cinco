@@ -68,10 +68,13 @@ export const ActividadSchema = z.object({
   estado: z.string().optional(), // opcional, se asignará automáticamente al crear la actividad
   
   responsable_id: z
-    .number()
-    .nullish(),
-    // .int()
-    // .positive("Debe seleccionar un responsable"),
+    .number({
+      required_error: "Debe seleccionar un responsable",
+      invalid_type_error: "Debe seleccionar un responsable válido",
+    })
+    .refine((val) => val > 0, {
+      message: "Debe seleccionar un responsable",
+    }),
     
   fecha_inicio: z
     .string()

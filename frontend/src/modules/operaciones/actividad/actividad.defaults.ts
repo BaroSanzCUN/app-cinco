@@ -4,7 +4,7 @@ import { ActividadFormData } from "@/schemas/actividades.schema";
 
 export const actividadCreateDefaultValues: ActividadFormData = {
     ot: "",
-    responsable_id: undefined,
+    responsable_id: 0,
     fecha_inicio: new Date().toISOString().split("T")[0],
     fecha_fin_estimado: "",
     fecha_fin_real: null,
@@ -64,6 +64,7 @@ export const actividadEditDefaultValues = (actividad: ActividadFormData): Activi
     ot: actividad.ot,
     estado: actividad.estado,
     responsable_id: actividad.responsable_id,
+    responsable_snapshot: actividad.responsable_snapshot,
     fecha_inicio: actividad.fecha_inicio,
     fecha_fin_estimado: actividad.fecha_fin_estimado,
     fecha_fin_real: actividad.fecha_fin_real,

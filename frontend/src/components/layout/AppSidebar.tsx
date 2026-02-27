@@ -5,38 +5,31 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useSidebar } from "../../context/SidebarContext";
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import {
-  BoxCubeIcon,
-  CalenderIcon,
   ChevronDownIcon,
-  GridIcon,
   HorizontaLDots,
-  ListIcon,
-  PageIcon,
-  PieChartIcon,
-  PlugInIcon,
-  TableIcon,
-  UserCircleIcon,
 } from "../../icons/index";
 
 type NavItem = {
   name: string;
   icon?: React.ReactNode;
   path?: string;
-  subItems?: { name: string; path: string; pro?: boolean; new?: boolean }[];
+  subItems?: { name: string; path: string; new?: boolean }[];
 };
 
 const navItems: NavItem[] = [
   {
     // icon: <GridIcon />,
     name: "Operaciones",
-    subItems: [{ name: "Gestión de Actividades", path: "/operaciones/gestion-actividades", pro: false }],
+    subItems: [
+      { name: "Gestión de Actividades", path: "/operaciones/gestion-actividades" }
+    ],
   },
   // {
   //   icon: <GridIcon />,
   //   name: "Dashboard",
-  //   subItems: [{ name: "Ecommerce", path: "/", pro: false }],
+  //   subItems: [{ name: "Ecommerce", path: "/" }],
   // }
 ];
 
@@ -45,8 +38,8 @@ const othersItems: NavItem[] = [
   //   // icon: <PieChartIcon />,
   //   name: "Charts",
   //   subItems: [
-  //     { name: "Line Chart", path: "/line-chart", pro: false },
-  //     { name: "Bar Chart", path: "/bar-chart", pro: false },
+  //     { name: "Line Chart", path: "/line-chart" },
+  //     { name: "Bar Chart", path: "/bar-chart" },
   //   ],
   // }
 ];
@@ -159,34 +152,32 @@ const AppSidebar: React.FC = () => {
   );
   const subMenuRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  // const isActive = (path: string) => path === pathname;
-  const isActive = useCallback((path: string) => path === pathname, [pathname]);
+  const isActive = (path: string) => path === pathname;
 
+  // Update submenu when route changes
   useEffect(() => {
-    // Check if the current path matches any submenu item
-    let submenuMatched = false;
+    let matchedSubmenu: { type: "main" | "others"; index: number } | null = null;
+    
     ["main", "others"].forEach((menuType) => {
       const items = menuType === "main" ? navItems : othersItems;
       items.forEach((nav, index) => {
         if (nav.subItems) {
           nav.subItems.forEach((subItem) => {
-            if (isActive(subItem.path)) {
-              setOpenSubmenu({
+            if (subItem.path === pathname) {
+              matchedSubmenu = {
                 type: menuType as "main" | "others",
                 index,
-              });
-              submenuMatched = true;
+              };
             }
           });
         }
       });
     });
 
-    // If no submenu item matches, close the open submenu
-    if (!submenuMatched) {
-      setOpenSubmenu(null);
-    }
-  }, [pathname, isActive]);
+    // This is intentional: sync submenu state with route navigation
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setOpenSubmenu(matchedSubmenu);
+  }, [pathname]);
 
   useEffect(() => {
     // Set the height of the submenu items when the submenu is opened
