@@ -38,16 +38,28 @@ const Avatar: React.FC<AvatarProps> = ({
   size = "medium",
   status = "none",
 }) => {
+  const [imgSrc, setImgSrc] = React.useState(src || "/images/user/owner.png");
+  
+  // Si cambia el src prop, actualizar el estado
+  React.useEffect(() => {
+    setImgSrc(src || "/images/user/owner.png");
+  }, [src]);
+
+  // Handler para errores de carga de imagen
+  const handleError = () => {
+    setImgSrc("/images/user/owner.png");
+  };
+  
   return (
-    <div className={`relative  rounded-full ${sizeClasses[size]}`}>
+    <div className={`relative overflow-hidden rounded-full shrink-0 ${sizeClasses[size]}`}>
       {/* Avatar Image */}
       <Image
-        width="0"
-        height="0"
+        fill
         sizes="100vw"
-        src={src}
+        src={imgSrc}
         alt={alt}
-        className="object-cover w-full rounded-full"
+        className="object-cover w-full h-full rounded-full"
+        onError={handleError}
       />
 
       {/* Status Indicator */}

@@ -58,6 +58,7 @@ const ModalActividad = ({
                         )
                     }
                     backendErrors={error}
+                    mode={mode}
                 />
             </Modal>
         </>

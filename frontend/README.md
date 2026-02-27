@@ -108,7 +108,12 @@ Definidos en `package.json`:
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,css,md,json,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,css,md,json,yml,yaml}\"",
+    "test": "echo \"No tests configured yet\""
   }
 }
 ```
@@ -118,6 +123,7 @@ Definidos en `package.json`:
 ```bash
 npm run dev
 npm run lint
+npm run typecheck
 ```
 
 ### ⚠️ Scripts a usar con precaución
@@ -181,9 +187,35 @@ npm install
 
 - No subir `.env.local` al repositorio
 - Usar `eslint` y `lint` en desarrollo
+- Ejecutar `typecheck` y `format:check` antes de abrir un PR
 - Mantener `node_modules/` fuera del control de versiones
 - No ejecutar `build` innecesariamente en desarrollo
 - Centralizar el consumo de APIs (services / fetch wrappers)
+
+## ✅ Hooks locales
+
+El proyecto incluye un hook de pre-commit con `husky` + `lint-staged` para:
+
+- formatear con Prettier
+- corregir lint basico en archivos staged
+
+---
+
+## ✅ Checklist antes de commit
+
+Flujo corto:
+
+```bash
+npm run lint
+npm run typecheck
+git add .
+git commit -m "mensaje"
+```
+
+Notas:
+
+- El hook de pre-commit ejecuta `lint-staged` automaticamente.
+- Si queres validar formato antes del commit: `npm run format:check`.
 
 ---
 
