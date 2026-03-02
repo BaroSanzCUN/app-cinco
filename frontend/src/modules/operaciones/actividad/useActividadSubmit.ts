@@ -6,49 +6,50 @@ import { useActividadStore } from "@/store/actividad.store";
 import { toast } from "sonner";
 
 export const useActividadSubmit = () => {
+  const { submit, isLoading, error } = useFormSubmit<ActividadFormData>();
+  const { setNuevaActividad } = useActividadStore();
 
-    const { submit, isLoading, error } = useFormSubmit<ActividadFormData>();
-    const { setNuevaActividad } = useActividadStore();
+  const handleSubmit = async (
+    data: ActividadFormData,
+    mode: "create" | "edit",
+    id?: number,
+    onSuccessCallback?: () => void,
+  ) => {
+    const endpoint =
+      mode === "create"
+        ? "/operaciones/actividades/"
+        : `/operaciones/actividades/${id}/`;
 
-    const handleSubmit = async (
-        data: ActividadFormData,
-        mode: "create" | "edit",
-        id?: number,
-        onSuccessCallback?: () => void
-    ) => {
+    const method = mode === "create" ? "POST" : "PATCH";
 
-        const endpoint =
-            mode === "create"
-                ? "/operaciones/actividades/"
-                : `/operaciones/actividades/${id}/`;
+    await submit(data, {
+      endpoint,
+      method,
+      onSuccess: (response) => {
+        toast.success(
+          mode === "create"
+            ? "Actividad creada exitosamente"
+            : "Actividad actualizada exitosamente",
+        );
 
-        const method = mode === "create" ? "POST" : "PATCH";
+        setNuevaActividad(response);
 
-        await submit(data, {
-            endpoint,
-            method,
-            onSuccess: (response) => {
-                toast.success(
-                    mode === "create"
-                        ? "Actividad creada exitosamente"
-                        : "Actividad actualizada exitosamente"
-                );
+        if (onSuccessCallback) {
+          onSuccessCallback();
+        }
+      },
+      onError: (err) => {
+        toast.error(
+          err.message ||
+            "No se pudo realizar la operación. Por favor, intenta nuevamente.",
+        );
+      },
+    });
+  };
 
-                setNuevaActividad(response);
-
-                if (onSuccessCallback) {
-                    onSuccessCallback();
-                }
-            },
-            onError: (err) => {
-                toast.error(err.message || "No se pudo realizar la operación. Por favor, intenta nuevamente.");
-            },
-        });
-    };
-
-    return {
-        handleSubmit,
-        isLoading,
-        error,
-    };
+  return {
+    handleSubmit,
+    isLoading,
+    error,
+  };
 };

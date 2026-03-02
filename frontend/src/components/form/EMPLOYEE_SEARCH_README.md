@@ -38,17 +38,17 @@ function MyForm() {
 
 ## 📖 Props
 
-| Prop | Tipo | Default | Descripción |
-|------|------|---------|-------------|
-| `label` | `string` | - | Etiqueta del campo |
-| `placeholder` | `string` | `"Buscar empleado..."` | Texto del placeholder |
-| `value` | `Empleado \| null` | `null` | Empleado seleccionado |
-| `onChange` | `(employee: Empleado \| null) => void` | - | Callback al seleccionar/limpiar |
-| `error` | `boolean` | `false` | Muestra el campo con error |
-| `hint` | `string` | - | Texto de ayuda debajo del campo |
-| `disabled` | `boolean` | `false` | Deshabilita el campo |
-| `required` | `boolean` | `false` | Marca el campo como requerido |
-| `name` | `string` | - | Nombre del campo para formularios |
+| Prop          | Tipo                                   | Default                | Descripción                       |
+| ------------- | -------------------------------------- | ---------------------- | --------------------------------- |
+| `label`       | `string`                               | -                      | Etiqueta del campo                |
+| `placeholder` | `string`                               | `"Buscar empleado..."` | Texto del placeholder             |
+| `value`       | `Empleado \| null`                     | `null`                 | Empleado seleccionado             |
+| `onChange`    | `(employee: Empleado \| null) => void` | -                      | Callback al seleccionar/limpiar   |
+| `error`       | `boolean`                              | `false`                | Muestra el campo con error        |
+| `hint`        | `string`                               | -                      | Texto de ayuda debajo del campo   |
+| `disabled`    | `boolean`                              | `false`                | Deshabilita el campo              |
+| `required`    | `boolean`                              | `false`                | Marca el campo como requerido     |
+| `name`        | `string`                               | -                      | Nombre del campo para formularios |
 
 ## 💡 Ejemplos de Uso
 
@@ -68,13 +68,13 @@ function AsignacionForm() {
         onChange={setEmpleado}
         required
       />
-      
+
       <EmployeeSearchInput
         label="Supervisor"
         value={supervisor}
         onChange={setSupervisor}
       />
-      
+
       <EmployeeSearchInput
         label="Jefe de Área"
         value={jefe}
@@ -157,6 +157,7 @@ El componente requiere que el backend tenga un endpoint de búsqueda:
 **Endpoint:** `GET /empleados/empleados/?search={query}`
 
 **Response:**
+
 ```json
 [
   {
@@ -214,11 +215,13 @@ Ver más detalles en [CACHE_SYSTEM.md](/CACHE_SYSTEM.md)
 ## 🐛 Troubleshooting
 
 **Problema:** No aparecen resultados
+
 - Verifica que el backend esté corriendo
 - Verifica que el endpoint `/empleados/empleados/` esté disponible
 - Revisa la consola del navegador para errores
 
 **Problema:** Las imágenes no se cargan
+
 - Verifica que `link_foto` tenga una URL válida
 - Asegúrate de tener una imagen por defecto en `/images/user/owner.png`
 

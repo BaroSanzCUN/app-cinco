@@ -16,7 +16,7 @@ const EmployeeSearchExample: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     console.log("Formulario enviado:", {
       empleado,
       supervisor,
@@ -26,9 +26,9 @@ const EmployeeSearchExample: React.FC = () => {
     // Aquí puedes hacer lo que necesites con los datos
     alert(
       `Formulario enviado:\n` +
-      `Empleado: ${empleado ? `${empleado.nombre} ${empleado.apellido}` : "No seleccionado"}\n` +
-      `Supervisor: ${supervisor ? `${supervisor.nombre} ${supervisor.apellido}` : "No seleccionado"}\n` +
-      `Jefe: ${jefe ? `${jefe.nombre} ${jefe.apellido}` : "No seleccionado"}`
+        `Empleado: ${empleado ? `${empleado.nombre} ${empleado.apellido}` : "No seleccionado"}\n` +
+        `Supervisor: ${supervisor ? `${supervisor.nombre} ${supervisor.apellido}` : "No seleccionado"}\n` +
+        `Jefe: ${jefe ? `${jefe.nombre} ${jefe.apellido}` : "No seleccionado"}`,
     );
   };
 
@@ -39,9 +39,9 @@ const EmployeeSearchExample: React.FC = () => {
   };
 
   return (
-    <div className="max-w-2xl mx-auto p-6">
-      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-lg p-6">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">
+    <div className="mx-auto max-w-2xl p-6">
+      <div className="rounded-lg bg-white p-6 shadow-lg dark:bg-gray-900">
+        <h2 className="mb-6 text-2xl font-bold text-gray-900 dark:text-white">
           Ejemplo de Búsqueda de Empleados
         </h2>
 
@@ -81,14 +81,14 @@ const EmployeeSearchExample: React.FC = () => {
           <div className="flex gap-4 pt-4">
             <button
               type="submit"
-              className="flex-1 px-4 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2"
+              className="bg-brand-500 hover:bg-brand-600 focus:ring-brand-500 flex-1 rounded-lg px-4 py-2 font-medium text-white transition-colors focus:ring-2 focus:ring-offset-2 focus:outline-none"
             >
               Enviar Formulario
             </button>
             <button
               type="button"
               onClick={handleReset}
-              className="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
+              className="rounded-lg bg-gray-200 px-4 py-2 font-medium text-gray-700 transition-colors hover:bg-gray-300 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:outline-none dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
             >
               Limpiar
             </button>
@@ -96,13 +96,15 @@ const EmployeeSearchExample: React.FC = () => {
         </form>
 
         {/* Preview de los valores seleccionados */}
-        <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+        <div className="mt-8 border-t border-gray-200 pt-6 dark:border-gray-700">
+          <h3 className="mb-4 text-lg font-semibold text-gray-900 dark:text-white">
             Valores Seleccionados (Preview):
           </h3>
           <div className="space-y-2 text-sm">
             <div>
-              <span className="font-medium text-gray-700 dark:text-gray-300">Empleado:</span>{" "}
+              <span className="font-medium text-gray-700 dark:text-gray-300">
+                Empleado:
+              </span>{" "}
               <span className="text-gray-600 dark:text-gray-400">
                 {empleado
                   ? `${empleado.nombre} ${empleado.apellido} (${empleado.cedula})`
@@ -110,7 +112,9 @@ const EmployeeSearchExample: React.FC = () => {
               </span>
             </div>
             <div>
-              <span className="font-medium text-gray-700 dark:text-gray-300">Supervisor:</span>{" "}
+              <span className="font-medium text-gray-700 dark:text-gray-300">
+                Supervisor:
+              </span>{" "}
               <span className="text-gray-600 dark:text-gray-400">
                 {supervisor
                   ? `${supervisor.nombre} ${supervisor.apellido} (${supervisor.cedula})`
@@ -118,7 +122,9 @@ const EmployeeSearchExample: React.FC = () => {
               </span>
             </div>
             <div>
-              <span className="font-medium text-gray-700 dark:text-gray-300">Jefe de Área:</span>{" "}
+              <span className="font-medium text-gray-700 dark:text-gray-300">
+                Jefe de Área:
+              </span>{" "}
               <span className="text-gray-600 dark:text-gray-400">
                 {jefe
                   ? `${jefe.nombre} ${jefe.apellido} (${jefe.cedula})`
@@ -130,11 +136,11 @@ const EmployeeSearchExample: React.FC = () => {
       </div>
 
       {/* Instrucciones de uso */}
-      <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-        <h4 className="font-semibold text-blue-900 dark:text-blue-300 mb-2">
+      <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-900/20">
+        <h4 className="mb-2 font-semibold text-blue-900 dark:text-blue-300">
           💡 Instrucciones de Uso:
         </h4>
-        <ul className="text-sm text-blue-800 dark:text-blue-400 space-y-1 list-disc list-inside">
+        <ul className="list-inside list-disc space-y-1 text-sm text-blue-800 dark:text-blue-400">
           <li>Escribe al menos 2 caracteres para iniciar la búsqueda</li>
           <li>Puedes buscar por nombre, apellido, cédula, cargo o móvil</li>
           <li>Los resultados aparecen automáticamente mientras escribes</li>

@@ -11,7 +11,7 @@ const PageBreadcrumb: React.FC<BreadcrumbProps> = ({ pageTitle }) => {
   const lastTitle = titles[titles.length - 1];
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+    <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
       {/* Título */}
       <h2 className="text-xl font-semibold text-gray-800 dark:text-white/90">
         {lastTitle}
@@ -21,9 +21,7 @@ const PageBreadcrumb: React.FC<BreadcrumbProps> = ({ pageTitle }) => {
         <ol className="flex items-center gap-1.5">
           {/* Caso especial: solo un título y es Inicio */}
           {isSingle && lastTitle === "Inicio" && (
-            <li className="text-sm text-gray-800 dark:text-white/90">
-              Inicio
-            </li>
+            <li className="text-sm text-gray-800 dark:text-white/90">Inicio</li>
           )}
 
           {/* Breadcrumb normal */}

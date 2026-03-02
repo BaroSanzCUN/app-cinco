@@ -1,4 +1,3 @@
-
 import React from "react";
 // import Link from "next/link";
 import Image from "next/image";
@@ -12,28 +11,27 @@ export default function AuthLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="relative p-6 bg-white z-1 dark:bg-gray-900 sm:p-0">
+    <div className="relative z-1 bg-white p-6 sm:p-0 dark:bg-gray-900">
       <ThemeProvider>
-        <div className="relative flex lg:flex-row w-full h-screen justify-center flex-col  dark:bg-gray-900 sm:p-0">
-          
-          <div className="lg:w-1/2 w-full h-full bg-[#1c2433] lg:grid items-center hidden">
-            <div className="relative items-center justify-center  flex z-1">
+        <div className="relative flex h-screen w-full flex-col justify-center sm:p-0 lg:flex-row dark:bg-gray-900">
+          <div className="hidden h-full w-full items-center bg-[#1c2433] lg:grid lg:w-1/2">
+            <div className="relative z-1 flex items-center justify-center">
               {/* <!-- ===== Common Grid Shape Start ===== --> */}
               <GridShape />
-              <div className="flex flex-col items-center max-w-xs">
+              <div className="flex max-w-xs flex-col items-center">
                 {/* <Link href="/" className="block mb-4"> */}
-                  <Image
-                    width={231}
-                    height={48}
-                    src="/images/logo/logo-cinco.svg"
-                    alt="Logo"
-                  />
+                <Image
+                  width={231}
+                  height={48}
+                  src="/images/logo/logo-cinco.svg"
+                  alt="Logo"
+                />
                 {/* </Link> */}
               </div>
             </div>
           </div>
           {children}
-          <div className="fixed bottom-6 right-6 z-50 hidden sm:block">
+          <div className="fixed right-6 bottom-6 z-50 hidden sm:block">
             <ThemeTogglerTwo />
           </div>
         </div>

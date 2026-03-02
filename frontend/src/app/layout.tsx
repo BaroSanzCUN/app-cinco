@@ -1,10 +1,10 @@
 // src/app/layout.tsx
-import './globals.css';
+import "./globals.css";
 import "flatpickr/dist/flatpickr.css";
-import { Outfit } from 'next/font/google';
-import { ThemeProvider } from '@/context/ThemeContext';
-import { SidebarProvider } from '@/context/SidebarContext';
-import { Toaster } from '@/components/ui/sonner';
+import { Outfit } from "next/font/google";
+import { ThemeProvider } from "@/context/ThemeContext";
+import { SidebarProvider } from "@/context/SidebarContext";
+import { Toaster } from "@/components/ui/sonner";
 
 const outfit = Outfit({
   subsets: ["latin"],

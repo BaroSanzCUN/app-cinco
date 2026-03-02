@@ -27,7 +27,7 @@ export const getAvatarUrl = (linkFoto?: string | null): string => {
 
   // Limpiar el path de navegación relativa (..)
   let cleanPath = linkFoto.trim();
-  
+
   // Si contiene referencias al dominio alternativo cinco.net.co
   if (cleanPath.includes("cinco.net.co/perfil/photos/")) {
     // Extraer solo el nombre del archivo
@@ -36,15 +36,15 @@ export const getAvatarUrl = (linkFoto?: string | null): string => {
       return `${AVATAR_ALT_BASE_URL}${match[1]}`;
     }
   }
-  
+
   // Si contiene ../ al inicio, removerlo
   cleanPath = cleanPath.replace(/^(\.\.\/)+/, "");
-  
+
   // Si el path ya comienza con "photos/", usar solo la base del dominio
   if (cleanPath.startsWith("photos/")) {
     return `https://www.cincosas.com/2mp21d4s/${cleanPath}`;
   }
-  
+
   // Construir la URL con la base principal
   return `${AVATAR_BASE_URL}${cleanPath}`;
 };
@@ -68,7 +68,7 @@ export const preloadAvatars = (imageUrls: string[]): void => {
  */
 export const preloadAvatar = (linkFoto?: string | null): void => {
   if (!linkFoto) return;
-  
+
   const url = getAvatarUrl(linkFoto);
   const img = new Image();
   img.src = url;

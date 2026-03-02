@@ -80,13 +80,13 @@ const ensureCsrfToken = async (): Promise<void> => {
  */
 const normalizeUrl = (url: string): string => {
   if (!url) return url;
-  
+
   // No agregar / si contiene parámetros query
   if (url.includes("?")) {
     const [path, query] = url.split("?");
     return `${path.endsWith("/") ? path : path + "/"}?${query}`;
   }
-  
+
   return url.endsWith("/") ? url : url + "/";
 };
 
@@ -112,7 +112,7 @@ api.interceptors.request.use(
 
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => Promise.reject(error),
 );
 
 // Interceptor para manejar errores globalmente
@@ -166,7 +166,7 @@ api.interceptors.response.use(
     }
 
     return Promise.reject(classified);
-  }
+  },
 );
 
 export default api;

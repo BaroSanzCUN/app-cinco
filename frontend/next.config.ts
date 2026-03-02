@@ -5,20 +5,20 @@ const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
       {
-        protocol: 'https',
-        hostname: 'www.cincosas.com',
-        pathname: '/2mp21d4s/photos/**',
+        protocol: "https",
+        hostname: "www.cincosas.com",
+        pathname: "/2mp21d4s/photos/**",
       },
       {
-        protocol: 'https',
-        hostname: 'cinco.net.co',
-        pathname: '/perfil/photos/**',
+        protocol: "https",
+        hostname: "cinco.net.co",
+        pathname: "/perfil/photos/**",
       },
     ],
     // Configuración de caché para imágenes externas
     minimumCacheTTL: 31536000, // 1 año en segundos
     dangerouslyAllowSVG: true,
-    contentDispositionType: 'attachment',
+    contentDispositionType: "attachment",
     contentSecurityPolicy: "default-src 'self'; script-src 'none'; sandbox;",
   },
   webpack(config) {

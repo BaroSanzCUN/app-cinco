@@ -39,7 +39,7 @@ const Avatar: React.FC<AvatarProps> = ({
   status = "none",
 }) => {
   const [imgSrc, setImgSrc] = React.useState(src || "/images/user/owner.png");
-  
+
   // Si cambia el src prop, actualizar el estado
   React.useEffect(() => {
     setImgSrc(src || "/images/user/owner.png");
@@ -49,23 +49,25 @@ const Avatar: React.FC<AvatarProps> = ({
   const handleError = () => {
     setImgSrc("/images/user/owner.png");
   };
-  
+
   return (
-    <div className={`relative overflow-hidden rounded-full shrink-0 ${sizeClasses[size]}`}>
+    <div
+      className={`relative shrink-0 overflow-hidden rounded-full ${sizeClasses[size]}`}
+    >
       {/* Avatar Image */}
       <Image
         fill
         sizes="100vw"
         src={imgSrc}
         alt={alt}
-        className="object-cover w-full h-full rounded-full"
+        className="h-full w-full rounded-full object-cover"
         onError={handleError}
       />
 
       {/* Status Indicator */}
       {status !== "none" && (
         <span
-          className={`absolute bottom-0 right-0 rounded-full border-[1.5px] border-white dark:border-gray-900 ${
+          className={`absolute right-0 bottom-0 rounded-full border-[1.5px] border-white dark:border-gray-900 ${
             statusSizeClasses[size]
           } ${statusColorClasses[status] || ""}`}
         ></span>

@@ -16,35 +16,37 @@ export const getEmpleados = async (): Promise<Empleado[]> => {
       const res = await api.get("/empleados/empleados/");
       return res.data;
     },
-    CACHE_TTL.ALL_EMPLOYEES
+    CACHE_TTL.ALL_EMPLOYEES,
   );
 };
 
 export const searchEmpleados = async (query: string): Promise<Empleado[]> => {
   const cacheKey = `empleados:search:${query.toLowerCase().trim()}`;
-  
+
   return cache.getOrFetch(
     cacheKey,
     async () => {
       const res = await api.get("/empleados/empleados/", {
-        params: { search: query }
+        params: { search: query },
       });
       return res.data;
     },
-    CACHE_TTL.SEARCH
+    CACHE_TTL.SEARCH,
   );
 };
 
-export const getEmpleadoByCedula = async (cedula: string): Promise<Empleado> => {
+export const getEmpleadoByCedula = async (
+  cedula: string,
+): Promise<Empleado> => {
   const cacheKey = `empleados:cedula:${cedula}`;
-  
+
   return cache.getOrFetch(
     cacheKey,
     async () => {
       const res = await api.get(`/empleados/empleados/${cedula}/`);
       return res.data;
     },
-    CACHE_TTL.SINGLE
+    CACHE_TTL.SINGLE,
   );
 };
 
@@ -57,7 +59,7 @@ export const getEmpleadoById = async (id: number): Promise<Empleado> => {
       const res = await api.get(`/empleados/empleados/${id}/`);
       return res.data;
     },
-    CACHE_TTL.SINGLE
+    CACHE_TTL.SINGLE,
   );
 };
 
@@ -68,7 +70,7 @@ export const getEmpleadoById = async (id: number): Promise<Empleado> => {
 export const clearEmpleadosCache = (): void => {
   // Obtener todas las claves del caché
   const stats = cache.getStats();
-  
+
   // Eliminar todas las claves que comiencen con "empleados:"
   stats.keys.forEach((key) => {
     if (key.startsWith("empleados:")) {

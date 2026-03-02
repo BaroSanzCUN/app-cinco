@@ -18,5 +18,4 @@ interface DataTableProps<TData> {
   pageSizeOptions?: number[];
 }
 
-
 export type { DataTableProps };

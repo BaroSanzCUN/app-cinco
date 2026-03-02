@@ -35,7 +35,7 @@ const EmployeeSearchInput: React.FC<EmployeeSearchInputProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Empleado | null>(
-    value || null
+    value || null,
   );
   const wrapperRef = useRef<HTMLDivElement>(null);
   const searchTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -73,13 +73,13 @@ const EmployeeSearchInput: React.FC<EmployeeSearchInputProps> = ({
           const data = await searchEmpleados(searchTerm); // Cachea automáticamente
           setResults(data);
           setIsOpen(true);
-          
+
           // Precargar imágenes de los resultados para mejor UX
           const imageUrls = data
             .map((emp) => emp.link_foto)
             .filter(Boolean)
             .map((foto) => getAvatarUrl(foto));
-          
+
           if (imageUrls.length > 0) {
             preloadAvatars(imageUrls);
           }
@@ -147,30 +147,31 @@ const EmployeeSearchInput: React.FC<EmployeeSearchInputProps> = ({
       <div className="relative">
         {/* Selected Employee Display */}
         {selectedEmployee ? (
-          <div className="flex items-center gap-3 p-3 rounded-lg border border-gray-300 bg-white dark:bg-gray-900 dark:border-gray-700">
+          <div className="flex items-center gap-3 rounded-lg border border-gray-300 bg-white p-3 dark:border-gray-700 dark:bg-gray-900">
             <Avatar
-               
               src={getAvatarUrl(selectedEmployee.link_foto)}
               alt={`${selectedEmployee.nombre} ${selectedEmployee.apellido}`}
               size="medium"
             />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                {selectedEmployee.nombre} {selectedEmployee.apellido} [ {selectedEmployee.cedula} ]
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-gray-900 dark:text-white">
+                {selectedEmployee.nombre} {selectedEmployee.apellido} [{" "}
+                {selectedEmployee.cedula} ]
               </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                {selectedEmployee.cedula} - {selectedEmployee.movil || "1 - SIN ASIGNAR"}
+              <p className="truncate text-xs text-gray-500 dark:text-gray-400">
+                {selectedEmployee.cedula} -{" "}
+                {selectedEmployee.movil || "1 - SIN ASIGNAR"}
               </p>
             </div>
             {!disabled && (
               <button
                 type="button"
                 onClick={handleClear}
-                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1"
+                className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                 aria-label="Limpiar selección"
               >
                 <svg
-                  className="w-5 h-5"
+                  className="h-5 w-5"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -198,8 +199,8 @@ const EmployeeSearchInput: React.FC<EmployeeSearchInputProps> = ({
               autoComplete="off"
             />
             {isLoading && (
-              <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-brand-500"></div>
+              <div className="absolute top-1/2 right-3 -translate-y-1/2">
+                <div className="border-brand-500 h-4 w-4 animate-spin rounded-full border-b-2"></div>
               </div>
             )}
           </div>
@@ -207,24 +208,24 @@ const EmployeeSearchInput: React.FC<EmployeeSearchInputProps> = ({
 
         {/* Dropdown Results */}
         {isOpen && results.length > 0 && !selectedEmployee && (
-          <div className="absolute z-50 w-full mt-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg shadow-lg max-h-80 overflow-y-auto">
+          <div className="absolute z-50 mt-2 max-h-80 w-full overflow-y-auto rounded-lg border border-gray-300 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-900">
             {results.map((employee) => (
               <button
                 key={employee.id}
                 type="button"
                 onClick={() => handleSelect(employee)}
-                className="w-full flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors border-b border-gray-200 dark:border-gray-700 last:border-b-0"
+                className="flex w-full items-center gap-3 border-b border-gray-200 p-3 transition-colors last:border-b-0 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800"
               >
                 <Avatar
                   src={getAvatarUrl(employee.link_foto)}
                   alt={`${employee.nombre} ${employee.apellido}`}
                   size="medium"
                 />
-                <div className="flex-1 text-left min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                <div className="min-w-0 flex-1 text-left">
+                  <p className="truncate text-sm font-semibold text-gray-900 dark:text-white">
                     {employee.nombre} {employee.apellido} [ {employee.cedula} ]
                   </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                  <p className="truncate text-xs text-gray-500 dark:text-gray-400">
                     {employee.cedula} - {employee.cargo || "Sin cargo"}
                   </p>
                 </div>
@@ -234,22 +235,23 @@ const EmployeeSearchInput: React.FC<EmployeeSearchInputProps> = ({
         )}
 
         {/* No Results */}
-        {isOpen && results.length === 0 && searchTerm.length >= 2 && !isLoading && (
-          <div className="absolute z-50 w-full mt-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg shadow-lg p-4 text-center">
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              No se encontraron empleados
-            </p>
-          </div>
-        )}
+        {isOpen &&
+          results.length === 0 &&
+          searchTerm.length >= 2 &&
+          !isLoading && (
+            <div className="absolute z-50 mt-2 w-full rounded-lg border border-gray-300 bg-white p-4 text-center shadow-lg dark:border-gray-700 dark:bg-gray-900">
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                No se encontraron empleados
+              </p>
+            </div>
+          )}
       </div>
 
       {/* Hint Text */}
       {hint && (
         <p
           className={`mt-1.5 text-xs ${
-            error
-              ? "text-error-400"
-              : "text-gray-500 dark:text-gray-400"
+            error ? "text-error-400" : "text-gray-500 dark:text-gray-400"
           }`}
         >
           {hint}

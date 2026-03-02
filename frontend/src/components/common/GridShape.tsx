@@ -3,7 +3,7 @@ import Image from "next/image";
 export default function GridShape() {
   return (
     <>
-      <div className="absolute right-0 top-0 -z-1 w-full max-w-62.5 xl:max-w-112.5">
+      <div className="absolute top-0 right-0 -z-1 w-full max-w-62.5 xl:max-w-112.5">
         <Image
           width={540}
           height={254}

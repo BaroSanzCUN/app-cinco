@@ -27,7 +27,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
       hint,
       ...props
     },
-    ref
+    ref,
   ) => {
     let inputClasses = `h-8 w-full rounded-lg border appearance-none px-2 py-0.5 text-sm shadow-theme-xs placeholder:text-gray-400 focus:outline-hidden focus:ring-3 dark:bg-gray-900 dark:text-white/90 dark:placeholder:text-white/30 dark:focus:border-brand-800 ${className}`;
 
@@ -67,8 +67,8 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
               error
                 ? "text-error-400"
                 : success
-                ? "text-success-400"
-                : "text-gray-500"
+                  ? "text-success-400"
+                  : "text-gray-500"
             }`}
           >
             {hint}
@@ -76,7 +76,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
         )}
       </div>
     );
-  }
+  },
 );
 
 Input.displayName = "Input";

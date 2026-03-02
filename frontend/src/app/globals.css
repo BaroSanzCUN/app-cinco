@@ -1,4 +1,4 @@
-@import 'tailwindcss';
+@import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
@@ -190,7 +190,7 @@
     cursor: pointer;
   }
   body {
-    @apply relative font-normal font-outfit z-1 bg-gray-50;
+    @apply font-outfit relative z-1 bg-gray-50 font-normal;
     @apply bg-background text-foreground;
   }
   * {
@@ -199,7 +199,7 @@
 }
 
 @utility menu-item {
-  @apply relative flex items-center w-full gap-3 px-3 py-2 font-medium rounded-lg text-theme-sm;
+  @apply text-theme-sm relative flex w-full items-center gap-3 rounded-lg px-3 py-2 font-medium;
 }
 
 @utility menu-item-active {
@@ -207,7 +207,7 @@
 }
 
 @utility menu-item-inactive {
-  @apply text-gray-700 hover:bg-gray-100 group-hover:text-gray-700 dark:text-gray-300 dark:hover:bg-white/5 dark:hover:text-gray-300;
+  @apply text-gray-700 group-hover:text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/5 dark:hover:text-gray-300;
 }
 
 @utility menu-item-icon {
@@ -227,7 +227,7 @@
 }
 
 @utility menu-item-arrow-active {
-  @apply rotate-180 text-brand-500 dark:text-brand-400;
+  @apply text-brand-500 dark:text-brand-400 rotate-180;
 }
 
 @utility menu-item-arrow-inactive {
@@ -235,7 +235,7 @@
 }
 
 @utility menu-dropdown-item {
-  @apply relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-theme-sm font-medium;
+  @apply text-theme-sm relative flex items-center gap-3 rounded-lg px-3 py-2.5 font-medium;
 }
 
 @utility menu-dropdown-item-active {
@@ -247,7 +247,7 @@
 }
 
 @utility menu-dropdown-badge {
-  @apply block rounded-full px-2.5 py-0.5 text-xs font-medium uppercase text-brand-500 dark:text-brand-400;
+  @apply text-brand-500 dark:text-brand-400 block rounded-full px-2.5 py-0.5 text-xs font-medium uppercase;
 }
 
 @utility menu-dropdown-badge-active {
@@ -277,7 +277,7 @@
   }
 
   &::-webkit-scrollbar-thumb {
-    @apply bg-gray-200 rounded-full dark:bg-gray-700;
+    @apply rounded-full bg-gray-200 dark:bg-gray-700;
   }
 }
 
@@ -306,7 +306,7 @@
 }
 
 .apexcharts-tooltip.apexcharts-theme-light {
-  @apply gap-1 !rounded-lg !border-gray-200 p-3 !shadow-theme-sm dark:!border-gray-800 dark:!bg-gray-900;
+  @apply !shadow-theme-sm gap-1 !rounded-lg !border-gray-200 p-3 dark:!border-gray-800 dark:!bg-gray-900;
 }
 
 .apexcharts-legend-text {
@@ -342,9 +342,7 @@
 
 /* ===== Contenedor principal ===== */
 .flatpickr-calendar {
-  @apply mt-2 !bg-white !rounded-xl !p-3 !shadow-none !border !border-gray-200
-  dark:!border-white/5 !text-gray-500 dark:!bg-gray-dark
-  dark:!text-gray-400 dark:!shadow-theme-xl 2xsm:!w-auto;
+  @apply dark:!bg-gray-dark dark:!shadow-theme-xl 2xsm:!w-auto mt-2 !rounded-xl !border !border-gray-200 !bg-white !p-3 !text-gray-500 !shadow-none dark:!border-white/5 dark:!text-gray-400;
 
   transform: scale(0.85);
   transform-origin: top right;
@@ -364,8 +362,7 @@
 
 .flatpickr-current-month .cur-month,
 .flatpickr-current-month input.cur-year {
-  @apply !h-auto !pt-0 !text-base !font-medium !text-gray-800
-  dark:!text-white/90;
+  @apply !h-auto !pt-0 !text-base !font-medium !text-gray-800 dark:!text-white/90;
 }
 
 .flatpickr-prev-month,
@@ -379,7 +376,7 @@
 
 .flatpickr-months .flatpickr-prev-month,
 .flatpickr-months .flatpickr-next-month {
-  @apply !top-5 dark:!fill-white dark:!text-white !bg-transparent;
+  @apply !top-5 !bg-transparent dark:!fill-white dark:!text-white;
 }
 
 .flatpickr-months .flatpickr-prev-month.flatpickr-prev-month,
@@ -394,11 +391,11 @@
 
 /* ===== Weekdays ===== */
 .flatpickr-weekdays {
-  @apply h-auto mt-4 mb-2 !bg-transparent;
+  @apply mt-4 mb-2 h-auto !bg-transparent;
 }
 
 .flatpickr-weekday {
-  @apply !text-xs !font-medium !text-gray-500 dark:!text-gray-400 !bg-transparent;
+  @apply !bg-transparent !text-xs !font-medium !text-gray-500 dark:!text-gray-400;
 }
 
 /* ===== Days ===== */
@@ -407,11 +404,7 @@
 }
 
 .flatpickr-day {
-  @apply !flex !items-center !justify-center
-  !text-sm !font-medium !text-gray-800
-  dark:!text-white/90
-  dark:hover:!border-gray-300
-  dark:hover:!bg-gray-900;
+  @apply !flex !items-center !justify-center !text-sm !font-medium !text-gray-800 dark:!text-white/90 dark:hover:!border-gray-300 dark:hover:!bg-gray-900;
 
   height: 28px;
   max-width: 28px;
@@ -436,8 +429,7 @@
 .flatpickr-day:focus,
 .flatpickr-day.prevMonthDay:focus,
 .flatpickr-day.nextMonthDay:focus {
-  @apply !border-gray-50 !bg-gray-50
-  dark:!border-0 dark:!border-white/5 dark:!bg-white/5;
+  @apply !border-gray-50 !bg-gray-50 dark:!border-0 dark:!border-white/5 dark:!bg-white/5;
 }
 
 /* ===== Selected ===== */
@@ -453,13 +445,14 @@
 .flatpickr-day.selected:hover,
 .flatpickr-day.startRange:hover,
 .flatpickr-day.endRange:hover {
-  @apply !text-white !border-brand-500 !bg-brand-500
-  hover:!border-brand-500 hover:!bg-brand-500;
+  @apply !border-brand-500 !bg-brand-500 hover:!border-brand-500 hover:!bg-brand-500 !text-white;
 }
 
 /* ===== Range shadow ===== */
 .flatpickr-day.inRange {
-  box-shadow: -4px 0 0 #f9fafb, 4px 0 0 #f9fafb !important;
+  box-shadow:
+    -4px 0 0 #f9fafb,
+    4px 0 0 #f9fafb !important;
   @apply dark:shadow-datepicker!;
 }
 
@@ -472,8 +465,8 @@
 }
 
 .flatpickr-month
-.flatpickr-current-month
-.flatpickr-monthDropdown-months:focus {
+  .flatpickr-current-month
+  .flatpickr-monthDropdown-months:focus {
   outline: none !important;
   border: 0 !important;
 }
@@ -506,7 +499,7 @@
 }
 
 .fc .fc-view-harness {
-  @apply max-w-full overflow-x-auto custom-scrollbar;
+  @apply custom-scrollbar max-w-full overflow-x-auto;
 }
 .fc-dayGridMonth-view.fc-view.fc-daygrid {
   @apply min-w-[718px];
@@ -529,11 +522,11 @@
 }
 
 .fc-button-group .fc-button.fc-prev-button:before {
-  @apply inline-block mt-1;
+  @apply mt-1 inline-block;
   content: url("data:image/svg+xml,%3Csvg width='25' height='24' viewBox='0 0 25 24' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M16.0068 6L9.75684 12.25L16.0068 18.5' stroke='%23344054' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E%0A");
 }
 .fc-button-group .fc-button.fc-next-button:before {
-  @apply inline-block mt-1;
+  @apply mt-1 inline-block;
   content: url("data:image/svg+xml,%3Csvg width='25' height='24' viewBox='0 0 25 24' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M9.50684 19L15.7568 12.75L9.50684 6.5' stroke='%23344054' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E%0A");
 }
 .dark .fc-button-group .fc-button.fc-prev-button:before {
@@ -546,7 +539,7 @@
   @apply hidden;
 }
 .fc-addEventButton-button {
-  @apply !rounded-lg !border-0 !bg-brand-500 !px-4 !py-2.5 !text-sm !font-medium hover:!bg-brand-600 focus:!shadow-none;
+  @apply !bg-brand-500 hover:!bg-brand-600 !rounded-lg !border-0 !px-4 !py-2.5 !text-sm !font-medium focus:!shadow-none;
 }
 .fc-toolbar-title {
   @apply !text-lg !font-medium text-gray-800 dark:text-white/90;
@@ -560,7 +553,7 @@
 .fc-header-toolbar.fc-toolbar
   .fc-toolbar-chunk:last-child
   .fc-button.fc-button-active {
-  @apply text-gray-900 bg-white dark:bg-gray-800 dark:text-white;
+  @apply bg-white text-gray-900 dark:bg-gray-800 dark:text-white;
 }
 .fc-theme-standard th {
   @apply !border-x-0 border-t !border-gray-200 bg-gray-50 !text-left dark:!border-gray-800 dark:bg-gray-900;
@@ -570,7 +563,7 @@
   @apply !border-gray-200 dark:!border-gray-800;
 }
 .fc .fc-col-header-cell-cushion {
-  @apply !px-5 !py-4 text-sm font-medium uppercase text-gray-400;
+  @apply !px-5 !py-4 text-sm font-medium text-gray-400 uppercase;
 }
 .fc .fc-daygrid-day.fc-day-today {
   @apply bg-transparent;
@@ -594,13 +587,13 @@
   @apply text-gray-400 dark:text-white/30;
 }
 .event-fc-color {
-  @apply rounded-lg py-2.5 pl-4 pr-3;
+  @apply rounded-lg py-2.5 pr-3 pl-4;
 }
 .event-fc-color .fc-event-title {
   @apply p-0 text-sm font-normal text-gray-700;
 }
 .fc-daygrid-event-dot {
-  @apply w-1 h-5 ml-0 mr-3 border-none rounded-sm;
+  @apply mr-3 ml-0 h-5 w-1 rounded-sm border-none;
 }
 .fc-event {
   @apply focus:shadow-none;
@@ -660,7 +653,7 @@
 
 .stocks-slider-outer .swiper-button-next,
 .stocks-slider-outer .swiper-button-prev {
-  @apply !static mt-0 h-8 w-9 rounded-full border dark:hover:bg-white/[0.05] border-gray-200 !text-gray-700 transition hover:bg-gray-100 dark:border-white/[0.03] dark:bg-gray-800 dark:!text-gray-400  dark:hover:!text-white/90;
+  @apply !static mt-0 h-8 w-9 rounded-full border border-gray-200 !text-gray-700 transition hover:bg-gray-100 dark:border-white/[0.03] dark:bg-gray-800 dark:!text-gray-400 dark:hover:bg-white/[0.05] dark:hover:!text-white/90;
 }
 
 .stocks-slider-outer .swiper-button-next.swiper-button-disabled,
@@ -694,7 +687,7 @@
 .carouselTwo .swiper-button-prev,
 .carouselFour .swiper-button-next,
 .carouselFour .swiper-button-prev {
-  @apply h-10 w-10 rounded-full border-[0.5px] border-white/10 bg-white/90 !text-gray-700 shadow-slider-navigation backdrop-blur-[10px];
+  @apply shadow-slider-navigation h-10 w-10 rounded-full border-[0.5px] border-white/10 bg-white/90 !text-gray-700 backdrop-blur-[10px];
 }
 
 .carouselTwo .swiper-button-prev,
@@ -709,12 +702,12 @@
 
 .carouselThree .swiper-pagination,
 .carouselFour .swiper-pagination {
-  @apply !bottom-3 !left-1/2 inline-flex !w-auto -translate-x-1/2 items-center gap-1.5 rounded-[40px] border-[0.5px] border-white/10 bg-white/60 px-2 py-1.5 shadow-slider-navigation backdrop-blur-[10px] sm:!bottom-5;
+  @apply shadow-slider-navigation !bottom-3 !left-1/2 inline-flex !w-auto -translate-x-1/2 items-center gap-1.5 rounded-[40px] border-[0.5px] border-white/10 bg-white/60 px-2 py-1.5 backdrop-blur-[10px] sm:!bottom-5;
 }
 
 .carouselThree .swiper-pagination-bullet,
 .carouselFour .swiper-pagination-bullet {
-  @apply !m-0 h-2.5 w-2.5 bg-white opacity-100 shadow-theme-xs duration-200 ease-in-out;
+  @apply shadow-theme-xs !m-0 h-2.5 w-2.5 bg-white opacity-100 duration-200 ease-in-out;
 }
 
 .carouselThree .swiper-pagination-bullet-active,
@@ -726,7 +719,7 @@
   @apply !bg-gray-50 dark:!bg-gray-900;
 }
 .jvectormap-region.jvectormap-element {
-  @apply !fill-gray-300 hover:!fill-brand-500 dark:!fill-gray-700 dark:hover:!fill-brand-500;
+  @apply hover:!fill-brand-500 dark:hover:!fill-brand-500 !fill-gray-300 dark:!fill-gray-700;
 }
 .jvectormap-marker.jvectormap-element {
   @apply !stroke-gray-200 dark:!stroke-gray-800;
@@ -740,11 +733,11 @@
 }
 
 .form-check-input:checked ~ span {
-  @apply border-[6px] border-brand-500 bg-brand-500 dark:border-brand-500;
+  @apply border-brand-500 bg-brand-500 dark:border-brand-500 border-[6px];
 }
 
 .taskCheckbox:checked ~ .box span {
-  @apply opacity-100 bg-brand-500;
+  @apply bg-brand-500 opacity-100;
 }
 .taskCheckbox:checked ~ p {
   @apply text-gray-400 line-through;
@@ -759,7 +752,8 @@
 
 .task {
   border-radius: 0.75rem;
-  box-shadow: 0 1px 3px 0 rgba(16, 24, 40, 0.1),
+  box-shadow:
+    0 1px 3px 0 rgba(16, 24, 40, 0.1),
     0 1px 2px 0 rgba(16, 24, 40, 0.06);
   opacity: 0.8;
   cursor: grabbing; /* Changes the cursor to indicate dragging */

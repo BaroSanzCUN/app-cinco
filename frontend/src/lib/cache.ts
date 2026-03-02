@@ -113,7 +113,7 @@ class MemoryCache {
   async getOrFetch<T>(
     key: string,
     fetcher: () => Promise<T>,
-    ttl?: number
+    ttl?: number,
   ): Promise<T> {
     // Intentar obtener del caché primero
     const cached = this.get<T>(key);
@@ -136,9 +136,12 @@ export const cache = new MemoryCache();
 
 // Limpiar entradas expiradas cada 5 minutos
 if (typeof window !== "undefined") {
-  setInterval(() => {
-    cache.cleanExpired();
-  }, 5 * 60 * 1000);
+  setInterval(
+    () => {
+      cache.cleanExpired();
+    },
+    5 * 60 * 1000,
+  );
 }
 
 export default cache;

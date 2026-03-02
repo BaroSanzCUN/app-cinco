@@ -29,9 +29,13 @@ export const useAuthStore = create<AuthState>((set) => ({
   logout: async () => {
     try {
       // Llamar al endpoint de logout para limpiar cookies y revocar token
-      await axios.post(`${baseURL}auth/logout/`, {}, {
-        withCredentials: true  // Enviar cookies
-      });
+      await axios.post(
+        `${baseURL}auth/logout/`,
+        {},
+        {
+          withCredentials: true, // Enviar cookies
+        },
+      );
     } catch (error) {
       console.error("Error al cerrar sesión:", error);
     } finally {

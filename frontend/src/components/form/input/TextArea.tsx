@@ -2,7 +2,7 @@ import React, { forwardRef, TextareaHTMLAttributes } from "react";
 
 interface TextAreaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
   error?: boolean; // Error state for styling
-  hint?: string;   // Hint text
+  hint?: string; // Hint text
   success?: boolean; // Optional success state
 }
 
@@ -22,7 +22,7 @@ const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(
       hint,
       ...props
     },
-    ref
+    ref,
   ) => {
     const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       if (onChange) onChange(e);
@@ -69,7 +69,7 @@ const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(
         )}
       </div>
     );
-  }
+  },
 );
 
 TextArea.displayName = "TextArea";

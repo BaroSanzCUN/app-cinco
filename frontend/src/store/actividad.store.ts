@@ -15,6 +15,5 @@ export const useActividadStore = create<any>((set) => ({
     set((state: any) => ({
       actividades: [...state.actividades, actividad],
     }));
-  }
-
+  },
 }));

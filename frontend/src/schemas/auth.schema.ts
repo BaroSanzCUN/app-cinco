@@ -12,7 +12,7 @@ export const loginSchema = z.object({
     .min(1, "La contrasena es obligatoria")
     .regex(
       /^[A-Za-z0-9!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]+$/,
-      "La contrasena contiene caracteres no validos"
+      "La contrasena contiene caracteres no validos",
     ),
 });
 

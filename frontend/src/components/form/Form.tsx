@@ -15,11 +15,7 @@ const Form = <T extends FieldValues>({
   className,
 }: FormProps<T>) => {
   return (
-    <form
-      onSubmit={handleSubmit(onSubmit)}
-      className={className}
-      noValidate
-    >
+    <form onSubmit={handleSubmit(onSubmit)} className={className} noValidate>
       {children}
     </form>
   );

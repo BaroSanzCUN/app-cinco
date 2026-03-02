@@ -13,16 +13,30 @@ interface RadioProps extends InputHTMLAttributes<HTMLInputElement> {
 
 // forwardRef para RHF
 const Radio = forwardRef<HTMLInputElement, RadioProps>(
-  ({ id, name, value, label, checked, disabled = false, className = "", onChange, error, ...props }, ref) => {
+  (
+    {
+      id,
+      name,
+      value,
+      label,
+      checked,
+      disabled = false,
+      className = "",
+      onChange,
+      error,
+      ...props
+    },
+    ref,
+  ) => {
     return (
       <label
         htmlFor={id}
-        className={`relative flex cursor-pointer select-none items-center gap-3 text-sm font-medium ${
+        className={`relative flex cursor-pointer items-center gap-3 text-sm font-medium select-none ${
           disabled
-            ? "text-gray-300 dark:text-gray-600 cursor-not-allowed"
+            ? "cursor-not-allowed text-gray-300 dark:text-gray-600"
             : error
-            ? "text-error-400"
-            : "text-gray-700 dark:text-gray-400"
+              ? "text-error-400"
+              : "text-gray-700 dark:text-gray-400"
         } ${className}`}
       >
         <input
@@ -41,10 +55,10 @@ const Radio = forwardRef<HTMLInputElement, RadioProps>(
           className={`flex h-5 w-5 items-center justify-center rounded-full border-[1.25px] ${
             checked
               ? "border-brand-500 bg-brand-500"
-              : "bg-transparent border-gray-300 dark:border-gray-700"
+              : "border-gray-300 bg-transparent dark:border-gray-700"
           } ${
             disabled
-              ? "bg-gray-100 dark:bg-gray-700 border-gray-200 dark:border-gray-700"
+              ? "border-gray-200 bg-gray-100 dark:border-gray-700 dark:bg-gray-700"
               : ""
           }`}
         >
@@ -55,7 +69,7 @@ const Radio = forwardRef<HTMLInputElement, RadioProps>(
         {label}
       </label>
     );
-  }
+  },
 );
 
 Radio.displayName = "Radio";

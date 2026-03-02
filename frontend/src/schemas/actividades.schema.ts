@@ -40,7 +40,7 @@ import { z } from "zod";
 
 export const ActividadSchema = z.object({
   id: z.number().optional(),
-  
+
   detalle: z.object({
     tipo_trabajo: z.string().min(1, "El tipo de trabajo es requerido"),
     descripcion: z.string().min(1, "La descripción es requerida"),
@@ -55,18 +55,20 @@ export const ActividadSchema = z.object({
     nodo: z.string().min(1, "El nodo es requerido"),
   }),
 
-  responsable_snapshot: z.object({
-    nombre: z.string().min(1, "El nombre del responsable es requerido"),
-    area: z.string().min(1, "El área del responsable es requerida"),
-    carpeta: z.string().min(1, "La carpeta del responsable es requerida"),
-    cargo: z.string().min(1, "El cargo del responsable es requerido"),
-    movil: z.string().min(1, "El móvil del responsable es requerido"),
-  }).optional(),
+  responsable_snapshot: z
+    .object({
+      nombre: z.string().min(1, "El nombre del responsable es requerido"),
+      area: z.string().min(1, "El área del responsable es requerida"),
+      carpeta: z.string().min(1, "La carpeta del responsable es requerida"),
+      cargo: z.string().min(1, "El cargo del responsable es requerido"),
+      movil: z.string().min(1, "El móvil del responsable es requerido"),
+    })
+    .optional(),
 
   ot: z.string().min(1, "La OT es requerida"),
-  
+
   estado: z.string().optional(), // opcional, se asignará automáticamente al crear la actividad
-  
+
   responsable_id: z
     .number({
       required_error: "Debe seleccionar un responsable",
@@ -75,14 +77,14 @@ export const ActividadSchema = z.object({
     .refine((val) => val > 0, {
       message: "Debe seleccionar un responsable",
     }),
-    
+
   fecha_inicio: z
     .string()
     .min(1, "La fecha de inicio es requerida")
     .refine((v) => !isNaN(Date.parse(v)), {
       message: "Fecha de inicio inválida",
     }),
-  
+
   fecha_fin_estimado: z
     .string()
     .min(1, "La fecha de fin estimada es requerida")
@@ -98,9 +100,6 @@ export const ActividadSchema = z.object({
     .refine((v) => !v || !isNaN(Date.parse(v)), {
       message: "Fecha de fin real inválida",
     }),
-  
-
-  
 });
 
 export type ActividadFormData = z.infer<typeof ActividadSchema>;

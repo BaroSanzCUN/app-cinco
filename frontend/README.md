@@ -1,4 +1,3 @@
-
 # 📘 Guía paso a paso: Instalación y ejecución de un proyecto Next.js
 
 Este documento describe **cómo preparar el entorno**, **instalar dependencias**, y **ejecutar un proyecto Next.js** de forma segura, pensado para **proyectos grandes o migraciones desde PHP/JS vanilla**, sin alterar configuraciones sensibles.
@@ -144,6 +143,7 @@ npm run build
 ```
 
 Este comando:
+
 - Valida tipos (TypeScript)
 - Optimiza el bundle
 - Puede fallar si existen errores de tipado
@@ -238,4 +238,3 @@ npm run start
 ---
 
 📌 **Este README está pensado para proyectos Next.js grandes, modulares y en proceso de migración desde sistemas legacy.**
-
