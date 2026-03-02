@@ -1,34 +1,53 @@
 "use client";
 
 import { PlusIcon } from "@/icons";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ModalActividad from "./ModalActividad";
 import Alert from "@/components/ui/alert/Alert";
 import Badge from "@/components/ui/badge/Badge";
+import Button from "@/components/ui/button/Button";
 import { ColumnDef } from "@tanstack/react-table";
 import { DataTable } from "@/components/common/DataTable";
 import { useActividadStore } from "@/store/actividad.store";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
 import { ActividadFormData } from "@/schemas/actividades.schema";
+import { DownloadIcon } from "@/icons";
+import {
+  actividadCsvColumns,
+  ACTIVIDAD_TABLE_CONFIG,
+} from "./actividadTable.utils";
+import { useTableUrlState } from "@/hooks/useTableUrlState";
+import { exportToCsv } from "@/utils/csv";
 
 const GestionActividadesView = () => {
   const breadcrumbTitles = ["Operaciones", "Gestión de Actividades"];
   const { loadActividades, actividades } = useActividadStore();
   const [showAlert, setShowAlert] = useState(false);
+  const [visibleRows, setVisibleRows] = useState<ActividadFormData[]>([]);
+
+  const {
+    globalFilter,
+    setGlobalFilter,
+    sorting,
+    setSorting,
+    pageIndex,
+    setPageIndex,
+    pageSize,
+    setPageSize,
+  } = useTableUrlState({
+    defaultPageSize: ACTIVIDAD_TABLE_CONFIG.defaultPageSize,
+    defaultPageIndex: ACTIVIDAD_TABLE_CONFIG.defaultPageIndex,
+  });
 
   useEffect(() => {
     loadActividades();
 
     const timer = setTimeout(() => {
       setShowAlert(false);
-    }, 5000); // Ocultar alerta después de 5 segundos
+    }, 5000);
 
     return () => clearTimeout(timer);
   }, [loadActividades]);
-
-  const handleEditarActividad = (id: any) => {
-    alert(`Editar actividad ${id}`);
-  };
 
   // {
   //     "id": 3,
@@ -68,74 +87,111 @@ const GestionActividadesView = () => {
   //     "deleted_by": null
   // },
 
-  const actividadesColumns: ColumnDef<ActividadFormData>[] = [
-    {
-      header: "ID",
-      // accessorKey: "id",
-      cell: ({ row }) => {
-        const id = row.original.id;
+  const actividadesColumns: ColumnDef<ActividadFormData>[] = useMemo(
+    () => [
+      {
+        id: "acciones",
+        header: "ACCIONES",
+        enableSorting: false,
+        enableColumnFilter: false,
+        enableHiding: false,
+        cell: ({ row }) => {
+          const id = row.original.id;
 
-        if (id === undefined) {
-          return null;
-        }
+          if (id === undefined) {
+            return null;
+          }
 
-        const actividad = {
-          id: id as number,
-          ot: row.original.ot,
-          estado: row.original.estado,
-          responsable_snapshot: row.original.responsable_snapshot,
-          responsable_id: row.original.responsable_id,
-          fecha_inicio: row.original.fecha_inicio,
-          fecha_fin_estimado: row.original.fecha_fin_estimado,
-          fecha_fin_real: row.original.fecha_fin_real,
-          detalle: row.original.detalle,
-          ubicacion: row.original.ubicacion,
-        };
+          const actividad = {
+            id: id as number,
+            ot: row.original.ot,
+            estado: row.original.estado,
+            responsable_snapshot: row.original.responsable_snapshot,
+            responsable_id: row.original.responsable_id,
+            fecha_inicio: row.original.fecha_inicio,
+            fecha_fin_estimado: row.original.fecha_fin_estimado,
+            fecha_fin_real: row.original.fecha_fin_real,
+            detalle: row.original.detalle,
+            ubicacion: row.original.ubicacion,
+          };
 
-        return (
-          <ModalActividad
-            mode="edit"
-            actividad={actividad}
-            textButton="Editar"
-          />
-        );
+          return (
+            <ModalActividad
+              mode="edit"
+              actividad={actividad}
+              textButton="Editar"
+            />
+          );
+        },
       },
-    },
-    {
-      header: "OT",
-      accessorKey: "ot",
-    },
-    {
-      header: "ESTADO",
-      accessorKey: "estado",
-      cell: ({ row }) => {
-        const estado = row.original.estado || "Sin estado";
-        return (
-          <Badge
-            size="sm"
-            color={
-              estado == "completada"
-                ? "success"
-                : estado == "pendiente"
-                  ? "warning"
-                  : "error"
-            }
-          >
-            {estado}
-          </Badge>
-        );
+      {
+        id: "id",
+        header: "ID",
+        accessorKey: "id",
       },
-    },
-    {
-      header: "RESPONSABLE",
-      accessorKey: "responsable_snapshot.nombre",
-      cell: ({ row }) => {
-        const responsable =
-          row.original.responsable_snapshot?.nombre || "Sin responsable";
-        return <span>{responsable}</span>;
+      {
+        id: "ot",
+        header: "OT",
+        accessorKey: "ot",
       },
-    },
-  ];
+      {
+        id: "estado",
+        header: "ESTADO",
+        accessorKey: "estado",
+        cell: ({ row }) => {
+          const estado = row.original.estado || "Sin estado";
+          return (
+            <Badge
+              size="sm"
+              color={
+                estado == "completada"
+                  ? "success"
+                  : estado == "pendiente"
+                    ? "warning"
+                    : "error"
+              }
+            >
+              {estado}
+            </Badge>
+          );
+        },
+      },
+      {
+        id: "responsable",
+        header: "RESPONSABLE",
+        accessorKey: "responsable_snapshot.nombre",
+        cell: ({ row }) => {
+          const responsable =
+            row.original.responsable_snapshot?.nombre || "Sin responsable";
+          return <span>{responsable}</span>;
+        },
+      },
+    ],
+    [],
+  );
+
+  const handleExportCsv = () => {
+    if (!visibleRows.length) {
+      return;
+    }
+
+    exportToCsv(visibleRows, {
+      fileName: ACTIVIDAD_TABLE_CONFIG.csvFileName,
+      columns: actividadCsvColumns,
+    });
+  };
+
+  const toolbarActions = (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={handleExportCsv}
+      startIcon={<DownloadIcon className="h-4 w-4" />}
+      disabled={!visibleRows.length}
+    >
+      Exportar CSV
+    </Button>
+  );
 
   return (
     <div>
@@ -173,13 +229,33 @@ const GestionActividadesView = () => {
           <DataTable
             data={actividades}
             columns={actividadesColumns}
-            enablePagination={true}
-            pageSize={6}
+            enablePagination
+            pageSize={ACTIVIDAD_TABLE_CONFIG.defaultPageSize}
             emptyMessage="No hay actividades para mostrar."
-            enableGlobalFilter={true}
-            enableSorting={true}
-            enableColumnFilters={true}
+            enableGlobalFilter
+            enableSorting
+            enableColumnFilters
+            enableColumnVisibility
             pageSizeOptions={[5, 10, 25, 50, 100]}
+            globalFilterValue={globalFilter}
+            sortingValue={sorting}
+            pageIndexValue={pageIndex}
+            pageSizeValue={pageSize}
+            onGlobalFilterChange={(value) => {
+              setGlobalFilter(value);
+              setPageIndex(0);
+            }}
+            onSortingChange={(nextSorting) => {
+              setSorting(nextSorting);
+              setPageIndex(0);
+            }}
+            onPageChange={setPageIndex}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPageIndex(0);
+            }}
+            onVisibleDataChange={setVisibleRows}
+            toolbarActions={toolbarActions}
           />
         </div>
       </div>
