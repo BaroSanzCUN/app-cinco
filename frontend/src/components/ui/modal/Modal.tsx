@@ -69,7 +69,8 @@ const ModalComponent = React.forwardRef<HTMLDivElement, ModalProps>(
     ref,
   ) => {
     const modalRef = useRef<HTMLDivElement>(null);
-    const internalRef = (ref as React.MutableRefObject<HTMLDivElement | null>) || modalRef;
+    const internalRef =
+      (ref as React.MutableRefObject<HTMLDivElement | null>) || modalRef;
 
     // Lógica integrada del modal
     const { handleContentClick, handleClose } = useModalLogic(
@@ -114,10 +115,7 @@ const ModalComponent = React.forwardRef<HTMLDivElement, ModalProps>(
         >
           {/* Si showCloseButton, renderizar header con close button automáticamente */}
           {showCloseButton && !isFullscreen && (
-            <ModalHeader
-              showCloseButton={true}
-              onClose={safeClose}
-            />
+            <ModalHeader showCloseButton={true} onClose={safeClose} />
           )}
 
           {/* Renderizar el contenido (children) - puede incluir Modal.Header, Modal.Content, etc */}
@@ -131,7 +129,9 @@ const ModalComponent = React.forwardRef<HTMLDivElement, ModalProps>(
 ModalComponent.displayName = "Modal";
 
 // Crear interfaz para Modal con sub-componentes
-interface ModalComponentType extends React.ForwardRefExoticComponent<ModalProps & React.RefAttributes<HTMLDivElement>> {
+interface ModalComponentType extends React.ForwardRefExoticComponent<
+  ModalProps & React.RefAttributes<HTMLDivElement>
+> {
   Header: typeof ModalHeader;
   Content: typeof ModalContent;
   CloseButton: typeof ModalCloseButton;

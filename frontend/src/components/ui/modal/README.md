@@ -26,29 +26,35 @@ modal/
 ## 🎯 Principios Aplicados
 
 ### 1. **Single Responsibility Principle**
+
 Cada archivo tiene una única responsabilidad:
+
 - `Modal.tsx`: Orquesta el modal, gestiona estado
 - `Modal.hooks.ts`: Lógica de Escape, body scroll, etc.
 - `Modal.utils.ts`: Configuraciones y funciones puras
 - `Modal.types.ts`: Definiciones de tipos
 
 ### 2. **Open/Closed Principle**
+
 - Abierto para extensión via props y composición
 - Cerrado para modificación (API estable)
 
 ### 3. **Composition over Inheritance**
+
 ```tsx
 <Modal isOpen onClose={close}>
-  <Modal.Header />        ← Composición
-  <Modal.Content />       ← Composición
-  <Modal.Actions />       ← Composición
+  <Modal.Header /> ← Composición
+  <Modal.Content /> ← Composición
+  <Modal.Actions /> ← Composición
 </Modal>
 ```
 
 ## 📁 Descripción de Archivos
 
 ### `Modal.types.ts` (150 líneas)
+
 Tipos TypeScript centralizados:
+
 - `ModalProps` - Props principales
 - `ModalOverlayProps` - Props del overlay
 - `ModalHeaderProps` - Props del header
@@ -57,7 +63,9 @@ Tipos TypeScript centralizados:
 - `ModalAnimationConfig` - Configuración de animaciones
 
 ### `Modal.utils.ts` (200 líneas)
+
 Funciones helper y configuraciones:
+
 - `MODAL_SIZE_CONFIG` - Tamaños predefinidos (sm, md, lg, xl, full)
 - `MODAL_ANIMATION_CONFIG` - Animaciones (fade, slide, zoom)
 - `getModalSizeClass()` - Obtiene clase Tailwind de tamaño
@@ -67,7 +75,9 @@ Funciones helper y configuraciones:
 - `canCloseModal()` - Valida cierre en modales bloqueantes
 
 ### `Modal.hooks.ts` (150 líneas)
+
 Custom hooks reutilizables:
+
 - `useModalEscapeKey()` - Maneja Escape key (respeta isBlocking)
 - `useModalBodyScroll()` - Bloquea scroll automáticamente
 - `useModalClickPropagation()` - Previene propagación de clicks
@@ -75,7 +85,9 @@ Custom hooks reutilizables:
 - `useModalLogic()` - Hook integrado con toda la lógica
 
 ### `Modal.tsx` (100 líneas)
+
 Componente principal:
+
 - Orquesta todo el funcionamiento
 - Integra hooks y utilities
 - Renderiza overlay, header, content
@@ -83,25 +95,33 @@ Componente principal:
 - 100% compatible con código existente
 
 ### `components/ModalOverlay.tsx` (30 líneas)
+
 Overlay/backdrop del modal:
+
 - Blur backend
 - Click handler
 - Accesibilidad
 
 ### `components/ModalHeader.tsx` (60 líneas)
+
 Header con botón de cerrar:
+
 - Posicionamiento absoluto esquina superior derecha
 - Icono SVG
 - Accesibilidad completa
 
 ### `components/ModalContent.tsx` (30 líneas)
+
 Contenido scrolleable:
+
 - Soporte para contenido largo
 - `max-h-[70vh]` con overflow-y-auto
 - Flexible
 
 ### `components/ModalActions.tsx` (50 líneas)
+
 Footer con botones:
+
 - Botón primario (aceptar)
 - Botón secundario (cancelar)
 - Alineación flexible (left, center, right)
@@ -124,27 +144,29 @@ Modal se cierra
 
 ## 📊 Mejoras
 
-| Métrica | Antes | Después | Mejora |
-|---------|-------|---------|--------|
-| **Líneas en index.tsx** | 100 | 30 | ✅ 70% reducción |
-| **Documentación** | 0% | 100% | ✅ JSDoc completo |
-| **Testabilidad** | Baja | Alta | ✅ 5x mejor |
-| **Reutilización** | Nula | Alta | ✅ Hooks separados |
+| Métrica                 | Antes | Después | Mejora             |
+| ----------------------- | ----- | ------- | ------------------ |
+| **Líneas en index.tsx** | 100   | 30      | ✅ 70% reducción   |
+| **Documentación**       | 0%    | 100%    | ✅ JSDoc completo  |
+| **Testabilidad**        | Baja  | Alta    | ✅ 5x mejor        |
+| **Reutilización**       | Nula  | Alta    | ✅ Hooks separados |
 
 ## 🚀 Uso
 
 ### Básico (Compatible con antiguo código)
+
 ```tsx
-import { Modal } from '@/components/ui/modal';
+import { Modal } from "@/components/ui/modal";
 
 <Modal isOpen={isOpen} onClose={onClose} className="max-w-150 p-5">
   <div>Contenido del modal</div>
-</Modal>
+</Modal>;
 ```
 
 ### Con Sub-componentes
+
 ```tsx
-import { Modal } from '@/components/ui/modal';
+import { Modal } from "@/components/ui/modal";
 
 <Modal isOpen onClose={handleClose} size="lg">
   <Modal.Header showCloseButton onClose={handleClose} />
@@ -156,16 +178,17 @@ import { Modal } from '@/components/ui/modal';
     primaryButton={<Button onClick={handleConfirm}>Aceptar</Button>}
     secondaryButton={<Button onClick={handleCancel}>Cancelar</Button>}
   />
-</Modal>
+</Modal>;
 ```
 
 ### Modal Bloqueante
+
 ```tsx
-<Modal 
-  isOpen={isOpen} 
+<Modal
+  isOpen={isOpen}
   onClose={onClose}
   isBlocking={true}
-  onBlockingAttempt={() => alert('No puedes cerrar')}
+  onBlockingAttempt={() => alert("No puedes cerrar")}
 >
   {/* Solo se puede cerrar con un botón específico */}
 </Modal>
@@ -174,18 +197,20 @@ import { Modal } from '@/components/ui/modal';
 ## 🧪 Testing
 
 ### Unit Tests
+
 ```typescript
-describe('Modal.utils', () => {
-  it('should return correct size class', () => {
-    expect(getModalSizeClass('lg')).toBe('max-w-2xl');
+describe("Modal.utils", () => {
+  it("should return correct size class", () => {
+    expect(getModalSizeClass("lg")).toBe("max-w-2xl");
   });
 });
 ```
 
 ### Component Tests
+
 ```typescript
-describe('Modal', () => {
-  it('should call onClose on Escape key', () => {
+describe("Modal", () => {
+  it("should call onClose on Escape key", () => {
     // Test mediante useModalEscapeKey
   });
 });

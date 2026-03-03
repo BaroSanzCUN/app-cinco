@@ -58,10 +58,7 @@ export const ModalHeader = ({
 }: ModalHeaderProps) => {
   return (
     <div className={`relative ${className || ""}`}>
-      <ModalCloseButton
-        showCloseButton={showCloseButton}
-        onClose={onClose}
-      />
+      <ModalCloseButton showCloseButton={showCloseButton} onClose={onClose} />
     </div>
   );
 };

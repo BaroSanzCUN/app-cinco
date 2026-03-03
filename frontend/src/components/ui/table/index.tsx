@@ -26,7 +26,8 @@ interface TableRowProps extends React.HTMLAttributes<HTMLTableRowElement> {
 
 // Props for TableCell
 interface TableCellProps
-  extends React.ThHTMLAttributes<HTMLTableCellElement>,
+  extends
+    React.ThHTMLAttributes<HTMLTableCellElement>,
     React.TdHTMLAttributes<HTMLTableCellElement> {
   children: ReactNode; // Cell content
   isHeader?: boolean; // If true, renders as <th>, otherwise <td>
@@ -49,7 +50,11 @@ const TableBody: React.FC<TableBodyProps> = ({ children, className }) => {
 };
 
 // TableRow Component
-const TableRow: React.FC<TableRowProps> = ({ children, className, ...props }) => {
+const TableRow: React.FC<TableRowProps> = ({
+  children,
+  className,
+  ...props
+}) => {
   return (
     <tr className={className} {...props}>
       {children}

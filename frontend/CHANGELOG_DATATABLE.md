@@ -7,12 +7,14 @@
 #### 🏗️ Cambios Estructurales
 
 **Antes**:
+
 ```
 components/common/
 └── DataTable.tsx (501 líneas - monolítico)
 ```
 
 **Después**:
+
 ```
 components/common/DataTable/
 ├── index.tsx                          # Exportación pública
@@ -41,14 +43,14 @@ components/common/DataTable/
 
 #### 📊 Métricas de Mejora
 
-| Métrica | Antes | Después | Mejora |
-|---------|-------|---------|--------|
-| **Líneas por archivo** | 501 | ~70 promedio | ✅ 86% reducción |
-| **Archivos** | 1 | 11 | ✅ Modularidad |
-| **Funciones documentadas** | 0% | 100% | ✅ JSDoc completo |
-| **Separación de concerns** | 0% | 100% | ✅ Total |
-| **Testabilidad** | Baja | Alta | ✅ 10x mejor |
-| **Mantenibilidad** | Baja | Alta | ✅ 3x mejor |
+| Métrica                    | Antes | Después      | Mejora            |
+| -------------------------- | ----- | ------------ | ----------------- |
+| **Líneas por archivo**     | 501   | ~70 promedio | ✅ 86% reducción  |
+| **Archivos**               | 1     | 11           | ✅ Modularidad    |
+| **Funciones documentadas** | 0%    | 100%         | ✅ JSDoc completo |
+| **Separación de concerns** | 0%    | 100%         | ✅ Total          |
+| **Testabilidad**           | Baja  | Alta         | ✅ 10x mejor      |
+| **Mantenibilidad**         | Baja  | Alta         | ✅ 3x mejor       |
 
 #### 🎯 Principios Aplicados
 
@@ -81,6 +83,7 @@ components/common/DataTable/
 #### 📁 Archivos Creados
 
 ##### Core
+
 - `DataTable/index.tsx` - Exportación pública del módulo
 - `DataTable/DataTable.tsx` - Componente principal orquestador
 - `DataTable/DataTable.utils.ts` - Funciones helper puras
@@ -94,6 +97,7 @@ components/common/DataTable/
   - `useVisibleDataChange()` - Notificación de cambios
 
 ##### Componentes UI
+
 - `DataTable/components/DataTableToolbar.tsx`
   - Barra de herramientas con búsqueda y acciones
   - Integración con dropdown de visibilidad
@@ -148,7 +152,7 @@ components/common/DataTable/
 - Importaciones mantienen compatibilidad:
   ```typescript
   // Sigue funcionando igual
-  import { DataTable } from '@/components/common/DataTable';
+  import { DataTable } from "@/components/common/DataTable";
   ```
 
 #### 🧪 Testing
@@ -161,6 +165,7 @@ components/common/DataTable/
 #### 📦 Dependencias
 
 Sin cambios en dependencias. Usa las mismas:
+
 - `@tanstack/react-table`
 - `react`
 - `typescript`
@@ -168,6 +173,7 @@ Sin cambios en dependencias. Usa las mismas:
 #### 🚀 Impacto
 
 **Para Desarrolladores**:
+
 - ✅ Código más fácil de entender
 - ✅ Cambios localizados (no afectan todo)
 - ✅ Testeable de forma aislada
@@ -175,6 +181,7 @@ Sin cambios en dependencias. Usa las mismas:
 - ✅ Patrones claros para seguir
 
 **Para el Proyecto**:
+
 - ✅ Arquitectura escalable
 - ✅ Mantenibilidad a largo plazo
 - ✅ Onboarding más rápido
@@ -223,7 +230,11 @@ Si quieres aprovechar la nueva arquitectura:
 
 ```typescript
 // Ahora puedes importar utilidades si las necesitas
-import { DataTable, getSortIndicator, getNextState } from '@/components/common/DataTable';
+import {
+  DataTable,
+  getSortIndicator,
+  getNextState,
+} from "@/components/common/DataTable";
 
 // Los sub-componentes están disponibles internamente
 // Para casos avanzados de personalización

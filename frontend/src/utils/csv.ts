@@ -16,7 +16,7 @@ const normalizeCsvValue = (value: unknown): string => {
   return String(value).replace(/"/g, '""');
 };
 
-export const exportToCsv = <TData,>(
+export const exportToCsv = <TData>(
   rows: TData[],
   config: CsvExportConfig<TData>,
 ): void => {

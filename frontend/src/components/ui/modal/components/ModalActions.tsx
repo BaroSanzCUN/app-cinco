@@ -32,15 +32,12 @@ export const ModalActions = ({
     return null;
   }
 
-  const alignmentClass = ALIGNMENT_CLASSES[align as keyof typeof ALIGNMENT_CLASSES];
+  const alignmentClass =
+    ALIGNMENT_CLASSES[align as keyof typeof ALIGNMENT_CLASSES];
 
   return (
     <div
-      className={`
-        flex items-center gap-3 
-        ${alignmentClass}
-        ${className || ""}
-      `}
+      className={`flex items-center gap-3 ${alignmentClass} ${className || ""} `}
     >
       {secondaryButton && <div>{secondaryButton}</div>}
       {primaryButton && <div>{primaryButton}</div>}

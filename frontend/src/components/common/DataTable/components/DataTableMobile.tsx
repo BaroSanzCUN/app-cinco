@@ -1,5 +1,8 @@
 import { Table as ReactTable } from "@tanstack/react-table";
-import { getColumnHeaderLabel, renderMobileCellValue } from "../DataTable.utils";
+import {
+  getColumnHeaderLabel,
+  renderMobileCellValue,
+} from "../DataTable.utils";
 
 interface DataTableMobileProps<TData> {
   table: ReactTable<TData>;

@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { SortingState, ColumnFiltersState, VisibilityState } from "@tanstack/react-table";
+import {
+  SortingState,
+  ColumnFiltersState,
+  VisibilityState,
+} from "@tanstack/react-table";
 
 interface TableUrlStateConfig {
   defaultPageSize?: number;

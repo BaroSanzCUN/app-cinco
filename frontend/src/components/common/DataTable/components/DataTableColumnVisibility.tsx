@@ -40,7 +40,11 @@ export function DataTableColumnVisibility<TData>({
         Columnas
       </Button>
 
-      <Dropdown isOpen={isOpen} onClose={() => setIsOpen(false)} className="w-64 p-3">
+      <Dropdown
+        isOpen={isOpen}
+        onClose={() => setIsOpen(false)}
+        className="w-64 p-3"
+      >
         <div className="space-y-2">
           {visibleColumns.map((column) => {
             const headerLabel = getColumnHeaderLabel(

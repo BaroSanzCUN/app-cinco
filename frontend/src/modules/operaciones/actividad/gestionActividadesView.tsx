@@ -1,31 +1,18 @@
 "use client";
 
 import { PlusIcon } from "@/icons";
-import { useEffect, useMemo, useState } from "react";
 import ModalActividad from "./ModalActividad";
 import Alert from "@/components/ui/alert/Alert";
-import Badge from "@/components/ui/badge/Badge";
-import Button from "@/components/ui/button/Button";
-import { ColumnDef } from "@tanstack/react-table";
-import { DataTable } from "@/components/common/DataTable";
-import { useActividadStore } from "@/store/actividad.store";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
-import { ActividadFormData } from "@/schemas/actividades.schema";
-import { DownloadIcon } from "@/icons";
-import {
-  actividadCsvColumns,
-  ACTIVIDAD_TABLE_CONFIG,
-} from "./actividadTable.utils";
-import { useTableUrlState } from "@/hooks/useTableUrlState";
-import { exportToCsv } from "@/utils/csv";
+import { useGestionActividadesData } from "./gestionActividadesView.hooks";
+import { GESTION_ACTIVIDADES_CONFIG } from "./gestionActividadesView.utils";
+import { GestionActividadesTable } from "./components/GestionActividadesTable";
+import { GestionActividadesToolbar } from "./components/GestionActividadesToolbar";
 
 const GestionActividadesView = () => {
-  const breadcrumbTitles = ["Operaciones", "Gestión de Actividades"];
-  const { loadActividades, actividades } = useActividadStore();
-  const [showAlert, setShowAlert] = useState(false);
-  const [visibleRows, setVisibleRows] = useState<ActividadFormData[]>([]);
-
   const {
+    actividades,
+    columns,
     globalFilter,
     setGlobalFilter,
     sorting,
@@ -34,20 +21,10 @@ const GestionActividadesView = () => {
     setPageIndex,
     pageSize,
     setPageSize,
-  } = useTableUrlState({
-    defaultPageSize: ACTIVIDAD_TABLE_CONFIG.defaultPageSize,
-    defaultPageIndex: ACTIVIDAD_TABLE_CONFIG.defaultPageIndex,
-  });
-
-  useEffect(() => {
-    loadActividades();
-
-    const timer = setTimeout(() => {
-      setShowAlert(false);
-    }, 5000);
-
-    return () => clearTimeout(timer);
-  }, [loadActividades]);
+    visibleRows,
+    setVisibleRows,
+    showAlert,
+  } = useGestionActividadesData();
 
   // {
   //     "id": 3,
@@ -87,124 +64,23 @@ const GestionActividadesView = () => {
   //     "deleted_by": null
   // },
 
-  const actividadesColumns: ColumnDef<ActividadFormData>[] = useMemo(
-    () => [
-      {
-        id: "acciones",
-        header: "ACCIONES",
-        enableSorting: false,
-        enableColumnFilter: false,
-        enableHiding: false,
-        cell: ({ row }) => {
-          const id = row.original.id;
-
-          if (id === undefined) {
-            return null;
-          }
-
-          const actividad = {
-            id: id as number,
-            ot: row.original.ot,
-            estado: row.original.estado,
-            responsable_snapshot: row.original.responsable_snapshot,
-            responsable_id: row.original.responsable_id,
-            fecha_inicio: row.original.fecha_inicio,
-            fecha_fin_estimado: row.original.fecha_fin_estimado,
-            fecha_fin_real: row.original.fecha_fin_real,
-            detalle: row.original.detalle,
-            ubicacion: row.original.ubicacion,
-          };
-
-          return (
-            <ModalActividad
-              mode="edit"
-              actividad={actividad}
-              textButton="Editar"
-            />
-          );
-        },
-      },
-      {
-        id: "id",
-        header: "ID",
-        accessorKey: "id",
-      },
-      {
-        id: "ot",
-        header: "OT",
-        accessorKey: "ot",
-      },
-      {
-        id: "estado",
-        header: "ESTADO",
-        accessorKey: "estado",
-        cell: ({ row }) => {
-          const estado = row.original.estado || "Sin estado";
-          return (
-            <Badge
-              size="sm"
-              color={
-                estado == "completada"
-                  ? "success"
-                  : estado == "pendiente"
-                    ? "warning"
-                    : "error"
-              }
-            >
-              {estado}
-            </Badge>
-          );
-        },
-      },
-      {
-        id: "responsable",
-        header: "RESPONSABLE",
-        accessorKey: "responsable_snapshot.nombre",
-        cell: ({ row }) => {
-          const responsable =
-            row.original.responsable_snapshot?.nombre || "Sin responsable";
-          return <span>{responsable}</span>;
-        },
-      },
-    ],
-    [],
-  );
-
-  const handleExportCsv = () => {
-    if (!visibleRows.length) {
-      return;
-    }
-
-    exportToCsv(visibleRows, {
-      fileName: ACTIVIDAD_TABLE_CONFIG.csvFileName,
-      columns: actividadCsvColumns,
-    });
-  };
-
   const toolbarActions = (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={handleExportCsv}
-      startIcon={<DownloadIcon className="h-4 w-4" />}
-      disabled={!visibleRows.length}
-    >
-      Exportar CSV
-    </Button>
+    <GestionActividadesToolbar visibleRows={visibleRows} />
   );
 
   return (
     <div>
-      <PageBreadcrumb pageTitle={breadcrumbTitles} />
+      <PageBreadcrumb
+        pageTitle={[...GESTION_ACTIVIDADES_CONFIG.breadcrumbTitles]}
+      />
       <div className="relative min-h-screen overflow-auto rounded-2xl border border-gray-200 bg-white px-5 py-7 xl:px-10 xl:py-12 dark:border-gray-800 dark:bg-white/3">
         <div className="mx-auto w-full max-w-157.5 text-center">
           <h3 className="text-theme-xl mb-4 font-semibold text-gray-800 sm:text-2xl dark:text-white/90">
-            Modulo de Gestión de Actividades
+            {GESTION_ACTIVIDADES_CONFIG.title}
           </h3>
 
           <p className="text-gray-600 dark:text-white/70">
-            Aquí podrás gestionar todas las actividades relacionadas con las
-            operaciones de CINCO SAS.
+            {GESTION_ACTIVIDADES_CONFIG.description}
           </p>
         </div>
 
@@ -219,45 +95,24 @@ const GestionActividadesView = () => {
             variant="success"
             title="Actividad Creada"
             message="La actividad ha sido creada exitosamente."
-            // showLink={true}
-            // linkHref="/"
-            // linkText="Learn more"
           />
         )}
 
-        <div className="mt-10">
-          <DataTable
-            data={actividades}
-            columns={actividadesColumns}
-            enablePagination
-            pageSize={ACTIVIDAD_TABLE_CONFIG.defaultPageSize}
-            emptyMessage="No hay actividades para mostrar."
-            enableGlobalFilter
-            enableSorting
-            enableColumnFilters
-            enableColumnVisibility
-            pageSizeOptions={[5, 10, 25, 50, 100]}
-            globalFilterValue={globalFilter}
-            sortingValue={sorting}
-            pageIndexValue={pageIndex}
-            pageSizeValue={pageSize}
-            onGlobalFilterChange={(value) => {
-              setGlobalFilter(value);
-              setPageIndex(0);
-            }}
-            onSortingChange={(nextSorting) => {
-              setSorting(nextSorting);
-              setPageIndex(0);
-            }}
-            onPageChange={setPageIndex}
-            onPageSizeChange={(size) => {
-              setPageSize(size);
-              setPageIndex(0);
-            }}
-            onVisibleDataChange={setVisibleRows}
-            toolbarActions={toolbarActions}
-          />
-        </div>
+        <GestionActividadesTable
+          actividades={actividades}
+          columns={columns}
+          globalFilter={globalFilter}
+          setGlobalFilter={setGlobalFilter}
+          sorting={sorting}
+          setSorting={setSorting}
+          pageIndex={pageIndex}
+          setPageIndex={setPageIndex}
+          pageSize={pageSize}
+          setPageSize={setPageSize}
+          visibleRows={visibleRows}
+          setVisibleRows={setVisibleRows}
+          toolbarActions={toolbarActions}
+        />
       </div>
     </div>
   );
