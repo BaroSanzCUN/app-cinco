@@ -1,14 +1,18 @@
-import { SizeConfig, AnimationConfig, ModalAnimationConfig } from "./Modal.types";
+import {
+  SizeConfig,
+  AnimationConfig,
+  ModalAnimationConfig,
+} from "./Modal.types";
 
 /**
  * Configuración de tamaños predefinidos para el modal
  * Los tamaños pueden ser personalizados según necesidades
  */
 export const MODAL_SIZE_CONFIG: SizeConfig = {
-  sm: "max-w-96",      // Small: 384px
-  md: "max-w-150",     // Medium: 600px (default)
-  lg: "max-w-2xl",     // Large: 672px
-  xl: "max-w-4xl",     // Extra Large: 896px
+  sm: "max-w-96", // Small: 384px
+  md: "max-w-150", // Medium: 600px (default)
+  lg: "max-w-2xl", // Large: 672px
+  xl: "max-w-4xl", // Extra Large: 896px
   full: "w-full h-full", // Full screen
 };
 

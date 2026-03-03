@@ -12,7 +12,7 @@ import { useEffect, useRef } from "react";
  *
  * @template TData - Tipo de datos de la tabla
  */
-export const useControlledTableState = <TData,>(
+export const useControlledTableState = <TData>(
   table: Table<TData>,
   {
     globalFilterValue,
@@ -102,7 +102,7 @@ export const useControlledTableState = <TData,>(
  *
  * @template TData - Tipo de datos de la tabla
  */
-export const useVisibleDataChange = <TData,>(
+export const useVisibleDataChange = <TData>(
   table: Table<TData>,
   data: TData[],
   globalFilter: string,

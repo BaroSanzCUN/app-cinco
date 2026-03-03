@@ -1,0 +1,19 @@
+import { ActividadFormData } from "@/schemas/actividades.schema";
+import { Empleado } from "@/types/empleado";
+import { Control, FieldErrors } from "react-hook-form";
+
+export interface ActividadFormProps {
+  defaultValues: ActividadFormData;
+  onSubmit: (data: ActividadFormData) => void;
+  isLoading?: boolean;
+  backendErrors?: Record<string, any> | null;
+  mode?: "create" | "edit";
+}
+
+export interface ActividadFormFieldsProps {
+  control: Control<ActividadFormData>;
+  errors: FieldErrors<ActividadFormData>;
+  mode: "create" | "edit";
+  selectedEmployee: Empleado | null;
+  onEmployeeChange: (empleado: Empleado | null) => void;
+}

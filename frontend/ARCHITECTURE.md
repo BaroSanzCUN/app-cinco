@@ -69,6 +69,7 @@ frontend/src/
 ### 1. Nomenclatura
 
 #### Archivos
+
 - **Componentes**: PascalCase - `DataTable.tsx`, `UserCard.tsx`
 - **Utilidades**: camelCase - `formatDate.ts`, `validateEmail.ts`
 - **Hooks**: camelCase con prefijo `use` - `useTableState.ts`
@@ -76,6 +77,7 @@ frontend/src/
 - **Constantes**: UPPER_SNAKE_CASE - `API_BASE_URL`
 
 #### Carpetas
+
 - **Componentes**: PascalCase - `DataTable/`, `UserProfile/`
 - **Módulos**: camelCase - `operaciones/`, `empleados/`
 - **Utilidades**: camelCase - `utils/`, `hooks/`
@@ -109,7 +111,7 @@ const UserProfile = () => {
   const [user, setUser] = useState();
   const formatDate = (date) => { /* ... */ };
   const fetchUser = async () => { /* ... */ };
-  
+
   return (
     <div>
       {/* 500 líneas de JSX */}
@@ -203,7 +205,7 @@ const UserProfile = () => {
 const useTableWithUrl = (config) => {
   const { globalFilter, setGlobalFilter } = useTableUrlState(config);
   const { data, isLoading } = useTableData();
-  
+
   return {
     // Estado completo listo para usar
     globalFilter,
@@ -216,7 +218,7 @@ const useTableWithUrl = (config) => {
 // Uso limpio en componentes
 const MyTable = () => {
   const table = useTableWithUrl({ pageSize: 10 });
-  
+
   return <DataTable {...table} />;
 };
 ```
@@ -228,7 +230,7 @@ const MyTable = () => {
 const UserListContainer = () => {
   const { users, loading } = useUsers();
   const handleDelete = (id) => { /* ... */ };
-  
+
   return (
     <UserListPresenter
       users={users}
@@ -241,7 +243,7 @@ const UserListContainer = () => {
 // Presenter (UI pura)
 const UserListPresenter = ({ users, loading, onDelete }) => {
   if (loading) return <Spinner />;
-  
+
   return (
     <ul>
       {users.map(user => (
@@ -292,14 +294,16 @@ modules/operaciones/actividad/
 
 ```typescript
 // services/actividadService.ts
-import { apiClient } from './api';
-import { ActividadFormData } from '@/schemas/actividades.schema';
+import { apiClient } from "./api";
+import { ActividadFormData } from "@/schemas/actividades.schema";
 
 export const actividadService = {
-  getAll: () => apiClient.get<ActividadFormData[]>('/actividades'),
-  getById: (id: number) => apiClient.get<ActividadFormData>(`/actividades/${id}`),
-  create: (data: ActividadFormData) => apiClient.post('/actividades', data),
-  update: (id: number, data: ActividadFormData) => apiClient.put(`/actividades/${id}`, data),
+  getAll: () => apiClient.get<ActividadFormData[]>("/actividades"),
+  getById: (id: number) =>
+    apiClient.get<ActividadFormData>(`/actividades/${id}`),
+  create: (data: ActividadFormData) => apiClient.post("/actividades", data),
+  update: (id: number, data: ActividadFormData) =>
+    apiClient.put(`/actividades/${id}`, data),
   delete: (id: number) => apiClient.delete(`/actividades/${id}`),
 };
 ```
@@ -308,8 +312,8 @@ export const actividadService = {
 
 ```typescript
 // store/actividad.store.ts
-import { create } from 'zustand';
-import { actividadService } from '@/services/actividadService';
+import { create } from "zustand";
+import { actividadService } from "@/services/actividadService";
 
 interface ActividadStore {
   actividades: ActividadFormData[];
@@ -321,7 +325,7 @@ interface ActividadStore {
 export const useActividadStore = create<ActividadStore>((set) => ({
   actividades: [],
   isLoading: false,
-  
+
   loadActividades: async () => {
     set({ isLoading: true });
     try {
@@ -332,7 +336,7 @@ export const useActividadStore = create<ActividadStore>((set) => ({
       throw error;
     }
   },
-  
+
   createActividad: async (data) => {
     await actividadService.create(data);
     // Recargar lista después de crear
@@ -390,6 +394,7 @@ tests/
 ### Niveles de Documentación
 
 1. **JSDoc** en funciones públicas
+
    ```typescript
    /**
     * Exporta datos a CSV con configuración flexible.

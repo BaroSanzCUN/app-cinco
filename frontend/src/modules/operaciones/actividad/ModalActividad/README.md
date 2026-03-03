@@ -20,12 +20,14 @@ ModalActividad/
 ## 🎯 Principios
 
 ### Single Responsibility
+
 - `ModalActividad.tsx`: Orquesta modal + formulario
 - `ModalActividad.utils.ts`: Lógica pura (defaults, títulos, config)
 - `ModalActividad.hooks.ts`: Manejo de estado y submit
 - `ActividadFormContainer.tsx`: Renderiza solo el formulario
 
 ### Composition
+
 ```tsx
 <Button onClick={open} />
 <Modal isOpen>
@@ -39,27 +41,35 @@ ModalActividad/
 ## 📁 Archivos
 
 ### `ModalActividad.tsx` (60 líneas)
+
 Componente principal:
+
 - Gestiona apertura/cierre del modal
 - Orquesta formulario dentro del modal
 - Maneja submit y errores
 - Renderiza título dinámico según modo
 
 ### `ModalActividad.utils.ts` (40 líneas)
+
 Funciones helper:
+
 - `getDefaultValues()` - Obtiene valores por defecto
 - `getModalTitle()` - Obtiene título dinámico
 - `MODAL_ACTIVIDAD_CONFIG` - Configuración constante
 
 ### `ModalActividad.hooks.ts` (35 líneas)
+
 Custom hook:
+
 - `useModalActividadLogic()` - Lógica integrada:
   - Submission del formulario
   - Manejo de errores
   - Estados de carga
 
 ### `ActividadFormContainer.tsx` (20 líneas)
+
 Contenedor simple:
+
 - Renderiza ActividadForm con props adecuados
 - Aísla la lógica de presentación
 
@@ -67,7 +77,7 @@ Contenedor simple:
 
 ```
 Usuario clickea botón
-      ↓  
+      ↓
 Modal se abre
       ↓
 Usuario completa formulario
@@ -81,17 +91,18 @@ Cierre automático o mostrar error
 
 ## 📊 Mejoras respecto a versión anterior
 
-| Aspecto | Antes | Después |
-|---------|-------|---------|
-| **Líneas totales** | 60 | 155 | 
-| **Separación de concerns** | Nula | Total |
-| **Documentación** | 0% | 100% |
-| **Testabilidad** | Baja | Alta |
-| **Reutilización de lógica** | Nula | Alta |
+| Aspecto                     | Antes | Después |
+| --------------------------- | ----- | ------- |
+| **Líneas totales**          | 60    | 155     |
+| **Separación de concerns**  | Nula  | Total   |
+| **Documentación**           | 0%    | 100%    |
+| **Testabilidad**            | Baja  | Alta    |
+| **Reutilización de lógica** | Nula  | Alta    |
 
 ## 🚀 Uso
 
 ### Crear Actividad
+
 ```tsx
 <ModalActividad
   mode="create"
@@ -101,26 +112,25 @@ Cierre automático o mostrar error
 ```
 
 ### Editar Actividad
+
 ```tsx
-<ModalActividad
-  mode="edit"
-  actividad={actividad}
-  textButton="Editar"
-/>
+<ModalActividad mode="edit" actividad={actividad} textButton="Editar" />
 ```
 
 ## 🧪 Testing
 
 ### Hook Testing
+
 ```typescript
-describe('useModalActividadLogic', () => {
-  it('should call onClose after successful submit', () => {
+describe("useModalActividadLogic", () => {
+  it("should call onClose after successful submit", () => {
     // Test del hook
   });
 });
 ```
 
 ### Component Testing
+
 ```typescript
 describe('ModalActividad', () => {
   it('should display create title in create mode', () => {

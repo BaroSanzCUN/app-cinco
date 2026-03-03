@@ -15,19 +15,17 @@ export const useModalActividadLogic = (
   actividad: Actividad | undefined,
   onClose: () => void,
 ) => {
-  const { handleSubmit: submitActividad, isLoading, error } =
-    useActividadSubmit();
+  const {
+    handleSubmit: submitActividad,
+    isLoading,
+    error,
+  } = useActividadSubmit();
 
   // Handler seguro que cierra el modal después de successful submit
   const handleSubmit = useCallback(
     async (data: unknown) => {
       try {
-        await submitActividad(
-          data as any,
-          mode,
-          actividad?.id,
-          onClose,
-        );
+        await submitActividad(data as any, mode, actividad?.id, onClose);
       } catch (err) {
         // Error es manejado por el hook
         console.error("Error al guardar actividad:", err);

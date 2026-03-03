@@ -9,7 +9,7 @@ import { Row, Updater, flexRender } from "@tanstack/react-table";
  * @param previous - Estado anterior
  * @returns Nuevo estado
  */
-export const getNextState = <TState,>(
+export const getNextState = <TState>(
   updater: Updater<TState>,
   previous: TState,
 ): TState => {
@@ -47,7 +47,7 @@ export const getSortIndicator = (sortState: false | "asc" | "desc"): string => {
  * @param columnId - ID de la columna a renderizar
  * @returns React node con el contenido renderizado o null si no existe
  */
-export const renderMobileCellValue = <TData,>(
+export const renderMobileCellValue = <TData>(
   row: Row<TData>,
   columnId: string,
 ): React.ReactNode => {

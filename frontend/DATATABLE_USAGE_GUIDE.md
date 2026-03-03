@@ -3,6 +3,7 @@
 ## Visión General
 
 El componente `DataTable` es una tabla profesional y completamente reutilizable que incluye:
+
 - ✅ Filtrado global
 - ✅ Ordenamiento por columnas
 - ✅ Visibilidad de columnas (show/hide)
@@ -113,10 +114,10 @@ export const vehiculosColumns: ColumnDef<VehiculoFormData>[] = [
     enableSorting: true,
     cell: ({ row }) => {
       const estado = row.original.estado;
-      const variant = 
+      const variant =
         estado === "activo" ? "success" :
         estado === "inactivo" ? "danger" : "warning";
-      
+
       return <Badge variant={variant}>{estado}</Badge>;
     },
   },
@@ -135,9 +136,9 @@ import { exportToCsv } from "@/utils/csv";
 import { useVehiculoStore } from "@/store/vehiculo.store";
 import Button from "@/components/ui/button/Button";
 import { DownloadIcon, PlusIcon } from "@/icons";
-import { 
-  vehiculoCsvColumns, 
-  VEHICULO_TABLE_CONFIG 
+import {
+  vehiculoCsvColumns,
+  VEHICULO_TABLE_CONFIG
 } from "./vehiculoTable.utils";
 import { vehiculosColumns } from "./vehiculosColumns";
 import { VehiculoFormData } from "@/schemas/vehiculos.schema";
@@ -248,15 +249,17 @@ export default GestionVehiculosView;
 Maneja automáticamente la sincronización del estado de la tabla con los parámetros URL.
 
 **Configuración:**
+
 ```typescript
 interface UseTableUrlStateConfig {
-  defaultPageSize?: number;      // Tamaño de página por defecto (default: 10)
-  defaultPageIndex?: number;      // Índice de página inicial (default: 0)
-  enableUrlSync?: boolean;        // Habilitar sincronización URL (default: true)
+  defaultPageSize?: number; // Tamaño de página por defecto (default: 10)
+  defaultPageIndex?: number; // Índice de página inicial (default: 0)
+  enableUrlSync?: boolean; // Habilitar sincronización URL (default: true)
 }
 ```
 
 **Parámetros URL generados:**
+
 - `q` - Filtro global
 - `p` - Índice de página (solo si > 0)
 - `ps` - Tamaño de página (solo si difiere del default)
@@ -265,6 +268,7 @@ interface UseTableUrlStateConfig {
 - `cv` - Visibilidad de columnas (formato JSON URL-encoded)
 
 **Retorna:**
+
 ```typescript
 {
   globalFilter: string;
@@ -289,6 +293,7 @@ interface UseTableUrlStateConfig {
 Exporta datos a CSV con configuración flexible de columnas.
 
 **Uso:**
+
 ```typescript
 import { exportToCsv, CsvColumn } from "@/utils/csv";
 
@@ -317,6 +322,7 @@ exportToCsv(data, {
 ```
 
 **Características:**
+
 - Normalización automática de valores (null, undefined → "")
 - Escape de comillas dobles
 - Soporte para propiedades anidadas
@@ -326,46 +332,47 @@ exportToCsv(data, {
 
 ### Props Requeridas
 
-| Prop | Tipo | Descripción |
-|------|------|-------------|
-| `data` | `TData[]` | Array de datos a mostrar |
-| `columns` | `ColumnDef<TData>[]` | Definición de columnas |
+| Prop      | Tipo                 | Descripción              |
+| --------- | -------------------- | ------------------------ |
+| `data`    | `TData[]`            | Array de datos a mostrar |
+| `columns` | `ColumnDef<TData>[]` | Definición de columnas   |
 
 ### Props Opcionales
 
-| Prop | Tipo | Default | Descripción |
-|------|------|---------|-------------|
-| `enablePagination` | `boolean` | `false` | Habilita paginación |
-| `pageSize` | `number` | `10` | Tamaño inicial de página |
-| `pageSizeOptions` | `number[]` | `[10, 20, 30, 40, 50]` | Opciones de tamaño |
-| `enableGlobalFilter` | `boolean` | `false` | Habilita búsqueda global |
-| `enableSorting` | `boolean` | `false` | Habilita ordenamiento |
-| `enableColumnFilters` | `boolean` | `false` | Habilita filtros por columna |
-| `enableColumnVisibility` | `boolean` | `false` | Habilita show/hide columnas |
-| `emptyMessage` | `string` | `"No hay datos para mostrar."` | Mensaje cuando no hay datos |
-| `toolbarActions` | `React.ReactNode` | `undefined` | Acciones personalizadas |
+| Prop                     | Tipo              | Default                        | Descripción                  |
+| ------------------------ | ----------------- | ------------------------------ | ---------------------------- |
+| `enablePagination`       | `boolean`         | `false`                        | Habilita paginación          |
+| `pageSize`               | `number`          | `10`                           | Tamaño inicial de página     |
+| `pageSizeOptions`        | `number[]`        | `[10, 20, 30, 40, 50]`         | Opciones de tamaño           |
+| `enableGlobalFilter`     | `boolean`         | `false`                        | Habilita búsqueda global     |
+| `enableSorting`          | `boolean`         | `false`                        | Habilita ordenamiento        |
+| `enableColumnFilters`    | `boolean`         | `false`                        | Habilita filtros por columna |
+| `enableColumnVisibility` | `boolean`         | `false`                        | Habilita show/hide columnas  |
+| `emptyMessage`           | `string`          | `"No hay datos para mostrar."` | Mensaje cuando no hay datos  |
+| `toolbarActions`         | `React.ReactNode` | `undefined`                    | Acciones personalizadas      |
 
 ### Props de Estado Controlado
 
-| Prop | Tipo | Descripción |
-|------|------|-------------|
-| `globalFilterValue` | `string` | Valor del filtro global |
-| `onGlobalFilterChange` | `(value: string) => void` | Callback al cambiar filtro |
-| `sortingValue` | `SortingState` | Estado de ordenamiento |
-| `onSortingChange` | `(value: SortingState \| Updater<SortingState>) => void` | Callback al ordenar |
-| `pageIndexValue` | `number` | Índice de página actual |
-| `onPageChange` | `(page: number) => void` | Callback al cambiar página |
-| `pageSizeValue` | `number` | Tamaño de página actual |
-| `onPageSizeChange` | `(size: number) => void` | Callback al cambiar tamaño |
-| `columnVisibilityValue` | `VisibilityState` | Estado de visibilidad |
-| `onColumnVisibilityChange` | `(value: VisibilityState \| Updater<VisibilityState>) => void` | Callback al cambiar visibilidad |
-| `onVisibleDataChange` | `(rows: TData[]) => void` | Callback con filas visibles (para CSV) |
+| Prop                       | Tipo                                                           | Descripción                            |
+| -------------------------- | -------------------------------------------------------------- | -------------------------------------- |
+| `globalFilterValue`        | `string`                                                       | Valor del filtro global                |
+| `onGlobalFilterChange`     | `(value: string) => void`                                      | Callback al cambiar filtro             |
+| `sortingValue`             | `SortingState`                                                 | Estado de ordenamiento                 |
+| `onSortingChange`          | `(value: SortingState \| Updater<SortingState>) => void`       | Callback al ordenar                    |
+| `pageIndexValue`           | `number`                                                       | Índice de página actual                |
+| `onPageChange`             | `(page: number) => void`                                       | Callback al cambiar página             |
+| `pageSizeValue`            | `number`                                                       | Tamaño de página actual                |
+| `onPageSizeChange`         | `(size: number) => void`                                       | Callback al cambiar tamaño             |
+| `columnVisibilityValue`    | `VisibilityState`                                              | Estado de visibilidad                  |
+| `onColumnVisibilityChange` | `(value: VisibilityState \| Updater<VisibilityState>) => void` | Callback al cambiar visibilidad        |
+| `onVisibleDataChange`      | `(rows: TData[]) => void`                                      | Callback con filas visibles (para CSV) |
 
 ## Características Adicionales
 
 ### Vista Móvil Responsive
 
 La tabla se transforma automáticamente en tarjetas en dispositivos móviles (< 768px):
+
 - Layout de tarjeta vertical
 - Todos los datos visibles
 - Scroll vertical suave
@@ -374,6 +381,7 @@ La tabla se transforma automáticamente en tarjetas en dispositivos móviles (< 
 ### Persistencia en URL
 
 Los parámetros de la tabla se sincronizan automáticamente con la URL:
+
 - Permite compartir enlaces con estado específico
 - Navegación con botones adelante/atrás funcional
 - Estado persiste al recargar página
@@ -388,6 +396,7 @@ Los parámetros de la tabla se sincronizan automáticamente con la URL:
 ## Ejemplo Completo de Referencia
 
 Consulta la implementación en:
+
 - **Módulo:** `src/modules/operaciones/actividad/`
 - **Vista:** `gestionActividadesView.tsx`
 - **Utilidades:** `actividadTable.utils.ts`

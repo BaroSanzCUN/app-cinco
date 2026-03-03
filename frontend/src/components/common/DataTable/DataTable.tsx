@@ -15,7 +15,10 @@ import { useMemo, useState } from "react";
 
 import { DataTableProps } from "@/types/table";
 import { getNextState } from "./DataTable.utils";
-import { useControlledTableState, useVisibleDataChange } from "./DataTable.hooks";
+import {
+  useControlledTableState,
+  useVisibleDataChange,
+} from "./DataTable.hooks";
 import { DataTableToolbar } from "./components/DataTableToolbar";
 import { DataTableDesktop } from "./components/DataTableDesktop";
 import { DataTableMobile } from "./components/DataTableMobile";
@@ -95,8 +98,9 @@ export function DataTable<TData>({
   const [columnFilters, setColumnFilters] =
     useState<ColumnFiltersState>(initialColumnFilters);
   const [sorting, setSorting] = useState<SortingState>(initialSorting);
-  const [columnVisibility, setColumnVisibility] =
-    useState<VisibilityState>(initialColumnVisibility);
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(
+    initialColumnVisibility,
+  );
 
   // Agregar columna de acciones si se proporciona renderRowActions
   const columnsWithActions = useMemo<ColumnDef<TData>[]>(() => {
