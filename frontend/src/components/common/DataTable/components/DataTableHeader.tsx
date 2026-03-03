@@ -21,14 +21,14 @@ export function DataTableHeaderComponent<TData>({
   enableColumnFilters,
 }: DataTableHeaderProps<TData>) {
   return (
-    <TableHeader className="border-b border-gray-100 dark:border-white/5">
+    <TableHeader className="border-b border-gray-100 bg-white dark:border-white/5 dark:bg-gray-900">
       {headerGroups.map((headerGroup) => (
-        <TableRow key={headerGroup.id}>
+        <TableRow key={headerGroup.id} className="bg-white dark:bg-gray-900">
           {headerGroup.headers.map((header) => (
             <TableCell
               key={header.id}
               isHeader
-              className="text-theme-xs px-5 py-3 text-start font-medium text-gray-500 dark:text-gray-400"
+              className="sticky top-0 z-20 min-w-max bg-white text-theme-xs px-5 py-3 text-start font-medium text-gray-500 dark:bg-gray-900 dark:text-gray-400"
             >
               {header.isPlaceholder ? null : (
                 <>

@@ -26,12 +26,14 @@ export function DataTablePagination<TData>({
   const pageCount = table.getPageCount();
 
   const handlePreviousPage = () => {
+    if (!table.getCanPreviousPage()) return;
     const nextPage = Math.max(currentPageIndex - 1, 0);
     table.setPageIndex(nextPage);
     onPageChange?.(nextPage);
   };
 
   const handleNextPage = () => {
+    if (!table.getCanNextPage()) return;
     const maxPage = Math.max(pageCount - 1, 0);
     const nextPage = Math.min(currentPageIndex + 1, maxPage);
     table.setPageIndex(nextPage);
@@ -40,8 +42,9 @@ export function DataTablePagination<TData>({
 
   const handlePageSizeChange = (size: number) => {
     table.setPageSize(size);
-    table.setPageIndex(0);
     onPageSizeChange?.(size);
+    // Resetear a la primera página después de cambiar el tamaño
+    table.setPageIndex(0);
     onPageChange?.(0);
   };
 
@@ -52,7 +55,7 @@ export function DataTablePagination<TData>({
           <select
             value={currentPageSize}
             onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-            className="rounded border px-2 py-1 text-sm"
+            className="rounded border px-2 py-1 text-sm focus:ring-1 focus:ring-brand-500/10 focus:outline-none dark:border-gray-700 dark:bg-gray-900 dark:text-white/90"
           >
             {pageSizeOptions.map((size) => (
               <option key={size} value={size}>

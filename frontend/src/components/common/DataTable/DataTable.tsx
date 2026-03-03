@@ -102,6 +102,10 @@ export function DataTable<TData>({
     initialColumnVisibility,
   );
 
+  // Estado de paginación inicial
+  const initialPageSize = pageSizeValue ?? pageSize;
+  const initialPageIndex = pageIndexValue ?? 0;
+
   // Agregar columna de acciones si se proporciona renderRowActions
   const columnsWithActions = useMemo<ColumnDef<TData>[]>(() => {
     if (!renderRowActions) {
@@ -159,10 +163,11 @@ export function DataTable<TData>({
     ...(enablePagination && { getPaginationRowModel: getPaginationRowModel() }),
     initialState: {
       pagination: {
-        pageSize: pageSizeValue ?? pageSize,
-        pageIndex: pageIndexValue ?? 0,
+        pageSize: initialPageSize,
+        pageIndex: initialPageIndex,
       },
     },
+    autoResetPageIndex: false,
   });
 
   // Hook para sincronizar estado controlado
@@ -194,7 +199,7 @@ export function DataTable<TData>({
   );
 
   return (
-    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-white/5 dark:bg-white/3">
+    <div className="flex h-full w-full min-w-0 flex-col rounded-xl border border-gray-200 bg-white dark:border-white/5 dark:bg-white/3">
       {/* Toolbar con búsqueda, columnas y acciones */}
       <DataTableToolbar
         table={table}
@@ -204,15 +209,26 @@ export function DataTable<TData>({
         toolbarActions={toolbarActions}
       />
 
-      {/* Vista desktop de la tabla */}
-      <DataTableDesktop
-        table={table}
-        isLoading={isLoading}
-        emptyMessage={emptyMessage}
-        enableSorting={enableSorting}
-        enableColumnFilters={enableColumnFilters}
-        onRowClick={onRowClick}
-      />
+      {/* Contenedor scrolleable de la tabla */}
+      <div className="min-h-0 min-w-0 flex-1 overflow-hidden w-full">
+        {/* Vista desktop de la tabla */}
+        <DataTableDesktop
+          table={table}
+          isLoading={isLoading}
+          emptyMessage={emptyMessage}
+          enableSorting={enableSorting}
+          enableColumnFilters={enableColumnFilters}
+          onRowClick={onRowClick}
+        />
+
+        {/* Vista móvil (tarjetas) */}
+        <DataTableMobile
+          table={table}
+          isLoading={isLoading}
+          emptyMessage={emptyMessage}
+          onRowClick={onRowClick}
+        />
+      </div>
 
       {/* Controles de paginación */}
       {enablePagination && (
@@ -224,14 +240,6 @@ export function DataTable<TData>({
           onPageSizeChange={onPageSizeChange}
         />
       )}
-
-      {/* Vista móvil (tarjetas) */}
-      <DataTableMobile
-        table={table}
-        isLoading={isLoading}
-        emptyMessage={emptyMessage}
-        onRowClick={onRowClick}
-      />
     </div>
   );
 }

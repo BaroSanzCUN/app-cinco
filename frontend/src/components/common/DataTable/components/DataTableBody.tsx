@@ -52,7 +52,7 @@ export function DataTableBodyComponent<TData>({
             {row.getVisibleCells().map((cell) => (
               <TableCell
                 key={cell.id}
-                className="text-theme-sm px-4 py-3 text-start text-gray-500 dark:text-gray-400"
+                className="min-w-max text-theme-sm px-4 py-3 text-start text-gray-500 dark:text-gray-400"
               >
                 {flexRender(cell.column.columnDef.cell, cell.getContext())}
               </TableCell>

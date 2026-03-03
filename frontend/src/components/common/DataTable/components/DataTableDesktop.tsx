@@ -31,7 +31,7 @@ export function DataTableDesktop<TData>({
   const visibleColumnsCount = table.getVisibleLeafColumns().length;
 
   return (
-    <div className="hidden overflow-x-auto md:block">
+    <div className="hidden h-full w-full min-w-0 max-w-full overflow-auto md:block">
       <Table>
         <DataTableHeaderComponent
           headerGroups={headerGroups}

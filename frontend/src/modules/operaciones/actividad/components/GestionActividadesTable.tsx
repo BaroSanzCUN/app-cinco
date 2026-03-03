@@ -18,38 +18,36 @@ export const GestionActividadesTable = ({
   toolbarActions,
 }: GestionActividadesTableProps & { toolbarActions?: React.ReactNode }) => {
   return (
-    <div className="mt-10">
-      <DataTable
-        data={actividades}
-        columns={columns}
-        enablePagination
-        pageSize={ACTIVIDAD_TABLE_CONFIG.defaultPageSize}
-        emptyMessage="No hay actividades para mostrar."
-        enableGlobalFilter
-        enableSorting
-        enableColumnFilters
-        enableColumnVisibility
-        pageSizeOptions={[5, 10, 25, 50, 100]}
-        globalFilterValue={globalFilter}
-        sortingValue={sorting}
-        pageIndexValue={pageIndex}
-        pageSizeValue={pageSize}
-        onGlobalFilterChange={(value) => {
-          setGlobalFilter(value);
-          setPageIndex(0);
-        }}
-        onSortingChange={(nextSorting) => {
-          setSorting(nextSorting);
-          setPageIndex(0);
-        }}
-        onPageChange={setPageIndex}
-        onPageSizeChange={(size) => {
-          setPageSize(size);
-          setPageIndex(0);
-        }}
-        onVisibleDataChange={setVisibleRows}
-        toolbarActions={toolbarActions}
-      />
-    </div>
+    <DataTable
+      data={actividades}
+      columns={columns}
+      enablePagination
+      pageSize={ACTIVIDAD_TABLE_CONFIG.defaultPageSize}
+      emptyMessage="No hay actividades para mostrar."
+      enableGlobalFilter
+      enableSorting
+      enableColumnFilters
+      enableColumnVisibility
+      pageSizeOptions={[5, 10, 25, 50, 100]}
+      globalFilterValue={globalFilter}
+      sortingValue={sorting}
+      pageIndexValue={pageIndex}
+      pageSizeValue={pageSize}
+      onGlobalFilterChange={(value) => {
+        setGlobalFilter(value);
+        setPageIndex(0);
+      }}
+      onSortingChange={(nextSorting) => {
+        setSorting(nextSorting);
+        setPageIndex(0);
+      }}
+      onPageChange={setPageIndex}
+      onPageSizeChange={(size) => {
+        setPageSize(size);
+        setPageIndex(0);
+      }}
+      onVisibleDataChange={setVisibleRows}
+      toolbarActions={toolbarActions}
+    />
   );
 };

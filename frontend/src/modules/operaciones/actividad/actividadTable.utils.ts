@@ -53,7 +53,7 @@ export const actividadCsvColumns: CsvColumn<ActividadFormData>[] = [
 ];
 
 export const ACTIVIDAD_TABLE_CONFIG = {
-  defaultPageSize: 6,
+  defaultPageSize: 5,
   defaultPageIndex: 0,
   csvFileName: "actividades_export.csv",
 };

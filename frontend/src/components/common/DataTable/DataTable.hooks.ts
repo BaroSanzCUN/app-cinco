@@ -76,23 +76,25 @@ export const useControlledTableState = <TData>(
 
   // Sincronizar pageIndex
   useEffect(() => {
-    if (
-      pageIndexValue !== undefined &&
-      pageIndexValue !== table.getState().pagination.pageIndex
-    ) {
-      table.setPageIndex(pageIndexValue);
+    if (pageIndexValue !== undefined) {
+      const currentPageIndex = table.getState().pagination.pageIndex;
+      if (pageIndexValue !== currentPageIndex) {
+        table.setPageIndex(pageIndexValue);
+      }
     }
-  }, [pageIndexValue, table]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageIndexValue]);
 
   // Sincronizar pageSize
   useEffect(() => {
-    if (
-      pageSizeValue !== undefined &&
-      pageSizeValue !== table.getState().pagination.pageSize
-    ) {
-      table.setPageSize(pageSizeValue);
+    if (pageSizeValue !== undefined) {
+      const currentPageSize = table.getState().pagination.pageSize;
+      if (pageSizeValue !== currentPageSize) {
+        table.setPageSize(pageSizeValue);
+      }
     }
-  }, [pageSizeValue, table]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageSizeValue]);
 };
 
 /**

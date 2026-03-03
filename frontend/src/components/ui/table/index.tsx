@@ -36,7 +36,7 @@ interface TableCellProps
 
 // Table Component
 const Table: React.FC<TableProps> = ({ children, className }) => {
-  return <table className={`min-w-full ${className}`}>{children}</table>;
+  return <table className={`min-w-full border-collapse ${className}`}>{children}</table>
 };
 
 // TableHeader Component
