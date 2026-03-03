@@ -22,6 +22,7 @@ const ActividadForm = ({
   } = useActividadFormLogic({
     defaultValues,
     backendErrors,
+    mode,
   });
 
   return (

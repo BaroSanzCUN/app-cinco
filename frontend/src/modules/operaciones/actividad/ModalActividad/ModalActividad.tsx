@@ -100,7 +100,7 @@ const ModalActividad = ({
             defaultValues={defaultValues}
             onSubmit={handleSubmit}
             isLoading={isLoading}
-            backendErrors={error}
+            backendErrors={error?.errors}
           />
         </Modal.Content>
       </Modal>

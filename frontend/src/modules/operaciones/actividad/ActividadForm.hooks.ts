@@ -6,21 +6,25 @@ import {
   ActividadFormData,
 } from "@/schemas/actividades.schema";
 import { Empleado } from "@/types/empleado";
-import { getEmpleadoById } from "@/services/empleado.service";
+import { getEmpleadoById, getEmpleadoByCedula } from "@/services/empleado.service";
 import { preloadAvatar } from "@/utils/avatar";
 import {
   buildResponsableSnapshot,
   getSnapshotEmpleado,
 } from "./ActividadForm.utils";
+import { getUser } from "@/utils/storage";
+import { useBackendErrors } from "@/hooks/useBackendErrors";
 
 interface UseActividadFormLogicParams {
   defaultValues: ActividadFormData;
   backendErrors?: Record<string, any> | null;
+  mode?: "create" | "edit";
 }
 
 export const useActividadFormLogic = ({
   defaultValues,
   backendErrors,
+  mode = "create",
 }: UseActividadFormLogicParams) => {
   const [selectedEmployee, setSelectedEmployee] = useState<Empleado | null>(
     null,
@@ -44,6 +48,45 @@ export const useActividadFormLogic = ({
     reset(defaultValues);
 
     const loadEmployee = async () => {
+      // Si estamos en modo creación y no hay empleado seleccionado, cargar el usuario de sesión
+      if (mode === "create" && (!defaultValues.responsable_id || defaultValues.responsable_id === 0)) {
+        try {
+          const user = getUser();
+          
+          if (!user) {
+            console.warn("No user found in session");
+            return;
+          }
+          
+          if (!user.username) {
+            console.warn("User has no username/cedula:", user);
+            return;
+          }
+
+          if (!isActive) return;
+
+          // Buscar empleado por cédula (username)
+          const empleado = await getEmpleadoByCedula(user.username);
+          
+          if (!isActive) return;
+
+          if (empleado) {
+            setSelectedEmployee(empleado);
+            setValue("responsable_id", empleado.id);
+            setValue("responsable_snapshot", buildResponsableSnapshot(empleado));
+            
+            if (empleado.link_foto) {
+              preloadAvatar(empleado.link_foto);
+            }
+          }
+        } catch (error) {
+          // No es un error crítico, simplemente no se pudo cargar el empleado del usuario
+          console.warn("Could not load employee for current user:", error instanceof Error ? error.message : String(error));
+        }
+        return;
+      }
+
+      // Modo edición o ya hay un responsable
       if (defaultValues.responsable_id && defaultValues.responsable_id > 0) {
         try {
           const empleadoBase = getSnapshotEmpleado(defaultValues);
@@ -76,22 +119,10 @@ export const useActividadFormLogic = ({
     return () => {
       isActive = false;
     };
-  }, [defaultValues, reset]);
+  }, [defaultValues, reset, mode, setValue]);
 
-  useEffect(() => {
-    if (!backendErrors) return;
-
-    Object.keys(backendErrors).forEach((field) => {
-      const message = backendErrors[field]?.[0];
-
-      if (message) {
-        setError(field as any, {
-          type: "server",
-          message,
-        });
-      }
-    });
-  }, [backendErrors, setError]);
+  // Aplicar errores del backend al formulario
+  useBackendErrors(backendErrors, setError);
 
   const handleEmployeeChange = (empleado: Empleado | null) => {
     setSelectedEmployee(empleado);

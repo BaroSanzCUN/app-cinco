@@ -3,6 +3,7 @@ import Label from "@/components/form/Label";
 import Input from "@/components/form/input/InputField";
 import DatePicker from "@/components/form/date-picker";
 import TextArea from "@/components/form/input/TextArea";
+import Select from "@/components/form/Select";
 import EmployeeSearchInput from "@/components/form/EmployeeSearchInput";
 import { ActividadFormFieldsProps } from "./ActividadForm.types";
 import {
@@ -10,6 +11,15 @@ import {
   toDateOrUndefined,
   toIsoDate,
 } from "./ActividadForm.utils";
+
+const ESTADO_OPTIONS = [
+  { value: "pendiente", label: "Pendiente" },
+  { value: "en_progreso", label: "En Progreso" },
+  { value: "completada", label: "Completada" },
+  { value: "cancelada", label: "Cancelada" },
+  { value: "pausada", label: "Pausada" },
+  { value: "reprogramada", label: "Reprogramada" },
+];
 
 export const ActividadFormFields = ({
   control,
@@ -42,31 +52,6 @@ export const ActividadFormFields = ({
       </div>
 
       <div className="col-span-2 md:col-span-1">
-        <Label htmlFor="fecha_inicio_actividad">
-          Fecha de Inicio <strong className="text-red-400">*</strong>
-        </Label>
-        <Controller
-          name="fecha_inicio"
-          control={control}
-          render={({ field }) => (
-            <DatePicker
-              id="fecha_actividad"
-              placeholder="Selecciona una fecha"
-              defaultDate={field.value}
-              onChange={(dates: Date[] | Date) => {
-                const value = getDateFromPicker(dates);
-                field.onChange(toIsoDate(value));
-              }}
-              error={!!errors.fecha_inicio}
-              hint={
-                errors.fecha_inicio ? errors.fecha_inicio.message : undefined
-              }
-            />
-          )}
-        />
-      </div>
-
-      <div className="col-span-2 md:col-span-1">
         <Controller
           name="responsable_id"
           control={control}
@@ -91,6 +76,77 @@ export const ActividadFormFields = ({
           )}
         />
       </div>
+
+      <div className="col-span-2 md:col-span-1">
+        <Label htmlFor="area_responsable">Área del Responsable</Label>
+        <Input
+          type="text"
+          id="area_responsable"
+          placeholder="Área del responsable"
+          value={selectedEmployee?.area || ""}
+          disabled
+          readOnly
+        />
+      </div>
+
+      <div className="col-span-2 md:col-span-1">
+        <Label htmlFor="carpeta_responsable">Carpeta del Responsable</Label>
+        <Input
+          type="text"
+          id="carpeta_responsable"
+          placeholder="Carpeta del responsable"
+          value={selectedEmployee?.carpeta || ""}
+          disabled
+          readOnly
+        />
+      </div>
+      
+      <div className="col-span-2 md:col-span-1">
+        <Label htmlFor="fecha_inicio_actividad">
+          Fecha de Inicio <strong className="text-red-400">*</strong>
+        </Label>
+        <Controller
+          name="fecha_inicio"
+          control={control}
+          render={({ field }) => (
+            <DatePicker
+              id="fecha_actividad"
+              placeholder="Selecciona una fecha"
+              defaultDate={field.value}
+              onChange={(dates: Date[] | Date) => {
+                const value = getDateFromPicker(dates);
+                field.onChange(toIsoDate(value));
+              }}
+              error={!!errors.fecha_inicio}
+              hint={
+                errors.fecha_inicio ? errors.fecha_inicio.message : undefined
+              }
+            />
+          )}
+        />
+      </div>
+
+      {mode === "edit" && (
+        <div className="col-span-2 md:col-span-1">
+          <Label htmlFor="estado_actividad">
+            Estado <strong className="text-red-400">*</strong>
+          </Label>
+          <Controller
+            name="estado"
+            control={control}
+            render={({ field }) => (
+              <Select
+                options={ESTADO_OPTIONS}
+                placeholder="Selecciona un estado"
+                value={field.value || ""}
+                onChange={field.onChange}
+                error={!!errors.estado}
+                hint={errors.estado ? String(errors.estado.message) : undefined}
+              />
+            )}
+          />
+        </div>
+      )}
 
       <div className="col-span-2 md:col-span-1">
         <Label htmlFor="fecha_fin_estimado">
