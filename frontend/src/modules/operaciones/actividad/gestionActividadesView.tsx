@@ -1,34 +1,30 @@
 "use client";
 
 import { PlusIcon } from "@/icons";
-import { useEffect, useState } from "react";
 import ModalActividad from "./ModalActividad";
 import Alert from "@/components/ui/alert/Alert";
-import Badge from "@/components/ui/badge/Badge";
-import { ColumnDef } from "@tanstack/react-table";
-import { DataTable } from "@/components/common/DataTable";
-import { useActividadStore } from "@/store/actividad.store";
 import PageBreadcrumb from "@/components/common/PageBreadCrumb";
-import { ActividadFormData } from "@/schemas/actividades.schema";
+import { useGestionActividadesData } from "./gestionActividadesView.hooks";
+import { GESTION_ACTIVIDADES_CONFIG } from "./gestionActividadesView.utils";
+import { GestionActividadesTable } from "./components/GestionActividadesTable";
+import { GestionActividadesToolbar } from "./components/GestionActividadesToolbar";
 
 const GestionActividadesView = () => {
-  const breadcrumbTitles = ["Operaciones", "Gestión de Actividades"];
-  const { loadActividades, actividades } = useActividadStore();
-  const [showAlert, setShowAlert] = useState(false);
-
-  useEffect(() => {
-    loadActividades();
-
-    const timer = setTimeout(() => {
-      setShowAlert(false);
-    }, 5000); // Ocultar alerta después de 5 segundos
-
-    return () => clearTimeout(timer);
-  }, [loadActividades]);
-
-  const handleEditarActividad = (id: any) => {
-    alert(`Editar actividad ${id}`);
-  };
+  const {
+    actividades,
+    columns,
+    globalFilter,
+    setGlobalFilter,
+    sorting,
+    setSorting,
+    pageIndex,
+    setPageIndex,
+    pageSize,
+    setPageSize,
+    visibleRows,
+    setVisibleRows,
+    showAlert,
+  } = useGestionActividadesData();
 
   // {
   //     "id": 3,
@@ -68,87 +64,23 @@ const GestionActividadesView = () => {
   //     "deleted_by": null
   // },
 
-  const actividadesColumns: ColumnDef<ActividadFormData>[] = [
-    {
-      header: "ID",
-      // accessorKey: "id",
-      cell: ({ row }) => {
-        const id = row.original.id;
-
-        if (id === undefined) {
-          return null;
-        }
-
-        const actividad = {
-          id: id as number,
-          ot: row.original.ot,
-          estado: row.original.estado,
-          responsable_snapshot: row.original.responsable_snapshot,
-          responsable_id: row.original.responsable_id,
-          fecha_inicio: row.original.fecha_inicio,
-          fecha_fin_estimado: row.original.fecha_fin_estimado,
-          fecha_fin_real: row.original.fecha_fin_real,
-          detalle: row.original.detalle,
-          ubicacion: row.original.ubicacion,
-        };
-
-        return (
-          <ModalActividad
-            mode="edit"
-            actividad={actividad}
-            textButton="Editar"
-          />
-        );
-      },
-    },
-    {
-      header: "OT",
-      accessorKey: "ot",
-    },
-    {
-      header: "ESTADO",
-      accessorKey: "estado",
-      cell: ({ row }) => {
-        const estado = row.original.estado || "Sin estado";
-        return (
-          <Badge
-            size="sm"
-            color={
-              estado == "completada"
-                ? "success"
-                : estado == "pendiente"
-                  ? "warning"
-                  : "error"
-            }
-          >
-            {estado}
-          </Badge>
-        );
-      },
-    },
-    {
-      header: "RESPONSABLE",
-      accessorKey: "responsable_snapshot.nombre",
-      cell: ({ row }) => {
-        const responsable =
-          row.original.responsable_snapshot?.nombre || "Sin responsable";
-        return <span>{responsable}</span>;
-      },
-    },
-  ];
+  const toolbarActions = (
+    <GestionActividadesToolbar visibleRows={visibleRows} />
+  );
 
   return (
-    <div>
-      <PageBreadcrumb pageTitle={breadcrumbTitles} />
-      <div className="relative min-h-screen overflow-auto rounded-2xl border border-gray-200 bg-white px-5 py-7 xl:px-10 xl:py-12 dark:border-gray-800 dark:bg-white/3">
+    <div className="w-full min-w-0 overflow-x-hidden">
+      <PageBreadcrumb
+        pageTitle={[...GESTION_ACTIVIDADES_CONFIG.breadcrumbTitles]}
+      />
+      <div className="w-full min-w-0 overflow-x-hidden rounded-2xl border border-gray-200 bg-white px-5 py-7 xl:px-10 xl:py-12 dark:border-gray-800 dark:bg-white/3">
         <div className="mx-auto w-full max-w-157.5 text-center">
           <h3 className="text-theme-xl mb-4 font-semibold text-gray-800 sm:text-2xl dark:text-white/90">
-            Modulo de Gestión de Actividades
+            {GESTION_ACTIVIDADES_CONFIG.title}
           </h3>
 
           <p className="text-gray-600 dark:text-white/70">
-            Aquí podrás gestionar todas las actividades relacionadas con las
-            operaciones de CINCO SAS.
+            {GESTION_ACTIVIDADES_CONFIG.description}
           </p>
         </div>
 
@@ -163,23 +95,24 @@ const GestionActividadesView = () => {
             variant="success"
             title="Actividad Creada"
             message="La actividad ha sido creada exitosamente."
-            // showLink={true}
-            // linkHref="/"
-            // linkText="Learn more"
           />
         )}
 
-        <div className="mt-10">
-          <DataTable
-            data={actividades}
-            columns={actividadesColumns}
-            enablePagination={true}
-            pageSize={6}
-            emptyMessage="No hay actividades para mostrar."
-            enableGlobalFilter={true}
-            enableSorting={true}
-            enableColumnFilters={true}
-            pageSizeOptions={[5, 10, 25, 50, 100]}
+        <div className="mt-8 h-112 min-w-0 overflow-x-hidden">
+          <GestionActividadesTable
+            actividades={actividades}
+            columns={columns}
+            globalFilter={globalFilter}
+            setGlobalFilter={setGlobalFilter}
+            sorting={sorting}
+            setSorting={setSorting}
+            pageIndex={pageIndex}
+            setPageIndex={setPageIndex}
+            pageSize={pageSize}
+            setPageSize={setPageSize}
+            visibleRows={visibleRows}
+            setVisibleRows={setVisibleRows}
+            toolbarActions={toolbarActions}
           />
         </div>
       </div>

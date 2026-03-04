@@ -1,4 +1,5 @@
 from operator import ge
+import logging
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -15,6 +16,9 @@ from apps.authentication.serializers import (
     LoginRequestSerializer,
     LoginResponseSerializer
 )
+
+# Logger de seguridad
+security_logger = logging.getLogger('security')
 
 class LoginView(APIView):
     authentication_classes = []
@@ -36,6 +40,9 @@ class LoginView(APIView):
         password = request.data.get("password")
 
         if not username or not password:
+            security_logger.warning(
+                f"Login attempt with missing credentials from IP: {request.META.get('REMOTE_ADDR')}"
+            )
             return Response(
                 {"detail": "Usuario y contraseña requeridos"},
                 status=status.HTTP_400_BAD_REQUEST
@@ -44,6 +51,9 @@ class LoginView(APIView):
         user = authenticate(username=username, password=password)
 
         if not user:
+            security_logger.warning(
+                f"Failed login attempt for username: {username} from IP: {request.META.get('REMOTE_ADDR')}"
+            )
             return Response(
                 {"detail": "Credenciales inválidas"},
                 status=status.HTTP_401_UNAUTHORIZED
@@ -55,6 +65,11 @@ class LoginView(APIView):
         # Generar tokens con fingerprint
         access = generate_access_token(user, fingerprint)
         refresh = generate_refresh_token(user)
+        
+        # Log de login exitoso
+        security_logger.info(
+            f"Successful login for user: {username} (ID: {user.id}) from IP: {request.META.get('REMOTE_ADDR')}"
+        )
         
         # Get employee photo
         # employee = user.empleado
@@ -81,7 +96,7 @@ class LoginView(APIView):
             value=access,
             httponly=True,  # No accesible desde JavaScript
             secure=secure_cookie,  # Solo HTTPS en producción
-            samesite='Lax',  # Protección CSRF
+            samesite='Strict',  # Máxima protección CSRF
             max_age=15 * 60  # 15 minutos
         )
         
@@ -90,7 +105,7 @@ class LoginView(APIView):
             value=refresh.token,
             httponly=True,
             secure=secure_cookie,
-            samesite='Lax',
+            samesite='Strict',  # Máxima protección CSRF
             max_age=7 * 24 * 60 * 60  # 7 días
         )
         

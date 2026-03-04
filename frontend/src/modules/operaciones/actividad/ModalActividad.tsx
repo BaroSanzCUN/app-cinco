@@ -49,7 +49,7 @@ const ModalActividad = ({
           onSubmit={(data) =>
             handleSubmit(data, mode, actividad?.id, closeModal)
           }
-          backendErrors={error}
+          backendErrors={error?.errors}
           mode={mode}
         />
       </Modal>

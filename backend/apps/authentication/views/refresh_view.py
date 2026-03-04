@@ -1,4 +1,5 @@
 # apps/authentication/views/refresh_views.py
+import logging
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -9,6 +10,9 @@ from apps.authentication.serializers import (
     RefreshTokenRequestSerializer,
     RefreshTokenResponseSerializer,
 )
+
+# Logger de seguridad
+security_logger = logging.getLogger('security')
 
 class RefreshTokenView(APIView):
     authentication_classes = []
@@ -30,6 +34,9 @@ class RefreshTokenView(APIView):
         refresh_token = request.COOKIES.get('refresh_token')
 
         if not refresh_token:
+            security_logger.warning(
+                f"Refresh attempt without token from IP: {request.META.get('REMOTE_ADDR')}"
+            )
             return Response(
                 {"detail": "refresh_token cookie is required"},
                 status=status.HTTP_400_BAD_REQUEST
@@ -40,7 +47,15 @@ class RefreshTokenView(APIView):
 
         try:
             tokens = rotate_refresh_token(refresh_token, fingerprint)
+            security_logger.info(
+                f"Token refresh successful from IP: {request.META.get('REMOTE_ADDR')}"
+            )
         except ValueError as e:
+            # Log detallado del error (puede ser reuso de token)
+            error_msg = str(e)
+            security_logger.error(
+                f"Token refresh failed: {error_msg} from IP: {request.META.get('REMOTE_ADDR')}"
+            )
             return Response(
                 {"detail": str(e)},
                 status=status.HTTP_401_UNAUTHORIZED
@@ -57,7 +72,7 @@ class RefreshTokenView(APIView):
             value=tokens['access_token'],
             httponly=True,
             secure=secure_cookie,
-            samesite='Lax',
+            samesite='Strict',  # Máxima protección CSRF
             max_age=15 * 60  # 15 minutos
         )
         
@@ -66,7 +81,7 @@ class RefreshTokenView(APIView):
             value=tokens['refresh_token'],
             httponly=True,
             secure=secure_cookie,
-            samesite='Lax',
+            samesite='Strict',  # Máxima protección CSRF
             max_age=7 * 24 * 60 * 60  # 7 días
         )
         

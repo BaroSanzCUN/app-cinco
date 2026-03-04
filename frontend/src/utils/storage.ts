@@ -1,10 +1,10 @@
 // src/utils/storage.ts
 // Los tokens ahora se manejan en cookies httpOnly por seguridad
-// Solo gestionamos datos del usuario en localStorage
+// Solo gestionamos datos del usuario en sessionStorage (más seguro que localStorage)
 
 const getUser = () => {
   try {
-    const userStr = localStorage.getItem("user");
+    const userStr = sessionStorage.getItem("user");
     return userStr ? JSON.parse(userStr) : null;
   } catch {
     return null;
@@ -13,12 +13,12 @@ const getUser = () => {
 
 const saveUser = (user: any) => {
   if (user) {
-    localStorage.setItem("user", JSON.stringify(user));
+    sessionStorage.setItem("user", JSON.stringify(user));
   }
 };
 
 const clearUser = () => {
-  localStorage.removeItem("user");
+  sessionStorage.removeItem("user");
 };
 
 export { getUser, saveUser, clearUser };

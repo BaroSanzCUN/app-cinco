@@ -1,10 +1,14 @@
 # apps/authentication/views/logout_view.py
+import logging
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.conf import settings
 from drf_spectacular.utils import extend_schema
 from apps.authentication.models import RefreshToken
+
+# Logger de seguridad
+security_logger = logging.getLogger('security')
 
 
 class LogoutView(APIView):
@@ -33,8 +37,18 @@ class LogoutView(APIView):
             try:
                 token_obj = RefreshToken.objects.get(token=refresh_token)
                 token_obj.revoke()
+                security_logger.info(
+                    f"User logged out successfully (User ID: {token_obj.user.id}) from IP: {request.META.get('REMOTE_ADDR')}"
+                )
             except RefreshToken.DoesNotExist:
+                security_logger.warning(
+                    f"Logout attempt with invalid token from IP: {request.META.get('REMOTE_ADDR')}"
+                )
                 pass  # Token ya no existe o es inválido
+        else:
+            security_logger.warning(
+                f"Logout attempt without token from IP: {request.META.get('REMOTE_ADDR')}"
+            )
 
         # Crear respuesta
         response = Response(

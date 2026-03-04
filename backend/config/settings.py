@@ -24,7 +24,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'cg#p$g+j9tax!#a3cup@1$8obt2_+&k3q+pmu)5%asj6yjpkag')
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    raise ValueError(
+        "DJANGO_SECRET_KEY no está configurada. "
+        "Define esta variable de entorno antes de iniciar la aplicación."
+    )
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = bool( os.environ.get('DJANGO_DEBUG', True) )
@@ -37,30 +42,44 @@ ALLOWED_HOSTS = [
     'localhost'
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS: Solo permitir orígenes específicos (whitelist)
+CORS_ALLOW_ALL_ORIGINS = False  # ✅ Seguridad mejorada
 CORS_ALLOW_CREDENTIALS = True  # Permite envío de cookies entre dominios
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
+    "http://127.0.0.1:3000",
     "https://frontend.cincosas.com",
+    "https://www.frontend.cincosas.com",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
+    "http://127.0.0.1:3000",
     "https://frontend.cincosas.com",
+    "https://www.frontend.cincosas.com",
 ]
 
 # Configuración de cookies seguras
 SECURE_COOKIE = not DEBUG  # Solo HTTPS en producción
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
-SESSION_COOKIE_SAMESITE = 'Lax'  # Protección contra CSRF
+SESSION_COOKIE_HTTPONLY = True  # Protección XSS
 CSRF_COOKIE_HTTPONLY = False  # Necesario para leer el token en el frontend
 
-if DEBUG:
-    CSRF_COOKIE_SAMESITE = 'Lax'
-else:
-    CSRF_COOKIE_SAMESITE = 'None'
+# SameSite='Strict' para máxima protección CSRF
+SESSION_COOKIE_SAMESITE = 'Strict'
+CSRF_COOKIE_SAMESITE = 'Lax'  # Lax para CSRF token (necesita ser leído por JS)
+
+# Content Security Policy y security headers
+if not DEBUG:
+    SECURE_HSTS_SECONDS = 31536000  # 1 año
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_SSL_REDIRECT = True
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = 'DENY'
 
 # Application definition
 INSTALLED_APPS = [
@@ -116,10 +135,14 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "apps.security.authentication.api_key_authentication.APIKeyAuthentication",
         "apps.authentication.authentication.jwt_authentication.JWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.IsAuthenticated",
+        "apps.security.permissions.api_permissions.IsAuthenticatedOrAPIKey",
+    ],
+    "DEFAULT_THROTTLE_CLASSES": [
+        "apps.security.throttling.api_throttling.APIKeyRateThrottle",
     ],
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
@@ -129,9 +152,21 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'Documentación de endpoints - App Cinco',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
-    'SECURITY': [{'BearerAuth': []}],
+    'SECURITY': [
+        {'ApiKeyAuth': []},
+        {'BearerAuth': []},
+    ],
+    'SWAGGER_UI_SETTINGS': {
+        'persistAuthorization': True,
+    },
     'COMPONENTS': {
         'securitySchemes': {
+            'ApiKeyAuth': {
+                'type': 'apiKey',
+                'in': 'header',
+                'name': 'X-API-Key',
+                'description': 'API Key para integraciones externas. Formato: cinco_xxxxx',
+            },
             'BearerAuth': {
                 'type': 'http',
                 'scheme': 'bearer',
@@ -211,9 +246,50 @@ STATIC_ROOT = os.getenv('BASE_PATH', '') + 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# Security headers (ya configurados arriba según DEBUG)
 #SECURE_HSTS_SECONDS = 31536000
 #SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 # SECURE_HSTS_PRELOAD = True  # Solo si estás seguro de que todo es HTTPS
 #SECURE_SSL_REDIRECT = True
 #SESSION_COOKIE_SECURE = True
 #CSRF_COOKIE_SECURE = True
+
+# Logging Configuration
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'security_file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'security.log'),
+            'maxBytes': 1024 * 1024 * 10,  # 10 MB
+            'backupCount': 5,
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'security': {
+            'handlers': ['console', 'security_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+        },
+    },
+}

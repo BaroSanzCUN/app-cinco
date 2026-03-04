@@ -43,8 +43,19 @@ export const getEmpleadoByCedula = async (
   return cache.getOrFetch(
     cacheKey,
     async () => {
-      const res = await api.get(`/empleados/empleados/${cedula}/`);
-      return res.data;
+      // Buscar empleado por cédula usando el endpoint de búsqueda
+      const res = await api.get("/empleados/empleados/", {
+        params: { search: cedula },
+      });
+      
+      // Buscar el empleado que coincida exactamente con la cédula
+      const empleado = res.data.find((emp: Empleado) => emp.cedula === cedula);
+      
+      if (!empleado) {
+        throw new Error(`Empleado con cédula ${cedula} no encontrado`);
+      }
+      
+      return empleado;
     },
     CACHE_TTL.SINGLE,
   );
