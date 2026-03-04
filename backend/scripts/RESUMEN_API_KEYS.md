@@ -115,10 +115,15 @@ backend/
 │           ├── revoke_apikey.py              # ✅ Nuevo
 │           └── activate_apikey.py            # ✅ Nuevo
 │
-├── API_KEYS_README.md                        # ✅ Documentación completa
-├── GUIA_RAPIDA_API_KEYS.md                   # ✅ Guía rápida
-├── test_apikey.py                            # ✅ Script de prueba
-└── RESUMEN_API_KEYS.md                       # ✅ Este archivo
+├── scripts/
+│   ├── API_KEYS_README.md                    # ✅ Documentación completa
+│   ├── GUIA_RAPIDA_API_KEYS.md               # ✅ Guía rápida
+│   ├── COMPATIBILIDAD_FRONTEND.md            # ✅ Compatibilidad frontend
+│   ├── DOCUMENTACION_INDEX.md                # ✅ Índice de documentación
+│   ├── test_apikey.py                        # ✅ Script de prueba básica
+│   ├── test_complete_auth.py                 # ✅ Script de prueba completa
+│   ├── generate_secret_key.py                # ✅ Generador de claves
+│   └── RESUMEN_API_KEYS.md                   # ✅ Este archivo
 ```
 
 ### Archivos Modificados
@@ -210,7 +215,7 @@ python manage.py activate_apikey <ID>
 ### Opción 1: Script de Prueba
 ```bash
 cd backend
-python manage.py shell < test_apikey.py
+python manage.py shell < scripts/test_apikey.py
 ```
 
 ### Opción 2: Crear y probar manualmente

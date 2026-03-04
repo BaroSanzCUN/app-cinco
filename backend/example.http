@@ -1,9 +1,0 @@
-# http://127.0.0.1:8000/api/health/
-# http://127.0.0.1:8000/api/auth/login/
-# http://127.0.0.1:8000/api/auth/refresh/
-http://127.0.0.1:8000/api/operaciones/actividades/
-
-# curl -H "Authorization: Bearer 44e7c35825d240c1bfe4c6177199cfdd" \
-#      http://127.0.0.1:8000/test/
-
-
