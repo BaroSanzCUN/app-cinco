@@ -1,6 +1,7 @@
 
 from rest_framework import status
 from rest_framework.response import Response
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
 from rest_framework.viewsets import ModelViewSet
 
@@ -221,11 +222,43 @@ class ActividadViewSet(ModelViewSet):
 
     @extend_schema(
         summary="Eliminar una actividad",
-        description="Elimina (soft delete) una actividad. No se elimina realmente, solo se marca como eliminada.",
+        description="""
+        Realiza soft delete por defecto: marca la actividad como eliminada (`is_deleted=true`) sin borrarla físicamente.
+
+        **Eliminación física (caso específico):**
+        - Enviar `?hard_delete=true`
+        - Requiere usuario administrador (`is_superuser`)
+        """,
         tags=["operaciones"],
+        parameters=[
+            OpenApiParameter(
+                name='hard_delete',
+                description='Si es true y el usuario es superusuario, elimina físicamente el registro',
+                required=False,
+                type=OpenApiTypes.BOOL
+            ),
+        ],
         responses={204: None}
     )
     def destroy(self, request, *args, **kwargs):
-        """Eliminar una actividad"""
-        return super().destroy(request, *args, **kwargs)
+        """Eliminar una actividad (soft delete por defecto)"""
+        instance = self.get_object()
+
+        hard_delete = str(request.query_params.get('hard_delete', '')).lower() in ('1', 'true', 'yes')
+        if hard_delete:
+            if not request.user.is_authenticated or not request.user.is_superuser:
+                return Response(
+                    {'detail': 'No tienes permisos para eliminación física.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            instance.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        deleted_by = request.user.id if request.user.is_authenticated else None
+        instance.is_deleted = True
+        instance.deleted_at = timezone.now()
+        instance.deleted_by = deleted_by
+        instance.save(update_fields=['is_deleted', 'deleted_at', 'deleted_by', 'updated_at'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 

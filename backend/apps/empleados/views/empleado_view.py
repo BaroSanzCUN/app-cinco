@@ -1,6 +1,8 @@
 from apps.empleados.models import Empleado
 from rest_framework.viewsets import ModelViewSet
 from apps.empleados.serializers import EmpleadoSerializer
+from rest_framework.response import Response
+from rest_framework import status
 from rest_framework import filters
 from django.db.models import Q
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
@@ -212,9 +214,39 @@ class EmpleadoViewSet(ModelViewSet):
 
     @extend_schema(
         summary="Eliminar un empleado",
-        description="Elimina un empleado.",
+        description="""
+        Realiza soft delete por defecto cambiando `estado` a `INACTIVO`.
+
+        **Eliminación física (caso específico):**
+        - Enviar `?hard_delete=true`
+        - Requiere usuario administrador (`is_superuser`)
+        """,
         tags=["empleados"],
+        parameters=[
+            OpenApiParameter(
+                name='hard_delete',
+                description='Si es true y el usuario es superusuario, elimina físicamente el registro',
+                required=False,
+                type=OpenApiTypes.BOOL
+            ),
+        ]
     )
     def destroy(self, request, *args, **kwargs):
-        """Eliminar un empleado"""
-        return super().destroy(request, *args, **kwargs)
+        """Eliminar un empleado (soft delete por defecto)"""
+        instance = self.get_object()
+
+        hard_delete = str(request.query_params.get('hard_delete', '')).lower() in ('1', 'true', 'yes')
+        if hard_delete:
+            if not request.user.is_authenticated or not request.user.is_superuser:
+                return Response(
+                    {'detail': 'No tienes permisos para eliminación física.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            instance.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        if instance.estado != 'INACTIVO':
+            instance.estado = 'INACTIVO'
+            instance.save(update_fields=['estado'])
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
