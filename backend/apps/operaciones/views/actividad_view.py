@@ -1,7 +1,6 @@
 
 from rest_framework import status
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
 from drf_spectacular.utils import extend_schema
 from rest_framework.viewsets import ModelViewSet
 
@@ -13,7 +12,7 @@ from apps.operaciones.services.actividad_service import ActividadService
 
 
 class ActividadViewSet(ModelViewSet):
-    permission_classes = [AllowAny]
+    # Usa permisos por defecto: IsAuthenticatedOrAPIKey
 
     def get_queryset(self):
         return ActividadService.listar().select_related(

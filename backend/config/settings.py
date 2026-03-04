@@ -135,10 +135,14 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "apps.security.authentication.api_key_authentication.APIKeyAuthentication",
         "apps.authentication.authentication.jwt_authentication.JWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.IsAuthenticated",
+        "apps.security.permissions.api_permissions.IsAuthenticatedOrAPIKey",
+    ],
+    "DEFAULT_THROTTLE_CLASSES": [
+        "apps.security.throttling.api_throttling.APIKeyRateThrottle",
     ],
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
@@ -148,9 +152,21 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'Documentación de endpoints - App Cinco',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
-    'SECURITY': [{'BearerAuth': []}],
+    'SECURITY': [
+        {'ApiKeyAuth': []},
+        {'BearerAuth': []},
+    ],
+    'SWAGGER_UI_SETTINGS': {
+        'persistAuthorization': True,
+    },
     'COMPONENTS': {
         'securitySchemes': {
+            'ApiKeyAuth': {
+                'type': 'apiKey',
+                'in': 'header',
+                'name': 'X-API-Key',
+                'description': 'API Key para integraciones externas. Formato: cinco_xxxxx',
+            },
             'BearerAuth': {
                 'type': 'http',
                 'scheme': 'bearer',
