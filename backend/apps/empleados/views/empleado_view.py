@@ -4,8 +4,8 @@ from apps.empleados.serializers import EmpleadoSerializer
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework import filters
-from django.db.models import Q
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
+from apps.empleados.services import EmpleadoService
 
 
 class EmpleadoViewSet(ModelViewSet):
@@ -25,43 +25,7 @@ class EmpleadoViewSet(ModelViewSet):
     search_fields = ['cedula', 'nombre', 'apellido', 'cargo', 'movil']
 
     def get_queryset(self):
-        params = self.request.query_params
-
-        estado = params.get('estado')
-        if estado:
-            queryset = Empleado.objects.filter(estado__iexact=estado)
-        else:
-            queryset = Empleado.objects.filter(estado='ACTIVO')
-
-        filtros_icontains = {
-            'cedula': 'cedula',
-            'nombre': 'nombre',
-            'apellido': 'apellido',
-            'area': 'area',
-            'carpeta': 'carpeta',
-            'cargo': 'cargo',
-            'movil': 'movil',
-            'supervisor': 'supervisor',
-            'sede': 'sede',
-            'codigo_sap': 'codigo_sap',
-        }
-
-        for param, field in filtros_icontains.items():
-            value = params.get(param)
-            if value:
-                queryset = queryset.filter(**{f'{field}__icontains': value})
-
-        search = params.get('search')
-        if search:
-            queryset = queryset.filter(
-                Q(cedula__icontains=search) |
-                Q(nombre__icontains=search) |
-                Q(apellido__icontains=search) |
-                Q(cargo__icontains=search) |
-                Q(movil__icontains=search)
-            )
-
-        return queryset
+        return EmpleadoService.listar(self.request.query_params)
 
     @extend_schema(
         summary="Listar empleados activos",
@@ -236,17 +200,16 @@ class EmpleadoViewSet(ModelViewSet):
         instance = self.get_object()
 
         hard_delete = str(request.query_params.get('hard_delete', '')).lower() in ('1', 'true', 'yes')
-        if hard_delete:
-            if not request.user.is_authenticated or not request.user.is_superuser:
-                return Response(
-                    {'detail': 'No tienes permisos para eliminación física.'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-            instance.delete()
-            return Response(status=status.HTTP_204_NO_CONTENT)
+        was_deleted = EmpleadoService.eliminar(
+            instance,
+            actor_user=request.user,
+            hard_delete=hard_delete,
+        )
 
-        if instance.estado != 'INACTIVO':
-            instance.estado = 'INACTIVO'
-            instance.save(update_fields=['estado'])
+        if not was_deleted:
+            return Response(
+                {'detail': 'No tienes permisos para eliminación física.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         return Response(status=status.HTTP_204_NO_CONTENT)

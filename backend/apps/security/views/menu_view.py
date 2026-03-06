@@ -3,12 +3,16 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
 from rest_framework.permissions import IsAuthenticated
 
-from apps.security.services.menu_service import build_menu_for_user
+from apps.security.services.menu_service import MenuService
 from apps.security.permissions.has_menu_permission import HasMenuPermission
-
 from apps.security.serializers.menu_serializer import MenuResponseSerializer
 
+
 class MenuView(APIView):
+    """
+    Endpoint para obtener el menú dinámico del usuario.
+    Delegado a MenuService para orquestación de permisos.
+    """
     permission_classes = [
         IsAuthenticated,
         HasMenuPermission,
@@ -25,5 +29,5 @@ class MenuView(APIView):
         tags=["security"],
     )
     def get(self, request):
-        menu = build_menu_for_user(request.user)
+        menu = MenuService.obtener_menu_para_usuario(request.user)
         return Response(menu)

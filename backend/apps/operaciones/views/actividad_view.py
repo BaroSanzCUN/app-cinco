@@ -1,7 +1,6 @@
 
 from rest_framework import status
 from rest_framework.response import Response
-from django.utils import timezone
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
 from rest_framework.viewsets import ModelViewSet
 
@@ -22,40 +21,32 @@ class ActividadViewSet(ModelViewSet):
     Autenticación requerida: Token Bearer o API Key
     """
 
-    def get_queryset(self):
-        # Obtener el ID del usuario actual
-        usuario_id = self.request.user.id if self.request.user.is_authenticated else None
-        
-        # Extraer parámetros de filtro de los query parameters
-        filtros = {}
+    FILTER_PARAMS = (
+        'ot',
+        'estado',
+        'area',
+        'carpeta',
+        'responsable_id',
+        'buscar',
+        'zona',
+        'nodo',
+        'fecha_inicio_desde',
+        'fecha_inicio_hasta',
+    )
+
+    def _get_filtros(self):
         params = self.request.query_params
-        
-        # Parámetros de búsqueda y filtrado
-        if params.get('ot'):
-            filtros['ot'] = params.get('ot')
-        if params.get('estado'):
-            filtros['estado'] = params.get('estado')
-        if params.get('area'):
-            filtros['area'] = params.get('area')
-        if params.get('carpeta'):
-            filtros['carpeta'] = params.get('carpeta')
-        if params.get('responsable_id'):
-            filtros['responsable_id'] = params.get('responsable_id')
-        if params.get('buscar'):
-            filtros['buscar'] = params.get('buscar')
-        if params.get('zona'):
-            filtros['zona'] = params.get('zona')
-        if params.get('nodo'):
-            filtros['nodo'] = params.get('nodo')
-        if params.get('fecha_inicio_desde'):
-            filtros['fecha_inicio_desde'] = params.get('fecha_inicio_desde')
-        if params.get('fecha_inicio_hasta'):
-            filtros['fecha_inicio_hasta'] = params.get('fecha_inicio_hasta')
-        
-        return ActividadService.listar(usuario_id=usuario_id, **filtros).select_related(
-            'detalle',
-            'ubicacion',
-            'responsable_snapshot'
+        return {
+            key: params.get(key)
+            for key in self.FILTER_PARAMS
+            if params.get(key)
+        }
+
+    def get_queryset(self):
+        usuario_id = self.request.user.id if self.request.user.is_authenticated else None
+        return ActividadService.listar(
+            usuario_id=usuario_id,
+            filtros=self._get_filtros(),
         )
 
     def get_serializer_class(self):
@@ -181,7 +172,11 @@ class ActividadViewSet(ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        actividad = ActividadService.crear(self, serializer.validated_data)
+        actor_user_id = request.user.id if request.user.is_authenticated else None
+        actividad = ActividadService.crear(
+            serializer.validated_data,
+            actor_user_id=actor_user_id,
+        )
 
         return Response(
             ActividadSerializer(actividad).data,
@@ -245,20 +240,18 @@ class ActividadViewSet(ModelViewSet):
         instance = self.get_object()
 
         hard_delete = str(request.query_params.get('hard_delete', '')).lower() in ('1', 'true', 'yes')
-        if hard_delete:
-            if not request.user.is_authenticated or not request.user.is_superuser:
-                return Response(
-                    {'detail': 'No tienes permisos para eliminación física.'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-            instance.delete()
-            return Response(status=status.HTTP_204_NO_CONTENT)
+        was_deleted = ActividadService.eliminar(
+            instance,
+            actor_user=request.user,
+            hard_delete=hard_delete,
+        )
 
-        deleted_by = request.user.id if request.user.is_authenticated else None
-        instance.is_deleted = True
-        instance.deleted_at = timezone.now()
-        instance.deleted_by = deleted_by
-        instance.save(update_fields=['is_deleted', 'deleted_at', 'deleted_by', 'updated_at'])
+        if not was_deleted:
+            return Response(
+                {'detail': 'No tienes permisos para eliminación física.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
