@@ -53,19 +53,19 @@ Este directorio contiene toda la documentación del nuevo sistema de autenticaci
 **Descripción:** Prueba básica del modelo APIKey
 **Uso:**
 ```bash
-python manage.py shell < test_apikey.py
+python manage.py shell < scripts/test_apikey.py
 ```
 
 ### test_complete_auth.py
 **Descripción:** Suite completa de pruebas de autenticación
 **Uso:**
 ```bash
-python test_complete_auth.py [api_key] [username] [password]
+python scripts/test_complete_auth.py [api_key] [username] [password]
 ```
 
 **Ejemplo:**
 ```bash
-python test_complete_auth.py cinco_abc123... admin admin123
+python scripts/test_complete_auth.py cinco_abc123... admin admin123
 ```
 
 ---
@@ -76,7 +76,7 @@ python test_complete_auth.py cinco_abc123... admin admin123
 
 1. **Leer documentación principal:**
    ```bash
-   cat RESUMEN_API_KEYS.md
+   cat scripts/RESUMEN_API_KEYS.md
    ```
 
 2. **Aplicar migraciones:**
@@ -98,7 +98,7 @@ python test_complete_auth.py cinco_abc123... admin admin123
 
 1. **Leer compatibilidad:**
    ```bash
-   cat COMPATIBILIDAD_FRONTEND.md
+   cat scripts/COMPATIBILIDAD_FRONTEND.md
    ```
 
 2. **Conclusión:** Tu código sigue funcionando sin cambios ✅
@@ -107,7 +107,7 @@ python test_complete_auth.py cinco_abc123... admin admin123
 
 1. **Leer guía rápida:**
    ```bash
-   cat GUIA_RAPIDA_API_KEYS.md
+   cat scripts/GUIA_RAPIDA_API_KEYS.md
    ```
 
 2. **Solicitar API Key al administrador**
@@ -153,16 +153,19 @@ http://localhost:8000/api/docs/
 
 ```
 backend/
-├── 📖 Documentación
-│   ├── RESUMEN_API_KEYS.md          # Resumen ejecutivo
-│   ├── GUIA_RAPIDA_API_KEYS.md      # Guía práctica
-│   ├── API_KEYS_README.md           # Doc técnica completa
-│   ├── COMPATIBILIDAD_FRONTEND.md   # Info para frontend
-│   └── DOCUMENTACION_INDEX.md       # Este archivo
-│
-├── 🧪 Scripts de Prueba
-│   ├── test_apikey.py               # Test básico
-│   └── test_complete_auth.py        # Test completo
+├── scripts/
+│   ├── 📖 Documentación
+│   │   ├── RESUMEN_API_KEYS.md          # Resumen ejecutivo
+│   │   ├── GUIA_RAPIDA_API_KEYS.md      # Guía práctica
+│   │   ├── API_KEYS_README.md           # Doc técnica completa
+│   │   ├── COMPATIBILIDAD_FRONTEND.md   # Info para frontend
+│   │   └── DOCUMENTACION_INDEX.md       # Este archivo
+│   │
+│   ├── 🧪 Scripts de Prueba
+│   │   ├── test_apikey.py               # Test básico
+│   │   ├── test_complete_auth.py        # Test completo
+│   │   ├── generate_secret_key.py       # Generador de claves
+│   │   └── sync_auth_users.py           # Sincronización de usuarios
 │
 └── apps/security/
     ├── models.py                    # Modelo APIKey
@@ -186,7 +189,7 @@ backend/
 
 ### 👤 Soy Administrador del Sistema
 **Necesito:** Gestionar API Keys de producción  
-**Leo:** `RESUMEN_API_KEYS.md`  
+**Leo:** `scripts/RESUMEN_API_KEYS.md`  
 **Hago:** 
 1. Crear API Keys para sistemas autorizados
 2. Configurar rate limits y restricciones
@@ -195,7 +198,7 @@ backend/
 
 ### 👨‍💻 Soy Desarrollador Backend
 **Necesito:** Entender cómo funciona el sistema  
-**Leo:** `API_KEYS_README.md`  
+**Leo:** `scripts/API_KEYS_README.md`  
 **Hago:**
 1. Entender la arquitectura
 2. Crear permisos personalizados si es necesario
@@ -204,7 +207,7 @@ backend/
 
 ### 👩‍💻 Soy Desarrollador Frontend
 **Necesito:** Saber si debo cambiar algo  
-**Leo:** `COMPATIBILIDAD_FRONTEND.md`  
+**Leo:** `scripts/COMPATIBILIDAD_FRONTEND.md`  
 **Hago:**
 1. Confirmar que no hay cambios requeridos
 2. Verificar que mi app sigue funcionando
@@ -212,7 +215,7 @@ backend/
 
 ### 🔌 Soy Desarrollador de Integración
 **Necesito:** Consumir la API desde sistema externo  
-**Leo:** `GUIA_RAPIDA_API_KEYS.md`  
+**Leo:** `scripts/GUIA_RAPIDA_API_KEYS.md`  
 **Hago:**
 1. Solicitar API Key al admin
 2. Usar ejemplos de código de la guía
@@ -221,9 +224,9 @@ backend/
 
 ### 🧪 Soy QA / Tester
 **Necesito:** Probar el sistema  
-**Leo:** Esta guía (`DOCUMENTACION_INDEX.md`)  
+**Leo:** Esta guía (`scripts/DOCUMENTACION_INDEX.md`)  
 **Hago:**
-1. Ejecutar `test_complete_auth.py`
+1. Ejecutar `scripts/test_complete_auth.py`
 2. Probar casos de error (API Key inválida, etc.)
 3. Verificar rate limiting
 4. Documentar resultados

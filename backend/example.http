@@ -1,9 +1,77 @@
-# http://127.0.0.1:8000/api/health/
-# http://127.0.0.1:8000/api/auth/login/
-# http://127.0.0.1:8000/api/auth/refresh/
-http://127.0.0.1:8000/api/operaciones/actividades/
+# ============================================================================
+# ACTIVIDADES - EJEMPLOS DE FILTRADO
+# ============================================================================
 
-# curl -H "Authorization: Bearer 44e7c35825d240c1bfe4c6177199cfdd" \
-#      http://127.0.0.1:8000/test/
+# 1️⃣ Listar actividades del usuario actual (creadas o como responsable)
+GET http://127.0.0.1:8000/api/operaciones/actividades/
+Authorization: Bearer <your_token>
+
+### 2️⃣ Filtrar por OT
+GET http://127.0.0.1:8000/api/operaciones/actividades/?ot=OT-2024-001
+Authorization: Bearer <your_token>
+
+### 3️⃣ Filtrar por Estado
+GET http://127.0.0.1:8000/api/operaciones/actividades/?estado=en_progreso
+Authorization: Bearer <your_token>
+
+### 4️⃣ Filtrar por Área
+GET http://127.0.0.1:8000/api/operaciones/actividades/?area=Soporte%20Técnico
+Authorization: Bearer <your_token>
+
+### 5️⃣ Filtrar por Carpeta
+GET http://127.0.0.1:8000/api/operaciones/actividades/?carpeta=Carpeta%20A
+Authorization: Bearer <your_token>
+
+### 6️⃣ Filtrar por Responsable específico
+GET http://127.0.0.1:8000/api/operaciones/actividades/?responsable_id=123
+Authorization: Bearer <your_token>
+
+### 7️⃣ Búsqueda general (descripción, tipo de trabajo, OT, nombre)
+GET http://127.0.0.1:8000/api/operaciones/actividades/?buscar=instalación
+Authorization: Bearer <your_token>
+
+### 8️⃣ Filtrar por Zona
+GET http://127.0.0.1:8000/api/operaciones/actividades/?zona=norte
+Authorization: Bearer <your_token>
+
+### 9️⃣ Filtrar por Nodo
+GET http://127.0.0.1:8000/api/operaciones/actividades/?nodo=nodo-centro
+Authorization: Bearer <your_token>
+
+### 🔟 Filtrar por Rango de Fechas
+GET http://127.0.0.1:8000/api/operaciones/actividades/?fecha_inicio_desde=2024-01-15&fecha_inicio_hasta=2024-02-15
+Authorization: Bearer <your_token>
+
+### 🔗 Combinación: Estado + Área + Búsqueda
+GET http://127.0.0.1:8000/api/operaciones/actividades/?estado=en_progreso&area=Soporte&buscar=instalación
+Authorization: Bearer <your_token>
+
+### 🔗 Combinación: OT + Estado + Responsable + Zona
+GET http://127.0.0.1:8000/api/operaciones/actividades/?ot=OT-2024&estado=pendiente&responsable_id=123&zona=norte
+Authorization: Bearer <your_token>
+
+# ============================================================================
+# OTROS ENDPOINTS
+# ============================================================================
+
+# Health Check
+GET http://127.0.0.1:8000/api/health/
+
+# Login
+POST http://127.0.0.1:8000/api/auth/login/
+Content-Type: application/json
+
+{
+  "username": "usuario",
+  "password": "contraseña"
+}
+
+### Refresh Token
+POST http://127.0.0.1:8000/api/auth/refresh/
+Content-Type: application/json
+
+{
+  "refresh": "your_refresh_token"
+}
 
 

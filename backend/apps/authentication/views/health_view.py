@@ -2,13 +2,15 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
-from django.db import connections
 from drf_spectacular.utils import extend_schema
+
+from apps.authentication.services.authentication_service import AuthenticationService
 
 
 class HealthCheckView(APIView):
     """
-    Health check endpoint para CI/CD y monitoreo
+    Health check endpoint para CI/CD y monitoreo.
+    Delega validación de conexiones a AuthenticationService.
     """
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -40,36 +42,10 @@ class HealthCheckView(APIView):
         auth=[]
     )
     def get(self, request):
-        try:
-            # Verificar conexión a base de datos default
-            connections['default'].ensure_connection()
-            db_default_status = "connected"
-        except Exception as e:
-            db_default_status = f"error: {str(e)}"
+        health_status = AuthenticationService.health_check()
 
-        try:
-            # Verificar conexión a base de datos azul
-            connections['azul'].ensure_connection()
-            db_azul_status = "connected"
-        except Exception as e:
-            db_azul_status = f"error: {str(e)}"
+        # Si el estado es unhealthy, retornar 503
+        if health_status["status"] == "unhealthy":
+            return Response(health_status, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-        # Si alguna BD falló, retornar 503
-        if "error" in db_default_status or "error" in db_azul_status:
-            return Response({
-                "status": "unhealthy",
-                "service": "app-cinco-backend",
-                "databases": {
-                    "default": db_default_status,
-                    "azul": db_azul_status
-                }
-            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-        return Response({
-            "status": "healthy",
-            "service": "app-cinco-backend",
-            "databases": {
-                "default": db_default_status,
-                "azul": db_azul_status
-            }
-        }, status=status.HTTP_200_OK)
+        return Response(health_status, status=status.HTTP_200_OK)
