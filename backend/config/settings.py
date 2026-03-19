@@ -147,6 +147,11 @@ REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
+LEGACY_JWT_SHARED_SECRET = os.environ.get('LEGACY_JWT_SHARED_SECRET', '')
+LEGACY_JWT_ISSUER = os.environ.get('LEGACY_JWT_ISSUER', 'legacy-app')
+LEGACY_JWT_AUDIENCE = os.environ.get('LEGACY_JWT_AUDIENCE', 'app-cinco')
+LEGACY_JWT_LEEWAY_SECONDS = int(os.environ.get('LEGACY_JWT_LEEWAY_SECONDS', '30'))
+
 SPECTACULAR_SETTINGS = {
     'TITLE': 'App Cinco API',
     'DESCRIPTION': 'Documentación de endpoints - App Cinco',

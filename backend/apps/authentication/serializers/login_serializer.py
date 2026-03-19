@@ -29,3 +29,14 @@ class LoginResponseSerializer(serializers.Serializer):
     refresh = serializers.CharField()
     user = serializers.DictField()
 
+
+class LegacyLoginResponseSerializer(serializers.Serializer):
+    access_token = serializers.CharField()
+    refresh_token = serializers.CharField()
+    user = serializers.DictField()
+    api_client = serializers.DictField()
+
+
+class LegacyExchangeRequestSerializer(serializers.Serializer):
+    legacy_token = serializers.CharField()
+

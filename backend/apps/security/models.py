@@ -46,6 +46,12 @@ class APIKey(models.Model):
     def __str__(self):
         return f"{self.name} ({self.prefix}...)"
 
+    @classmethod
+    def get_prefix_length(cls) -> int:
+        """Retorna la longitud de prefijo configurada en el modelo."""
+        field = cls._meta.get_field("prefix")
+        return field.max_length or 8
+
     @staticmethod
     def generate_key():
         """
@@ -54,7 +60,7 @@ class APIKey(models.Model):
         """
         random_part = secrets.token_urlsafe(32)
         key = f"cinco_{random_part}"
-        prefix = key[:13]  # "cinco_" + primeros 7 caracteres
+        prefix = key[:APIKey.get_prefix_length()]
         key_hash = hashlib.sha256(key.encode()).hexdigest()
         return key, prefix, key_hash
 

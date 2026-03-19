@@ -6,3 +6,8 @@ class RefreshTokenRequestSerializer(serializers.Serializer):
 class RefreshTokenResponseSerializer(serializers.Serializer):
     access = serializers.CharField()
     refresh = serializers.CharField()
+
+
+class LegacyRefreshTokenResponseSerializer(serializers.Serializer):
+    access_token = serializers.CharField()
+    refresh_token = serializers.CharField()

@@ -42,8 +42,14 @@ class ActividadViewSet(ModelViewSet):
             if params.get(key)
         }
 
+    @staticmethod
+    def _get_authenticated_user_id(user):
+        if user and getattr(user, 'is_authenticated', False):
+            return user.id
+        return None
+
     def get_queryset(self):
-        usuario_id = self.request.user.id if self.request.user.is_authenticated else None
+        usuario_id = self._get_authenticated_user_id(self.request.user)
         return ActividadService.listar(
             usuario_id=usuario_id,
             filtros=self._get_filtros(),
@@ -172,7 +178,7 @@ class ActividadViewSet(ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        actor_user_id = request.user.id if request.user.is_authenticated else None
+        actor_user_id = self._get_authenticated_user_id(request.user)
         actividad = ActividadService.crear(
             serializer.validated_data,
             actor_user_id=actor_user_id,

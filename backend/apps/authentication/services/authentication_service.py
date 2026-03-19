@@ -52,18 +52,23 @@ class AuthenticationService:
             )
             raise ValueError("Credenciales inválidas")
 
-        # Generar fingerprint del dispositivo para seguridad adicional
-        fingerprint = get_device_fingerprint(request)
+        result = AuthenticationService.issue_tokens_for_user(user, request)
 
-        # Generar tokens con fingerprint
-        access_token = generate_access_token(user, fingerprint)
-        refresh_token_obj = AuthenticationService._create_refresh_token(user)
-        refresh_token = refresh_token_obj.token
-
-        # Log de login exitoso
         security_logger.info(
             f"Successful login for user: {username} (ID: {user.id}) from IP: {request.META.get('REMOTE_ADDR')}"
         )
+
+        return result
+
+    @staticmethod
+    def issue_tokens_for_user(user, request):
+        """
+        Emite access y refresh token para un usuario ya validado.
+        """
+        fingerprint = get_device_fingerprint(request)
+        access_token = generate_access_token(user, fingerprint)
+        refresh_token_obj = AuthenticationService._create_refresh_token(user)
+        refresh_token = refresh_token_obj.token
 
         return {
             "user": {

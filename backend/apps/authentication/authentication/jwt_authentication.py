@@ -7,25 +7,27 @@ from apps.authentication.services import validate_device_fingerprint
 
 User = get_user_model()
 
+
 class JWTAuthentication(BaseAuthentication):
 
     keyword = "Bearer"
 
-    def authenticate(self, request):
-        # Prioridad: cookie > header (para soportar ambos durante transición)
-        token = request.COOKIES.get('access_token')
-        
+    def extract_authorization_token(self, request, header_name="Authorization"):
+        header = request.headers.get(header_name)
+
+        if not header:
+            return None
+
+        if not header.startswith(self.keyword):
+            raise AuthenticationFailed("Formato de Authorization inválido")
+
+        return header.replace(self.keyword, "", 1).strip()
+
+    def authenticate_credentials(self, token, request):
         if not token:
-            # Fallback a header Authorization (para endpoints que no usan cookies)
-            header = request.headers.get("Authorization")
-            
-            if not header:
-                return None  # permite endpoints públicos
+            raise AuthenticationFailed("Token inválido")
 
-            if not header.startswith(self.keyword):
-                raise AuthenticationFailed("Formato de Authorization inválido")
-
-            token = header.replace(self.keyword, "").strip()
+        token = token.strip()
 
         try:
             payload = jwt.decode(
@@ -55,3 +57,16 @@ class JWTAuthentication(BaseAuthentication):
             raise AuthenticationFailed("Usuario no válido")
 
         return (user, token)
+
+    def authenticate(self, request):
+        # Prioridad: cookie > header (para soportar ambos durante transición)
+        token = request.COOKIES.get('access_token')
+        
+        if not token:
+            # Fallback a header Authorization (para endpoints que no usan cookies)
+            token = self.extract_authorization_token(request)
+
+            if not token:
+                return None  # permite endpoints públicos
+
+        return self.authenticate_credentials(token, request)

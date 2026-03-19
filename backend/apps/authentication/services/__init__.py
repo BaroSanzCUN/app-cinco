@@ -1,4 +1,5 @@
 from .authentication_service import AuthenticationService
 from .jwt_service import generate_access_token
+from .legacy_identity_service import LegacyIdentityService
 from .token_service import rotate_refresh_token, generate_refresh_token
 from .fingerprint_service import get_device_fingerprint, validate_device_fingerprint
