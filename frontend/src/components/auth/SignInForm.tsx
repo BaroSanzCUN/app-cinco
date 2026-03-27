@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useState } from "react";
 import Form from "@/components/form/Form";
 import Label from "@/components/form/Label";
@@ -39,24 +39,27 @@ export default function SignInForm() {
           router.replace("/");
         },
         onError: (error) => {
-          console.error("Error al iniciar sesión:", {
-            type: error.type,
-            status: error.status,
-            message: error.message,
-            detail: error.detail,
-            errors: error.errors,
-          });
+          const normalizedError = {
+            type: error?.type ?? ApiErrorType.UNKNOWN,
+            status: error?.status ?? 0,
+            message: error?.message ?? "Error desconocido",
+            detail: error?.detail,
+            errors: error?.errors,
+          };
+
+          console.error("Error al iniciar sesion (raw):", error);
+          console.error("Error al iniciar sesion (normalizado):", normalizedError);
         },
       });
     } catch (error) {
       // El error ya fue manejado por useFormSubmit
-      // Solo lo capturamos aquí para prevenir errores no capturados
+      // Solo lo capturamos aquÃ­ para prevenir errores no capturados
     }
   };
 
   const handleForgotPassword = () => {
     // router.push("/forgot-password");
-    alert("Para reestablecer tu contraseña, por favor contacta a tu lider.");
+    alert("Para reestablecer tu contraseÃ±a, por favor contacta a tu lider.");
   };
 
   return (
@@ -103,7 +106,7 @@ export default function SignInForm() {
                 </div>
                 <div>
                   <Label htmlFor="password">
-                    Contraseña <span className="text-error-400">*</span>{" "}
+                    ContraseÃ±a <span className="text-error-400">*</span>{" "}
                   </Label>
                   <div className="relative">
                     <Controller
@@ -115,7 +118,7 @@ export default function SignInForm() {
                           id="password"
                           type={showPassword ? "text" : "password"}
                           autoComplete="current-password"
-                          placeholder="Ingresa tu contraseña"
+                          placeholder="Ingresa tu contraseÃ±a"
                           error={Boolean(errors.password)}
                           hint={errors.password?.message}
                         />
@@ -138,7 +141,7 @@ export default function SignInForm() {
                     onClick={() => handleForgotPassword()}
                     className="text-brand-500 hover:text-brand-600 dark:text-brand-400 cursor-pointer text-sm"
                   >
-                    ¿Olvidaste tu contraseña?
+                    Â¿Olvidaste tu contraseÃ±a?
                   </span>
                 </div>
                 <div>
@@ -148,7 +151,7 @@ export default function SignInForm() {
                     className="w-full"
                     disabled={isSubmitting || isLoading}
                   >
-                    Iniciar sesión
+                    Iniciar sesiÃ³n
                   </Button>
                 </div>
               </div>
@@ -178,3 +181,4 @@ export default function SignInForm() {
     </div>
   );
 }
+

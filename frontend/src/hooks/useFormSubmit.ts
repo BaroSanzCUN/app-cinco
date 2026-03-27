@@ -1,13 +1,7 @@
-// app/hooks/useFormSubmit.ts
+﻿// app/hooks/useFormSubmit.ts
 import api from "@/lib/api";
 import { useState } from "react";
-import {
-  classifyError,
-  createApiError,
-  getErrorMessage,
-  extractValidationErrors,
-  ApiErrorDetail,
-} from "@/lib/errorHandler";
+import { classifyError, ApiErrorDetail } from "@/lib/errorHandler";
 
 type SubmitOptions<T> = {
   endpoint: string;
@@ -36,16 +30,8 @@ export function useFormSubmit<T>() {
       options.onSuccess?.(response.data);
       return response.data;
     } catch (err: any) {
-      // Clasificar el error si no viene clasificado desde el interceptor
-      let errorDetail: ApiErrorDetail;
-
-      if (err && typeof err === "object" && err.type) {
-        // Ya está clasificado
-        errorDetail = err;
-      } else {
-        // Necesita ser clasificado
-        errorDetail = classifyError(err);
-      }
+      // Normalize error shape for UI and logs
+      const errorDetail: ApiErrorDetail = classifyError(err);
 
       setError(errorDetail);
       options.onError?.(errorDetail);
