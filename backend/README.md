@@ -106,7 +106,7 @@ cd "ruta\a\tu\repositorio\app-cinco\backend"
 Ejemplo (solo referencia local):
 
 ```powershell
-cd "c:\Users\User\Claro drive\DEV\Agentes_IA\Agente_Cinco\app-cinco\backend"
+cd "ruta\a\tu\repositorio\\app-cinco\backend"
 .\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8000
 ```
 
