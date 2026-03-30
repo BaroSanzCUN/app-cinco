@@ -6,18 +6,21 @@ import AppSidebar from "@/components/layout/AppSidebar";
 import Backdrop from "@/components/layout/Backdrop";
 import RequireAuth from "@/components/auth/RequireAuth";
 import React from "react";
+import { usePathname } from "next/navigation";
 
 type RootLayoutProps = {
   children: React.ReactNode;
 };
 
 export default function AdminLayout({ children }: RootLayoutProps) {
-  const { isExpanded, isHovered, isMobileOpen } = useSidebar();
+  const { isExpanded, isMobileOpen } = useSidebar();
+  const pathname = usePathname();
+  const isIADevView = pathname?.startsWith("/programacion/ia-dev") ?? false;
 
   // Dynamic class for main content margin based on sidebar state
   const mainContentMargin = isMobileOpen
     ? "ml-0"
-    : isExpanded || isHovered
+    : isExpanded
       ? "lg:ml-[290px]"
       : "lg:ml-[90px]";
 
@@ -34,7 +37,13 @@ export default function AdminLayout({ children }: RootLayoutProps) {
           {/* Header */}
           <AppHeader />
           {/* Page Content */}
-          <div className="mx-auto w-full min-w-0 max-w-(--breakpoint-2xl) overflow-x-hidden p-4 md:p-6">
+          <div
+            className={
+              isIADevView
+                ? "w-full min-w-0 max-w-none overflow-x-hidden p-0"
+                : "mx-auto w-full min-w-0 max-w-(--breakpoint-2xl) overflow-x-hidden p-4 md:p-6"
+            }
+          >
             {children}
           </div>
         </div>

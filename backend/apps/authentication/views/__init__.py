@@ -3,3 +3,4 @@ from .legacy_auth_view import LegacyLoginView, LegacyTokenExchangeView, LegacyRe
 from .refresh_view import RefreshTokenView
 from .logout_view import LogoutView
 from .csrf_view import CsrfTokenView
+from .session_view import SessionView

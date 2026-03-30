@@ -14,10 +14,18 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
-
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Cargar variables de entorno con prioridad:
+# 1) .env
+# 2) .env.local (sobrescribe .env si existe)
+env_file = BASE_DIR / ".env"
+env_local_file = BASE_DIR / ".env.local"
+if env_file.exists():
+    load_dotenv(env_file)
+if env_local_file.exists():
+    load_dotenv(env_local_file, override=True)
 
 
 # Quick-start development settings - unsuitable for production
@@ -101,6 +109,7 @@ INSTALLED_APPS = [
     'apps.security',
     'apps.operaciones',
     'apps.empleados',
+    'apps.ia_dev',
 ]
 
 MIDDLEWARE = [

@@ -1,13 +1,13 @@
+﻿
+# ðŸ“˜ GuÃ­a paso a paso: Entorno virtual y ejecuciÃ³n de Django
 
-# 📘 Guía paso a paso: Entorno virtual y ejecución de Django
-
-Este documento describe **cómo crear y usar un entorno virtual en Python**, **cómo ejecutar un proyecto Django**, y **los comandos básicos necesarios**, con **énfasis explícito en NO ejecutar migraciones**.
+Este documento describe **cÃ³mo crear y usar un entorno virtual en Python**, **cÃ³mo ejecutar un proyecto Django**, y **los comandos bÃ¡sicos necesarios**, con **Ã©nfasis explÃ­cito en NO ejecutar migraciones**.
 
 ---
 
-## 1️⃣ Requisitos previos
+## 1ï¸âƒ£ Requisitos previos
 
-Antes de comenzar, asegúrate de tener instalado:
+Antes de comenzar, asegÃºrate de tener instalado:
 
 - Python **3.11.9**
 - `pip` (incluido normalmente con Python)
@@ -22,45 +22,45 @@ pip --version
 
 ---
 
-## 2️⃣ Crear un entorno virtual (virtualenv)
+## 2ï¸âƒ£ Crear un entorno virtual (virtualenv)
 
 El entorno virtual permite aislar las dependencias del proyecto y evitar conflictos con otros proyectos o con el sistema.
 
-### 📁 Ubicación recomendada
+### ðŸ“ UbicaciÃ³n recomendada
 
-Ubícate en la **raíz del proyecto Django** (donde estará `manage.py`):
+UbÃ­cate en la **raÃ­z del proyecto Django** (donde estarÃ¡ `manage.py`):
 
 ```bash
 cd ruta/del/proyecto
 ```
 
-### ▶️ Crear el entorno virtual
+### â–¶ï¸ Crear el entorno virtual
 
 ```bash
 python -m venv env
 ```
 
-Esto creará una carpeta llamada `env/` que contendrá el entorno virtual.
+Esto crearÃ¡ una carpeta llamada `env/` que contendrÃ¡ el entorno virtual.
 
-> 📌 **Convención**: se recomienda usar el nombre `env` o `.env`
+> ðŸ“Œ **ConvenciÃ³n**: se recomienda usar el nombre `env` o `.env`
 
 ---
 
-## 3️⃣ Activar el entorno virtual
+## 3ï¸âƒ£ Activar el entorno virtual
 
-### 🪟 Windows (CMD / PowerShell)
+### ðŸªŸ Windows (CMD / PowerShell)
 
 ```bash
 env\Scripts\activate
 ```
 
-### 🐧 Linux / macOS
+### ðŸ§ Linux / macOS
 
 ```bash
 source env/bin/activate
 ```
 
-Si el entorno está activo verás algo como:
+Si el entorno estÃ¡ activo verÃ¡s algo como:
 
 ```text
 (env) ruta/del/proyecto
@@ -68,7 +68,7 @@ Si el entorno está activo verás algo como:
 
 ---
 
-## 4️⃣ Instalar dependencias del proyecto
+## 4ï¸âƒ£ Instalar dependencias del proyecto
 
 Si el proyecto tiene un archivo `requirements.txt`:
 
@@ -90,17 +90,39 @@ pip list
 
 ---
 
-## 5️⃣ Ejecutar el servidor Django
+## 5ï¸âƒ£ Ejecutar el servidor Django
 
-⚠️ **IMPORTANTE**: En este paso **NO se deben correr migraciones** (`migrate`, `makemigrations`).
+âš ï¸ **IMPORTANTE**: En este paso **NO se deben correr migraciones** (`migrate`, `makemigrations`).
 
-### ▶️ Ejecutar servidor de desarrollo
+### ▶️ Inicio rápido desde terminal de VS Code (recomendado)
+
+Usa una ruta **genérica** a la carpeta `backend` de tu clonado local:
+
+```powershell
+cd "ruta\a\tu\repositorio\app-cinco\backend"
+.\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8000
+```
+
+Ejemplo (solo referencia local):
+
+```powershell
+cd "c:\Users\User\Claro drive\DEV\Agentes_IA\Agente_Cinco\app-cinco\backend"
+.\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8000
+```
+
+Si ya activaste el entorno virtual, puedes usar:
+
+```powershell
+python manage.py runserver 127.0.0.1:8000
+```
+
+### â–¶ï¸ Ejecutar servidor de desarrollo
 
 ```bash
 python manage.py runserver
 ```
 
-Por defecto el servidor estará disponible en:
+Por defecto el servidor estarÃ¡ disponible en:
 
 ```
 http://127.0.0.1:8000/
@@ -114,9 +136,9 @@ python manage.py runserver 8080
 
 ---
 
-## 6️⃣ Comandos básicos de Django (uso seguro)
+## 6ï¸âƒ£ Comandos bÃ¡sicos de Django (uso seguro)
 
-### ✔️ Comandos permitidos
+### âœ”ï¸ Comandos permitidos
 
 ```bash
 python manage.py runserver
@@ -125,9 +147,9 @@ python manage.py showmigrations
 python manage.py createsuperuser  # SOLO si el proyecto lo permite
 ```
 
-### ❌ Comandos que **NO debes ejecutar**
+### âŒ Comandos que **NO debes ejecutar**
 
-🚫 **NO ejecutar bajo ninguna circunstancia**:
+ðŸš« **NO ejecutar bajo ninguna circunstancia**:
 
 ```bash
 python manage.py makemigrations
@@ -139,9 +161,9 @@ Estos comandos modifican la base de datos y **pueden romper un entorno existente
 
 ---
 
-## 7️⃣ Verificar configuración sin afectar la base de datos
+## 7ï¸âƒ£ Verificar configuraciÃ³n sin afectar la base de datos
 
-Para validar que el proyecto está bien configurado:
+Para validar que el proyecto estÃ¡ bien configurado:
 
 ```bash
 python manage.py check
@@ -155,7 +177,7 @@ python manage.py showmigrations
 
 ---
 
-## 8️⃣ Crear una nueva app
+## 8ï¸âƒ£ Crear una nueva app
 Cuando se necesite agregar nuevos modulos al proyecto, se puede crear una nueva app *(ten en cuenta que el nombre de la app debe ser unico dentro del proyecto y primero se debe crear la carpeta dentro de apps)*
 
 ```bash
@@ -165,7 +187,7 @@ python manage.py startapp nombre_de_la_app apps/nombre_de_la_carpeta
 
 ---
 
-## 8️⃣ Desactivar el entorno virtual
+## 8ï¸âƒ£ Desactivar el entorno virtual
 
 Cuando termines de trabajar:
 
@@ -175,13 +197,13 @@ deactivate
 
 ---
 
-## 9️⃣ Problemas comunes
+## 9ï¸âƒ£ Problemas comunes
 
-### ❌ `python` no reconocido
+### âŒ `python` no reconocido
 
 - Reinstala Python y marca **"Add Python to PATH"**
 
-### ❌ Error al activar el entorno en PowerShell
+### âŒ Error al activar el entorno en PowerShell
 
 Ejecuta como administrador:
 
@@ -189,9 +211,9 @@ Ejecuta como administrador:
 Set-ExecutionPolicy RemoteSigned
 ```
 
-### ❌ Django no encontrado
+### âŒ Django no encontrado
 
-Verifica que esté instalado en el entorno:
+Verifica que estÃ© instalado en el entorno:
 
 ```bash
 pip install django
@@ -199,16 +221,16 @@ pip install django
 
 ---
 
-## 🔒 Buenas prácticas
+## ðŸ”’ Buenas prÃ¡cticas
 
 - Nunca ejecutes Django sin activar el entorno virtual
-- No corras migraciones sin autorización
-- Mantén `env/` fuera del control de versiones (`.gitignore`)
+- No corras migraciones sin autorizaciÃ³n
+- MantÃ©n `env/` fuera del control de versiones (`.gitignore`)
 - Usa `requirements.txt` para controlar dependencias
 
 ---
 
-## ✅ Resumen rápido
+## âœ… Resumen rÃ¡pido
 
 ```bash
 # Crear entorno
@@ -230,5 +252,7 @@ deactivate
 
 ---
 
-📌 **Este README está pensado para entornos controlados donde la base de datos ya existe y NO debe ser alterada.**
+ðŸ“Œ **Este README estÃ¡ pensado para entornos controlados donde la base de datos ya existe y NO debe ser alterada.**
+
+
 
