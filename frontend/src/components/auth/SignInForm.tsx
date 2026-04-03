@@ -59,7 +59,7 @@ export default function SignInForm() {
 
   const handleForgotPassword = () => {
     // router.push("/forgot-password");
-    alert("Para reestablecer tu contraseÃ±a, por favor contacta a tu lider.");
+    alert("Para reestablecer tu contraseña, por favor contacta a tu lider.");
   };
 
   return (
@@ -106,7 +106,7 @@ export default function SignInForm() {
                 </div>
                 <div>
                   <Label htmlFor="password">
-                    ContraseÃ±a <span className="text-error-400">*</span>{" "}
+                    Contraseña <span className="text-error-400">*</span>{" "}
                   </Label>
                   <div className="relative">
                     <Controller
@@ -118,7 +118,7 @@ export default function SignInForm() {
                           id="password"
                           type={showPassword ? "text" : "password"}
                           autoComplete="current-password"
-                          placeholder="Ingresa tu contraseÃ±a"
+                          placeholder="Ingresa tu contraseña"
                           error={Boolean(errors.password)}
                           hint={errors.password?.message}
                         />
@@ -141,7 +141,7 @@ export default function SignInForm() {
                     onClick={() => handleForgotPassword()}
                     className="text-brand-500 hover:text-brand-600 dark:text-brand-400 cursor-pointer text-sm"
                   >
-                    Â¿Olvidaste tu contraseÃ±a?
+                    Â¿Olvidaste tu contraseña?
                   </span>
                 </div>
                 <div>
