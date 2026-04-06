@@ -31,20 +31,6 @@ def _shift_months(base: date, months: int) -> date:
     return date(year, month, 1)
 
 
-def _last_saturday(today: date) -> date:
-    # Python weekday: Monday=0 ... Sunday=6, Saturday=5
-    delta = (today.weekday() - 5) % 7
-    if delta == 0:
-        delta = 7
-    return today - timedelta(days=delta)
-
-
-def _most_recent_saturday(today: date) -> date:
-    # Includes today when it is Saturday.
-    delta = (today.weekday() - 5) % 7
-    return today - timedelta(days=delta)
-
-
 def _most_recent_weekday(today: date, target_weekday: int, *, include_today: bool) -> date:
     # Python weekday: Monday=0 ... Sunday=6
     delta = (today.weekday() - target_weekday) % 7
@@ -98,11 +84,18 @@ def resolve_period_from_text(text: str, today: date | None = None) -> dict:
         n = max(1, int(m_days.group(1)))
         return {"label": f"ultimos_{n}_dias", "start": now - timedelta(days=n - 1), "end": now}
 
-    if "mes pasado" in norm:
+    if "mes pasado" in norm or "mes anterior" in norm:
         first_current = now.replace(day=1)
         end = first_current - timedelta(days=1)
         start = end.replace(day=1)
-        return {"label": "mes_pasado", "start": start, "end": end}
+        return {"label": "mes_anterior", "start": start, "end": end}
+
+    if re.search(r"\bultim[oa]s?\s+mes\b", norm):
+        return {
+            "label": "ultimo_mes_30_dias",
+            "start": now - timedelta(days=29),
+            "end": now,
+        }
 
     if "este mes" in norm or "mes actual" in norm:
         return {"label": "mes_actual", "start": now.replace(day=1), "end": now}

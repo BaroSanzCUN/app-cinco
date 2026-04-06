@@ -1,1 +1,12 @@
-from .chat_view import IADevChatView, IADevHealthView, IADevMemoryResetView, IADevTicketView
+from .chat_view import (
+    IADevAttendancePeriodResolveView,
+    IADevAsyncJobView,
+    IADevChatView,
+    IADevHealthView,
+    IADevKnowledgeApproveView,
+    IADevKnowledgeProposalView,
+    IADevKnowledgeRejectView,
+    IADevMemoryResetView,
+    IADevObservabilitySummaryView,
+    IADevTicketView,
+)

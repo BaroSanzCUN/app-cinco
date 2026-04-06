@@ -1,258 +1,102 @@
-﻿
-# ðŸ“˜ GuÃ­a paso a paso: Entorno virtual y ejecuciÃ³n de Django
-
-Este documento describe **cÃ³mo crear y usar un entorno virtual en Python**, **cÃ³mo ejecutar un proyecto Django**, y **los comandos bÃ¡sicos necesarios**, con **Ã©nfasis explÃ­cito en NO ejecutar migraciones**.
-
----
-
-## 1ï¸âƒ£ Requisitos previos
-
-Antes de comenzar, asegÃºrate de tener instalado:
-
-- Python **3.11.9**
-- `pip` (incluido normalmente con Python)
-- Acceso a terminal (CMD, PowerShell, Git Bash o terminal Linux/macOS)
-
-Verifica versiones:
-
-```bash
-python --version
-pip --version
-```
-
----
-
-## 2ï¸âƒ£ Crear un entorno virtual (virtualenv)
-
-El entorno virtual permite aislar las dependencias del proyecto y evitar conflictos con otros proyectos o con el sistema.
-
-### ðŸ“ UbicaciÃ³n recomendada
-
-UbÃ­cate en la **raÃ­z del proyecto Django** (donde estarÃ¡ `manage.py`):
-
-```bash
-cd ruta/del/proyecto
-```
-
-### â–¶ï¸ Crear el entorno virtual
-
-```bash
-python -m venv env
-```
-
-Esto crearÃ¡ una carpeta llamada `env/` que contendrÃ¡ el entorno virtual.
-
-> ðŸ“Œ **ConvenciÃ³n**: se recomienda usar el nombre `env` o `.env`
-
----
-
-## 3ï¸âƒ£ Activar el entorno virtual
-
-### ðŸªŸ Windows (CMD / PowerShell)
-
-```bash
-env\Scripts\activate
-```
-
-### ðŸ§ Linux / macOS
-
-```bash
-source env/bin/activate
-```
-
-Si el entorno estÃ¡ activo verÃ¡s algo como:
-
-```text
-(env) ruta/del/proyecto
-```
-
----
-
-## 4ï¸âƒ£ Instalar dependencias del proyecto
-
-Si el proyecto tiene un archivo `requirements.txt`:
-
-```bash
-pip install -r requirements.txt
-```
-
-Actualizar `requirements.txt`
-```bash
-pip freeze > requirements.txt
-```
-
-
-Verifica dependencias instaladas:
-
-```bash
-pip list
-```
-
----
-
-## 5ï¸âƒ£ Ejecutar el servidor Django
-
-âš ï¸ **IMPORTANTE**: En este paso **NO se deben correr migraciones** (`migrate`, `makemigrations`).
-
-### ▶️ Inicio rápido desde terminal de VS Code (recomendado)
-
-Usa una ruta **genérica** a la carpeta `backend` de tu clonado local:
-
-```powershell
-cd "ruta\a\tu\repositorio\app-cinco\backend"
-.\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8000
-```
-
-Ejemplo (solo referencia local):
-
-```powershell
-cd "ruta\a\tu\repositorio\\app-cinco\backend"
-.\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8000
-```
-
-Si ya activaste el entorno virtual, puedes usar:
-
-```powershell
-python manage.py runserver 127.0.0.1:8000
-```
-
-### â–¶ï¸ Ejecutar servidor de desarrollo
-
-```bash
-python manage.py runserver
-```
-
-Por defecto el servidor estarÃ¡ disponible en:
-
-```
-http://127.0.0.1:8000/
-```
-
-Para usar otro puerto:
-
-```bash
-python manage.py runserver 8080
-```
-
----
-
-## 6ï¸âƒ£ Comandos bÃ¡sicos de Django (uso seguro)
-
-### âœ”ï¸ Comandos permitidos
-
-```bash
-python manage.py runserver
-python manage.py check
-python manage.py showmigrations
-python manage.py createsuperuser  # SOLO si el proyecto lo permite
-```
-
-### âŒ Comandos que **NO debes ejecutar**
-
-ðŸš« **NO ejecutar bajo ninguna circunstancia**:
-
-```bash
-python manage.py makemigrations
-python manage.py migrate
-python manage.py flush
-```
-
-Estos comandos modifican la base de datos y **pueden romper un entorno existente**, especialmente en proyectos heredados o compartidos.
-
----
-
-## 7ï¸âƒ£ Verificar configuraciÃ³n sin afectar la base de datos
-
-Para validar que el proyecto estÃ¡ bien configurado:
-
-```bash
-python manage.py check
-```
-
-Para ver migraciones existentes **sin ejecutarlas**:
-
-```bash
-python manage.py showmigrations
-```
-
----
-
-## 8ï¸âƒ£ Crear una nueva app
-Cuando se necesite agregar nuevos modulos al proyecto, se puede crear una nueva app *(ten en cuenta que el nombre de la app debe ser unico dentro del proyecto y primero se debe crear la carpeta dentro de apps)*
-
-```bash
-python manage.py startapp nombre_de_la_app apps/nombre_de_la_carpeta
-```
-
-
----
-
-## 8ï¸âƒ£ Desactivar el entorno virtual
-
-Cuando termines de trabajar:
-
-```bash
-deactivate
-```
-
----
-
-## 9ï¸âƒ£ Problemas comunes
-
-### âŒ `python` no reconocido
-
-- Reinstala Python y marca **"Add Python to PATH"**
-
-### âŒ Error al activar el entorno en PowerShell
-
-Ejecuta como administrador:
-
-```powershell
-Set-ExecutionPolicy RemoteSigned
-```
-
-### âŒ Django no encontrado
-
-Verifica que estÃ© instalado en el entorno:
-
-```bash
-pip install django
-```
-
----
-
-## ðŸ”’ Buenas prÃ¡cticas
-
-- Nunca ejecutes Django sin activar el entorno virtual
-- No corras migraciones sin autorizaciÃ³n
-- MantÃ©n `env/` fuera del control de versiones (`.gitignore`)
-- Usa `requirements.txt` para controlar dependencias
-
----
-
-## âœ… Resumen rÃ¡pido
-
-```bash
-# Crear entorno
-python -m venv env
-
-# Activar
-source env/bin/activate  # Linux/macOS
-env\Scripts\activate     # Windows
-
-# Instalar dependencias
-pip install -r requirements.txt
-
-# Ejecutar servidor
-python manage.py runserver
-
-# Salir
-deactivate
-```
-
----
-
-ðŸ“Œ **Este README estÃ¡ pensado para entornos controlados donde la base de datos ya existe y NO debe ser alterada.**
-
-
-
+﻿# Guia de Backend (Django)
+
+Este backend esta pensado para operar en entornos controlados, donde la base de datos ya existe y no debe alterarse sin aprobacion.
+
+## Requisitos
+
+- Python 3.11+
+- `pip`
+- Acceso a la base de datos configurada en `.env`
+
+## Configuracion rapida
+
+1. Ubicate en la carpeta `backend`.
+2. Crea entorno virtual:
+   - Windows: `python -m venv .venv`
+   - Linux/macOS: `python3 -m venv .venv`
+3. Activa el entorno:
+   - Windows: `.\.venv\Scripts\activate`
+   - Linux/macOS: `source .venv/bin/activate`
+4. Instala dependencias:
+   - `pip install -r requirements.txt`
+5. Crea tu `.env` desde `.env.example`.
+
+## Ejecucion
+
+- Servidor de desarrollo:
+  - `python manage.py runserver 127.0.0.1:8000`
+
+## Comandos permitidos
+
+- `python manage.py runserver`
+- `python manage.py check`
+- `python manage.py showmigrations`
+
+## Comandos restringidos
+
+No ejecutes estos comandos sin autorizacion explicita:
+
+- `python manage.py makemigrations`
+- `python manage.py migrate`
+- `python manage.py flush`
+
+## IA DEV: gobierno de conocimiento
+
+Se agrego un nucleo de gobierno/autoevolucion para propuestas de reglas de negocio en `ai_dictionary.dd_reglas`.
+
+- Modo de gobierno: `IA_DEV_KNOWLEDGE_GOVERNANCE_MODE`
+  - `ceo`: requiere aprobacion con clave.
+  - `auto`: aplica automaticamente.
+  - `directo`: aplica automaticamente (sin paso manual).
+- Clave de aprobacion CEO: `IA_DEV_CEO_AUTH_KEY`
+
+## IA DEV: estado distribuido, cola y observabilidad
+
+- Memoria de sesion y tickets persistidos en DB.
+- Cache opcional con Redis (desactivada por defecto):
+  - `IA_DEV_USE_REDIS`
+  - `IA_DEV_REDIS_URL`
+  - `IA_DEV_REDIS_PREFIX`
+  - `IA_DEV_REDIS_TTL_SECONDS`
+- Cola asincrona DB-backed para aprobaciones:
+  - `IA_DEV_ASYNC_MODE=sync|db_queue`
+  - Worker: `python manage.py process_ia_dev_jobs --limit 25`
+- Observabilidad operativa:
+  - Latencia por tool
+  - Latencia por corrida del orquestador
+  - Tokens/costo estimado OpenAI
+  - Endpoint resumen: `GET /ia-dev/observability/summary/`
+- Resolucion de periodos para asistencia:
+  - `IA_DEV_USE_OPENAI_PERIOD=1` permite que GPT proponga fechas.
+  - `IA_DEV_PERIOD_MODEL` define el modelo para extraer rango.
+  - Semantica fija en lenguaje natural:
+    - "ultimo mes" => ultimos 30 dias moviles.
+    - "mes anterior/mes pasado" => mes calendario anterior.
+  - Filtro de personal por estado en consultas de asistencia:
+    - all (default), activos, inactivos.
+    - El parser lo detecta en texto del usuario (por ejemplo: \"solo activos\").
+  - Mapeo de tablas por diccionario:
+    - `IA_DEV_USE_DD_TABLAS_MAPPING=1` usa `ai_dictionary.dd_tablas` para resolver schema+tabla reales.
+    - Esto ayuda cuando `IA_DEV_PERSONAL_TABLE` o `IA_DEV_ATTENDANCE_TABLE` no coinciden con el schema real.
+
+## Endpoints IA DEV
+
+- `POST /ia-dev/chat/`
+- `POST /ia-dev/attendance/period/resolve/`
+- `POST /ia-dev/memory/reset/`
+- `GET /ia-dev/health/`
+- `POST /ia-dev/tickets/`
+- `POST /ia-dev/knowledge/proposals/`
+- `GET /ia-dev/knowledge/proposals/`
+- `POST /ia-dev/knowledge/proposals/approve/`
+- `POST /ia-dev/knowledge/proposals/reject/`
+- `GET /ia-dev/async/jobs/?job_id=...`
+- `GET /ia-dev/observability/summary/`
+
+## Estandar de texto y codificacion
+
+- Todos los archivos de texto deben guardarse en UTF-8.
+- Mantener textos en espanol latino.
+- Evita caracteres corruptos (mojibake) en tildes, enes y simbolos.
+- Validacion sugerida:
+  - `powershell -ExecutionPolicy Bypass -File ..\scripts\check_mojibake.ps1`

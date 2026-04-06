@@ -34,8 +34,44 @@ class IntentClassifierService:
         msg = self._normalize_text(message)
         return "injustific" in msg or "sin justificar" in msg
 
+    def _contains_missing_personal_focus(self, message: str) -> bool:
+        msg = self._normalize_text(message)
+        return any(
+            token in msg
+            for token in (
+                "sin homologar",
+                "sin personal",
+                "sin nombre",
+                "faltan datos de personal",
+                "cedulas sin homologar",
+            )
+        )
+
+    @staticmethod
+    def _is_recurrence_request(msg: str) -> bool:
+        if "reincid" not in msg:
+            return False
+        return bool(
+            re.search(
+                r"\b(semana|dias?|mes|anio|ultimo|ultimos|ultima|ultimas|anterior|pasad[oa])\b",
+                msg,
+            )
+        )
+
     def _apply_deterministic_overrides(self, classification: dict, message: str) -> dict:
         result = dict(classification)
+        if self._contains_missing_personal_focus(message):
+            result.update(
+                {
+                    "domain": "attendance",
+                    "intent": "attendance_query",
+                    "selected_agent": "attendance_agent",
+                    "needs_database": True,
+                    "focus": "missing_personal",
+                    "output_mode": "table",
+                }
+            )
+            return result
         if self._contains_unjustified_focus(message):
             result.update(
                 {
@@ -107,8 +143,9 @@ class IntentClassifierService:
                         "Classify user intent for an enterprise multi-agent system. "
                         "Return strict JSON with keys: intent, domain, selected_agent, needs_database, "
                         "output_mode, needs_personal_join, focus, confidence. "
+                        "intent can also be knowledge_change_request when user asks to create/update business rules. "
                         "output_mode must be one of: summary, table, list. "
-                        "focus must be one of: all, unjustified. "
+                        "focus must be one of: all, unjustified, missing_personal. "
                         "Domains: rrhh, attendance, transport, operations, viatics, payroll, audit, general. "
                         "Agents: rrhh_agent, attendance_agent, transport_agent, operations_agent, "
                         "viatics_agent, payroll_agent, audit_agent, analista_agent."
@@ -150,14 +187,41 @@ class IntentClassifierService:
                 "confidence": 0.8,
             }
 
+        if any(
+            token in msg
+            for token in (
+                "crear regla",
+                "nueva regla",
+                "agregar regla",
+                "actualizar regla",
+                "modificar regla",
+                "ajustar regla",
+                "regla de negocio",
+                "gobierno de reglas",
+            )
+        ):
+            return {
+                "intent": "knowledge_change_request",
+                "domain": "general",
+                "selected_agent": "analista_agent",
+                "needs_database": True,
+                "output_mode": "summary",
+                "needs_personal_join": False,
+                "focus": "all",
+                "confidence": 0.8,
+            }
+
         if any(token in msg for token in ("tabla", "lista", "detalle", "mostrar")):
             output_mode = "table" if "tabla" in msg else "list"
         if any(token in msg for token in ("personal", "empleado", "supervisor", "cargo", "area", "carpeta", "nombre", "apellido")):
             needs_personal_join = True
         if any(token in msg for token in ("injustific", "sin justificar")):
             focus = "unjustified"
+        if self._contains_missing_personal_focus(message):
+            focus = "missing_personal"
+            output_mode = "table"
 
-        if "reincid" in msg and any(token in msg for token in ("semana", "dias", "ultima")):
+        if self._is_recurrence_request(msg):
             return {
                 "intent": "attendance_recurrence",
                 "domain": "attendance",
@@ -213,7 +277,28 @@ class IntentClassifierService:
 
     def _hard_rule_overrides(self, message: str) -> dict | None:
         msg = self._normalize_text(message)
-        if "reincid" in msg and any(token in msg for token in ("semana", "dias", "ultima")):
+        if any(
+            token in msg
+            for token in (
+                "crear regla",
+                "nueva regla",
+                "agregar regla",
+                "actualizar regla",
+                "modificar regla",
+                "ajustar regla",
+            )
+        ):
+            return {
+                "intent": "knowledge_change_request",
+                "domain": "general",
+                "selected_agent": "analista_agent",
+                "needs_database": True,
+                "output_mode": "summary",
+                "needs_personal_join": False,
+                "focus": "all",
+            }
+
+        if self._is_recurrence_request(msg):
             return {
                 "intent": "attendance_recurrence",
                 "domain": "attendance",
@@ -238,3 +323,4 @@ class IntentClassifierService:
             "general": "analista_agent",
         }
         return mapping.get((domain or "").strip().lower(), "analista_agent")
+
