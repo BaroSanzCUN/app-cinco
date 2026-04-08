@@ -1,7 +1,9 @@
 from .login_serializer import (
     LoginSerializer,
     LoginRequestSerializer,
+    AuthUserSerializer,
     LoginResponseSerializer,
+    SessionResponseSerializer,
     LegacyExchangeRequestSerializer,
     LegacyLoginResponseSerializer,
 )

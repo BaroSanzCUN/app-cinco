@@ -7,6 +7,7 @@ from apps.authentication.views import (
     LegacyRefreshTokenView,
     LogoutView,
     CsrfTokenView,
+    SessionView,
 )
 from apps.authentication.views.health_view import HealthCheckView
 
@@ -18,5 +19,6 @@ urlpatterns = [
     path("legacy/refresh/", LegacyRefreshTokenView.as_view(), name="legacy-refresh"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("csrf/", CsrfTokenView.as_view(), name="csrf"),
+    path("session/", SessionView.as_view(), name="session"),
     path("health/", HealthCheckView.as_view(), name="health"),
 ]

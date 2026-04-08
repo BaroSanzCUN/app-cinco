@@ -71,16 +71,23 @@ class AuthenticationService:
         refresh_token = refresh_token_obj.token
 
         return {
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "nombre": user.first_name,
-                "apellido": user.last_name,
-                "email": user.email,
-                "is_superuser": user.is_superuser,
-            },
+            "user": AuthenticationService.serialize_user(user),
             "access_token": access_token,
             "refresh_token": refresh_token,
+        }
+
+    @staticmethod
+    def serialize_user(user):
+        """
+        Serializa datos públicos del usuario autenticado.
+        """
+        return {
+            "id": user.id,
+            "username": user.username,
+            "nombre": user.first_name,
+            "apellido": user.last_name,
+            "email": user.email,
+            "is_superuser": user.is_superuser,
         }
 
     @staticmethod

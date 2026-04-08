@@ -1,37 +1,28 @@
-// app/lib/api.ts
 import axios from "axios";
 import { clearUser } from "@/utils/storage";
 import { classifyError, ApiErrorType } from "@/lib/errorHandler";
-
-const getDefaultApiUrl = (): string => {
-  if (typeof window !== "undefined") {
-    return `${window.location.protocol}//${window.location.hostname}:8000/`;
-  }
-  return "http://localhost:8000/";
-};
-
-const baseURL = process.env.NEXT_PUBLIC_API_URL || getDefaultApiUrl();
+import { API_BASE_URL } from "@/lib/apiConfig";
 
 const api = axios.create({
-  baseURL,
-  timeout: 10000, // 10 segundos
-  withCredentials: true, // Envía cookies automáticamente
+  baseURL: API_BASE_URL,
+  timeout: 10000,
+  withCredentials: true,
   headers: {
     "Content-Type": "application/json",
   },
 });
 
 const refreshApi = axios.create({
-  baseURL,
+  baseURL: API_BASE_URL,
   timeout: 10000,
-  withCredentials: true, // Envía cookies automáticamente
+  withCredentials: true,
   headers: {
     "Content-Type": "application/json",
   },
 });
 
 const csrfApi = axios.create({
-  baseURL,
+  baseURL: API_BASE_URL,
   timeout: 10000,
   withCredentials: true,
   headers: {
@@ -53,7 +44,6 @@ const processQueue = (error: any) => {
       return;
     }
 
-    // Ya no necesitamos agregar token manualmente, se envía en cookies
     resolve(api(config));
   });
 
@@ -70,6 +60,7 @@ let csrfPromise: Promise<void> | null = null;
 
 const ensureCsrfToken = async (): Promise<void> => {
   if (getCookieValue("csrftoken")) return;
+
   if (!csrfPromise) {
     csrfPromise = csrfApi
       .get("/auth/csrf/")
@@ -78,36 +69,30 @@ const ensureCsrfToken = async (): Promise<void> => {
         csrfPromise = null;
       });
   }
+
   await csrfPromise;
 };
 
-/**
- * Normaliza URLs para que siempre terminen con /
- * Ej: /auth/login -> /auth/login/
- */
 const normalizeUrl = (url: string): string => {
   if (!url) return url;
 
-  // No agregar / si contiene parámetros query
   if (url.includes("?")) {
     const [path, query] = url.split("?");
-    return `${path.endsWith("/") ? path : path + "/"}?${query}`;
+    return `${path.endsWith("/") ? path : `${path}/`}?${query}`;
   }
 
-  return url.endsWith("/") ? url : url + "/";
+  return url.endsWith("/") ? url : `${url}/`;
 };
 
-// Interceptor para normalizar URLs
 api.interceptors.request.use(
   async (config) => {
-    // Normalizar URL
     if (config.url) {
       config.url = normalizeUrl(config.url);
     }
 
-    // Las cookies se envían automáticamente con withCredentials: true
     const method = (config.method || "get").toLowerCase();
     const needsCsrf = ["post", "put", "patch", "delete"].includes(method);
+
     if (needsCsrf) {
       await ensureCsrfToken();
       const csrfToken = getCookieValue("csrftoken");
@@ -122,7 +107,6 @@ api.interceptors.request.use(
   (error) => Promise.reject(error),
 );
 
-// Interceptor para manejar errores globalmente
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -147,19 +131,13 @@ api.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        // Llamar al endpoint de refresh - las cookies se envían automáticamente
         await refreshApi.post("/auth/refresh/");
-
-        // Las nuevas cookies se establecen automáticamente en la respuesta
         processQueue(null);
-
-        // Reintentar la petición original
         return api(original);
       } catch (refreshError: any) {
-        // Clasificar el error del refresh
         const classifiedRefreshError = classifyError(refreshError);
         processQueue(classifiedRefreshError);
-        clearUser(); // Limpiar datos del usuario
+        clearUser();
         if (
           typeof window !== "undefined" &&
           !window.location.pathname.includes("/login")
