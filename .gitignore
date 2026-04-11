@@ -106,5 +106,8 @@ docker-compose.override.yml
 
 tmp/
 shared/
+# Permitir carpeta shared del dominio IA DEV (arquitectura DDD incremental)
+!backend/apps/ia_dev/domains/shared/
+!backend/apps/ia_dev/domains/shared/__init__.py
 backups/
 backend/.venv/

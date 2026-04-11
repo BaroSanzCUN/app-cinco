@@ -2,6 +2,7 @@
 import logging
 import os
 import re
+import threading
 import time
 import unicodedata
 from datetime import date, datetime, timedelta
@@ -52,6 +53,19 @@ class IADevOrchestratorService:
             self.general_model,
         )
         self._last_openai_usage: dict | None = None
+        self._delegate_state = threading.local()
+        self._delegate_state.skip = False
+        self._chat_application_service = None
+        try:
+            from apps.ia_dev.application.orchestration.chat_application_service import (
+                ChatApplicationService,
+            )
+
+            self._chat_application_service = ChatApplicationService()
+        except Exception:
+            logger.exception(
+                "No se pudo inicializar ChatApplicationService, se mantiene orchestrator legacy."
+            )
 
     @staticmethod
     def _get_openai_api_key() -> str:
@@ -60,6 +74,20 @@ class IADevOrchestratorService:
         ).strip()
 
     def run(self, message: str, session_id: str | None = None, reset_memory: bool = False) -> dict:
+        if self._chat_application_service is not None and not self._is_delegate_skipped():
+            try:
+                return self._chat_application_service.run(
+                    message=message,
+                    session_id=session_id,
+                    reset_memory=reset_memory,
+                    legacy_runner=self.run_legacy,
+                    observability=self.observability,
+                )
+            except Exception:
+                logger.exception(
+                    "Fallo delegado ChatApplicationService, fallback a orquestador legacy."
+                )
+
         started_at = time.perf_counter()
         tool_latencies_ms: dict[str, int] = {}
         self._last_openai_usage = None
@@ -1107,6 +1135,29 @@ class IADevOrchestratorService:
                 needs_database=needs_database,
             ),
         }
+
+    def run_legacy(
+        self,
+        message: str,
+        session_id: str | None = None,
+        reset_memory: bool = False,
+    ) -> dict:
+        previous = self._is_delegate_skipped()
+        self._set_delegate_skipped(True)
+        try:
+            return self.run(
+                message=message,
+                session_id=session_id,
+                reset_memory=reset_memory,
+            )
+        finally:
+            self._set_delegate_skipped(previous)
+
+    def _is_delegate_skipped(self) -> bool:
+        return bool(getattr(self._delegate_state, "skip", False))
+
+    def _set_delegate_skipped(self, value: bool) -> None:
+        self._delegate_state.skip = bool(value)
 
     def reset_memory(self, session_id: str) -> dict:
         sid = (session_id or "").strip()
