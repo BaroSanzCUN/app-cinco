@@ -1,0 +1,12 @@
+# Normalize text files in the repository (store as LF), letting each OS check out
+# with its preferred line endings (e.g., CRLF on Windows when core.autocrlf=true).
+* text=auto
+
+# Treat common binaries as binary (no end-of-line normalization).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+
