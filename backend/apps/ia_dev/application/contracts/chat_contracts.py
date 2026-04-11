@@ -31,6 +31,8 @@ CHAT_RESPONSE_SNAPSHOT_V1: dict[str, Any] = {
         },
     },
     "actions": [],
+    "memory_candidates": [],
+    "pending_proposals": [],
     "data_sources": {},
     "trace": [],
     "memory": {
@@ -101,6 +103,10 @@ def ensure_chat_response_contract(payload: dict[str, Any] | None) -> dict[str, A
 
     if not isinstance(response.get("actions"), list):
         response["actions"] = []
+    if not isinstance(response.get("memory_candidates"), list):
+        response["memory_candidates"] = []
+    if not isinstance(response.get("pending_proposals"), list):
+        response["pending_proposals"] = []
     if not isinstance(response.get("data_sources"), dict):
         response["data_sources"] = {}
     if not isinstance(response.get("trace"), list):

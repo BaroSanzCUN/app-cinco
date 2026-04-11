@@ -28,6 +28,7 @@ import {
   SkipForward,
 } from "lucide-react";
 import IADevFlowCanvas from "./flow/IADevFlowCanvas";
+import IADevMemoryPanel from "./components/IADevMemoryPanel";
 import {
   loadWorkspaceLayout,
   saveWorkspaceLayout,
@@ -38,6 +39,8 @@ import {
   resetIADevMemory,
   type IADevAction,
   type IADevChatResponse,
+  type IADevMemoryCandidate,
+  type IADevMemoryProposal,
   sendIADevMessage,
 } from "@/services/ia-dev.service";
 
@@ -113,6 +116,8 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   actions?: IADevAction[];
+  memoryCandidates?: IADevMemoryCandidate[];
+  pendingProposals?: IADevMemoryProposal[];
 };
 
 type ProcessRun = {
@@ -156,6 +161,15 @@ const IADevWorkspace = () => {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [chatStatus, setChatStatus] = useState("");
+  const [latestMemoryCandidates, setLatestMemoryCandidates] = useState<
+    IADevMemoryCandidate[]
+  >([]);
+  const [latestPendingProposals, setLatestPendingProposals] = useState<
+    IADevMemoryProposal[]
+  >([]);
+  const [latestMemoryActions, setLatestMemoryActions] = useState<IADevAction[]>(
+    [],
+  );
   const [activeAgent, setActiveAgent] = useState<string>("analista_agent");
   const [activeArea, setActiveArea] = useState<string>("HHGG");
   const [activeNodeIds, setActiveNodeIds] = useState<string[]>(BASE_ACTIVE_NODE_IDS);
@@ -501,8 +515,13 @@ const IADevWorkspace = () => {
           role: "assistant",
           content: assistantMessage,
           actions: result.actions ?? [],
+          memoryCandidates: result.memory_candidates ?? [],
+          pendingProposals: result.pending_proposals ?? [],
         },
       ]);
+      setLatestMemoryCandidates(result.memory_candidates ?? []);
+      setLatestPendingProposals(result.pending_proposals ?? []);
+      setLatestMemoryActions(result.actions ?? []);
 
       const channels = Array.from(
         new Set([
@@ -591,7 +610,12 @@ const IADevWorkspace = () => {
   };
 
   const handleActionClick = async (action: IADevAction) => {
-    if (isSubmitting || action.type !== "create_ticket") return;
+    if (isSubmitting) return;
+    if (action.type === "memory_review") {
+      setChatStatus("Panel de memoria abierto para revisar propuestas y auditoria.");
+      return;
+    }
+    if (action.type !== "create_ticket") return;
 
     const title = action.payload?.title?.trim() || "Solicitud desde IA DEV";
     const description =
@@ -1111,6 +1135,14 @@ const IADevWorkspace = () => {
                 </div>
               )}
 
+              <IADevMemoryPanel
+                latestCandidates={latestMemoryCandidates}
+                latestPendingProposals={latestPendingProposals}
+                latestActions={latestMemoryActions}
+                isBusy={isSubmitting}
+                onStatusChange={setChatStatus}
+              />
+
               <div className="flex flex-1 flex-col gap-3 overflow-auto p-3">
                 {messages.map((message, index) => (
                   <div
@@ -1122,6 +1154,31 @@ const IADevWorkspace = () => {
                     }`}
                   >
                     {message.content}
+                    {message.role === "assistant" &&
+                      message.pendingProposals &&
+                      message.pendingProposals.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {message.pendingProposals.slice(0, 5).map((proposal) => (
+                            <span
+                              key={proposal.proposal_id}
+                              className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+                              title={`${proposal.proposal_id} · ${proposal.status}`}
+                            >
+                              {proposal.status}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    {message.role === "assistant" &&
+                      message.memoryCandidates &&
+                      message.memoryCandidates.length > 0 && (
+                        <div className="mt-2 rounded-md border border-gray-200 bg-white/70 px-2 py-1 text-[11px] text-gray-600 dark:border-gray-700 dark:bg-gray-900/70 dark:text-gray-300">
+                          Candidatos de memoria detectados:{" "}
+                          {message.memoryCandidates.length}. Usa el panel
+                          &quot;Memoria y Workflow&quot; para guardar preferencia, proponer
+                          regla o ignorar.
+                        </div>
+                      )}
                     {message.role === "assistant" &&
                       message.actions &&
                       message.actions.length > 0 && (

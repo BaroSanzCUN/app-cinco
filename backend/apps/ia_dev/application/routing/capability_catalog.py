@@ -52,7 +52,7 @@ class CapabilityCatalog:
                 description="Resolver periodo para consultas de asistencia.",
                 legacy_intents=("attendance_period_probe",),
                 policy_tags=("contains_personal_data",),
-                rollout_flag="IA_DEV_CAP_ATTENDANCE_PERIOD_RESOLVE_V1",
+                rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED",
             ),
             CapabilityDefinition(
                 capability_id="attendance.unjustified.summary.v1",
@@ -61,7 +61,7 @@ class CapabilityCatalog:
                 description="Resumen de ausentismos injustificados.",
                 legacy_intents=("attendance_query",),
                 policy_tags=("contains_personal_data",),
-                rollout_flag="IA_DEV_CAP_ATTENDANCE_SUMMARY_V1",
+                rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_SUMMARY_ENABLED",
             ),
             CapabilityDefinition(
                 capability_id="attendance.unjustified.table.v1",
@@ -70,7 +70,7 @@ class CapabilityCatalog:
                 description="Tabla de ausentismos injustificados sin join de personal.",
                 legacy_intents=("attendance_query",),
                 policy_tags=("contains_personal_data",),
-                rollout_flag="IA_DEV_CAP_ATTENDANCE_TABLE_V1",
+                rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_TABLE_ENABLED",
             ),
             CapabilityDefinition(
                 capability_id="attendance.unjustified.table_with_personal.v1",
@@ -79,7 +79,7 @@ class CapabilityCatalog:
                 description="Tabla de ausentismos injustificados con personal.",
                 legacy_intents=("attendance_query",),
                 policy_tags=("contains_personal_data",),
-                rollout_flag="IA_DEV_CAP_ATTENDANCE_TABLE_WITH_PERSONAL_V1",
+                rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_TABLE_ENABLED",
             ),
             CapabilityDefinition(
                 capability_id="attendance.recurrence.grouped.v1",
@@ -88,7 +88,7 @@ class CapabilityCatalog:
                 description="Reincidencia agrupada por empleado.",
                 legacy_intents=("attendance_recurrence",),
                 policy_tags=("contains_personal_data",),
-                rollout_flag="IA_DEV_CAP_ATTENDANCE_RECURRENCE_GROUPED_V1",
+                rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_RECURRENCE_ENABLED",
             ),
             CapabilityDefinition(
                 capability_id="attendance.recurrence.itemized.v1",
@@ -97,7 +97,7 @@ class CapabilityCatalog:
                 description="Reincidencia en vista dia a dia.",
                 legacy_intents=("attendance_recurrence",),
                 policy_tags=("contains_personal_data",),
-                rollout_flag="IA_DEV_CAP_ATTENDANCE_RECURRENCE_ITEMIZED_V1",
+                rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_RECURRENCE_ENABLED",
             ),
             CapabilityDefinition(
                 capability_id="knowledge.proposal.create.v1",

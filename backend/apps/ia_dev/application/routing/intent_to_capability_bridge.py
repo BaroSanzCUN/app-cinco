@@ -10,6 +10,33 @@ class IntentToCapabilityBridge:
         "fecha por fecha",
         "registro por registro",
         "detalle por dia",
+        "itemizado",
+    )
+    _GROUPED_TOKENS = (
+        "agrupado",
+        "resumen por empleado",
+        "por empleado",
+    )
+    _SUMMARY_TOKENS = (
+        "resumen",
+        "kpi",
+        "totales",
+        "total de",
+    )
+    _TABLE_TOKENS = (
+        "tabla",
+        "lista",
+        "detalle",
+        "mostrar",
+    )
+    _PERSONAL_TOKENS = (
+        "empleado",
+        "personal",
+        "supervisor",
+        "area",
+        "cargo",
+        "nombre",
+        "apellido",
     )
 
     @staticmethod
@@ -28,6 +55,7 @@ class IntentToCapabilityBridge:
         output_mode = str(classification.get("output_mode") or "summary")
         needs_database = bool(classification.get("needs_database"))
         used_tools = list(classification.get("used_tools") or [])
+        needs_personal_join = bool(classification.get("needs_personal_join"))
 
         capability_id = "legacy.passthrough.v1"
         reason = "fallback_to_legacy"
@@ -39,21 +67,44 @@ class IntentToCapabilityBridge:
             capability_id = "knowledge.proposal.create.v1"
             reason = "legacy_intent_match_knowledge_change_request"
         elif domain == "attendance":
-            if "get_attendance_recurrent_unjustified_with_supervisor" in used_tools or intent == "attendance_recurrence":
+            wants_itemized = any(token in msg for token in self._ITEMIZED_TOKENS)
+            wants_grouped = any(token in msg for token in self._GROUPED_TOKENS)
+            wants_summary = any(token in msg for token in self._SUMMARY_TOKENS)
+            wants_table = any(token in msg for token in self._TABLE_TOKENS)
+            wants_personal_join = needs_personal_join or any(
+                token in msg for token in self._PERSONAL_TOKENS
+            )
+            is_recurrence = (
+                "get_attendance_recurrent_unjustified_with_supervisor" in used_tools
+                or intent == "attendance_recurrence"
+                or "reincid" in msg
+            )
+
+            if is_recurrence:
                 wants_itemized = (
-                    any(token in msg for token in self._ITEMIZED_TOKENS)
+                    wants_itemized
                     or "get_attendance_unjustified_with_personal" in used_tools
                 )
-                capability_id = (
-                    "attendance.recurrence.itemized.v1"
-                    if wants_itemized
-                    else "attendance.recurrence.grouped.v1"
-                )
-                reason = "attendance_recurrence_detected"
-            elif "get_attendance_summary" in used_tools or output_mode == "summary":
+                if wants_grouped and not wants_itemized:
+                    capability_id = "attendance.recurrence.grouped.v1"
+                    reason = "attendance_recurrence_grouped_detected"
+                else:
+                    capability_id = (
+                        "attendance.recurrence.itemized.v1"
+                        if wants_itemized
+                        else "attendance.recurrence.grouped.v1"
+                    )
+                    reason = "attendance_recurrence_detected"
+            elif "get_attendance_summary" in used_tools or (
+                output_mode == "summary" and not wants_table
+            ) or (wants_summary and not wants_table):
                 capability_id = "attendance.unjustified.summary.v1"
                 reason = "attendance_summary_detected"
-            elif "get_attendance_unjustified_with_personal" in used_tools or "get_attendance_detail_with_personal" in used_tools:
+            elif (
+                "get_attendance_unjustified_with_personal" in used_tools
+                or "get_attendance_detail_with_personal" in used_tools
+                or wants_personal_join
+            ):
                 capability_id = "attendance.unjustified.table_with_personal.v1"
                 reason = "attendance_table_with_personal_detected"
             else:

@@ -18,6 +18,19 @@ async_job_service = AsyncJobService()
 observability_service = ObservabilityService()
 
 
+def _resolve_user_key(request) -> str | None:
+    user = getattr(request, "user", None)
+    if not user or not getattr(user, "is_authenticated", False):
+        return None
+    user_id = getattr(user, "id", None)
+    username = getattr(user, "username", None)
+    if user_id is not None:
+        return f"user:{user_id}"
+    if username:
+        return f"user:{username}"
+    return None
+
+
 class IADevChatView(APIView):
     permission_classes = [IsAuthenticatedUser]
 
@@ -36,6 +49,7 @@ class IADevChatView(APIView):
             message=message,
             session_id=session_id,
             reset_memory=reset_memory,
+            actor_user_key=_resolve_user_key(request),
         )
         return Response(result, status=status.HTTP_200_OK)
 

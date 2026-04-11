@@ -12,11 +12,26 @@ export type IADevAction = {
   id: string;
   type: "create_ticket" | string;
   label: string;
-  payload?: {
+  payload?: Record<string, unknown> & {
     category?: string;
     title?: string;
     description?: string;
   };
+};
+
+export type IADevMemoryCandidate = {
+  scope: string;
+  candidate_key: string;
+  candidate_value?: unknown;
+  reason?: string;
+  sensitivity?: string;
+  decision?: string;
+  decision_reason?: string;
+  proposal_id?: string | null;
+  result_ok?: boolean;
+  idempotent?: boolean;
+  auto_applied?: boolean;
+  error?: string;
 };
 
 export type IADevChatResponse = {
@@ -65,6 +80,8 @@ export type IADevChatResponse = {
     };
   };
   actions?: IADevAction[];
+  memory_candidates?: IADevMemoryCandidate[];
+  pending_proposals?: IADevMemoryProposal[];
   trace: Array<{
     phase: string;
     status: string;
@@ -390,5 +407,150 @@ export const resolveIADevAttendancePeriod = async (payload: {
     "/ia-dev/attendance/period/resolve/",
     payload,
   );
+  return response.data;
+};
+
+export type IADevMemoryProposal = {
+  proposal_id: string;
+  scope: "session" | "user" | "business" | "workflow" | "general" | string;
+  status: "pending" | "approved" | "rejected" | "applied" | "failed" | string;
+  proposer_user_key: string;
+  source_run_id?: string | null;
+  candidate_key: string;
+  candidate_value?: unknown;
+  reason?: string;
+  sensitivity?: "low" | "medium" | "high" | string;
+  domain_code?: string | null;
+  capability_id?: string | null;
+  policy_action?: string | null;
+  policy_id?: string | null;
+  idempotency_key?: string | null;
+  error?: string | null;
+  version: number;
+  created_at: number;
+  updated_at: number;
+};
+
+export type IADevMemoryProposalCreateRequest = {
+  scope?: "session" | "user" | "business" | "workflow" | "general";
+  candidate_key: string;
+  candidate_value: unknown;
+  reason?: string;
+  sensitivity?: "low" | "medium" | "high";
+  idempotency_key?: string;
+  domain_code?: string;
+  capability_id?: string;
+  direct_write?: boolean;
+  source_run_id?: string;
+};
+
+export type IADevMemoryProposalCreateResponse = {
+  ok: boolean;
+  proposal?: IADevMemoryProposal;
+  policy?: {
+    action: string;
+    policy_id: string;
+    reason: string;
+  };
+  auto_applied?: boolean;
+  error?: string;
+};
+
+export type IADevMemoryProposalListResponse = {
+  status: "ok";
+  count: number;
+  proposals: IADevMemoryProposal[];
+};
+
+export const createIADevMemoryProposal = async (
+  payload: IADevMemoryProposalCreateRequest,
+): Promise<IADevMemoryProposalCreateResponse> => {
+  const response = await api.post<IADevMemoryProposalCreateResponse>(
+    "/ia-dev/memory/proposals/",
+    payload,
+  );
+  return response.data;
+};
+
+export const listIADevMemoryProposals = async (params?: {
+  status?: string;
+  scope?: string;
+  limit?: number;
+}): Promise<IADevMemoryProposalListResponse> => {
+  const response = await api.get<IADevMemoryProposalListResponse>(
+    "/ia-dev/memory/proposals/",
+    { params },
+  );
+  return response.data;
+};
+
+export const approveIADevMemoryProposal = async (payload: {
+  proposal_id: string;
+  comment?: string;
+}): Promise<{ ok: boolean; proposal?: IADevMemoryProposal; error?: string }> => {
+  const response = await api.post("/ia-dev/memory/proposals/approve/", payload);
+  return response.data;
+};
+
+export const rejectIADevMemoryProposal = async (payload: {
+  proposal_id: string;
+  comment?: string;
+}): Promise<{ ok: boolean; proposal?: IADevMemoryProposal; error?: string }> => {
+  const response = await api.post("/ia-dev/memory/proposals/reject/", payload);
+  return response.data;
+};
+
+export type IADevUserMemoryItem = {
+  id: number;
+  user_key: string;
+  memory_key: string;
+  memory_value: unknown;
+  sensitivity: "low" | "medium" | "high" | string;
+  source: string;
+  confidence: number;
+  expires_at?: number | null;
+  created_at: number;
+  updated_at: number;
+};
+
+export const listIADevUserMemory = async (params?: {
+  limit?: number;
+  user_key?: string;
+}): Promise<{ status: "ok"; count: number; memory: IADevUserMemoryItem[] }> => {
+  const response = await api.get("/ia-dev/memory/user/", { params });
+  return response.data;
+};
+
+export const setIADevUserMemory = async (payload: {
+  memory_key: string;
+  memory_value: unknown;
+  sensitivity?: "low" | "medium" | "high";
+}): Promise<{ ok: boolean; memory?: IADevUserMemoryItem; error?: string }> => {
+  const response = await api.post("/ia-dev/memory/user/", payload);
+  return response.data;
+};
+
+export type IADevMemoryAuditEvent = {
+  id: number;
+  event_type: string;
+  memory_scope: string;
+  entity_key: string;
+  action: string;
+  actor_type: string;
+  actor_key: string;
+  run_id?: string | null;
+  trace_id?: string | null;
+  before?: unknown;
+  after?: unknown;
+  meta?: Record<string, unknown>;
+  created_at: number;
+};
+
+export const listIADevMemoryAudit = async (params?: {
+  scope?: string;
+  entity_key?: string;
+  limit?: number;
+}): Promise<{ status: "ok"; count: number; events: IADevMemoryAuditEvent[] }> => {
+  const response = await api.get("/ia-dev/memory/audit/", { params });
   return response.data;
 };

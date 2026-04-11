@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+from typing import Any
+
+from apps.ia_dev.services.sql_store import IADevSqlStore
+
+
+class MemoryRepository:
+    def __init__(self):
+        self.store = IADevSqlStore()
+
+    def set_user_memory(
+        self,
+        *,
+        user_key: str,
+        memory_key: str,
+        memory_value: Any,
+        sensitivity: str = "medium",
+        source: str = "api",
+        confidence: float = 1.0,
+        expires_at: int | None = None,
+    ) -> dict:
+        self.store.upsert_user_memory(
+            user_key=user_key,
+            memory_key=memory_key,
+            memory_value=memory_value,
+            sensitivity=sensitivity,
+            source=source,
+            confidence=confidence,
+            expires_at=expires_at,
+        )
+        return self.store.get_user_memory_entry(user_key=user_key, memory_key=memory_key) or {}
+
+    def get_user_memory(self, *, user_key: str, limit: int = 100) -> list[dict]:
+        return self.store.list_user_memory(user_key=user_key, limit=limit)
+
+    def get_business_memory(
+        self,
+        *,
+        domain_code: str | None = None,
+        capability_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        return self.store.list_business_memory(
+            domain_code=domain_code,
+            capability_id=capability_id,
+            status="active",
+            limit=limit,
+        )
+
+    def create_learning_proposal(self, proposal: dict) -> dict:
+        self.store.insert_learned_memory_proposal(proposal)
+        return self.store.get_learned_memory_proposal(str(proposal.get("proposal_id") or "")) or {}
+
+    def get_learning_proposal_by_idempotency(self, idempotency_key: str) -> dict | None:
+        return self.store.get_learned_memory_proposal_by_idempotency(idempotency_key)
+
+    def list_learning_proposals(
+        self,
+        *,
+        status: str | None = None,
+        scope: str | None = None,
+        proposer_user_key: str | None = None,
+        limit: int = 30,
+    ) -> list[dict]:
+        return self.store.list_learned_memory_proposals(
+            status=status,
+            scope=scope,
+            proposer_user_key=proposer_user_key,
+            limit=limit,
+        )
+
+    def get_learning_proposal(self, proposal_id: str, *, for_update: bool = False) -> dict | None:
+        return self.store.get_learned_memory_proposal(proposal_id, for_update=for_update)
+
+    def update_learning_proposal(self, proposal_id: str, updates: dict):
+        self.store.update_learned_memory_proposal(proposal_id, updates)
+
+    def add_learning_approval(self, approval: dict):
+        self.store.insert_learned_memory_approval(approval)
+
+    def set_business_memory(
+        self,
+        *,
+        domain_code: str,
+        capability_id: str,
+        memory_key: str,
+        memory_value: Any,
+        source_type: str,
+        approved_by: str | None = None,
+        approved_at: int | None = None,
+    ) -> dict:
+        self.store.upsert_business_memory(
+            domain_code=domain_code,
+            capability_id=capability_id,
+            memory_key=memory_key,
+            memory_value=memory_value,
+            status="active",
+            source_type=source_type,
+            approved_by=approved_by,
+            approved_at=approved_at,
+        )
+        return self.store.get_business_memory_entry(
+            domain_code=domain_code,
+            capability_id=capability_id,
+            memory_key=memory_key,
+        ) or {}
+
+    def add_audit_event(
+        self,
+        *,
+        event_type: str,
+        memory_scope: str,
+        entity_key: str,
+        action: str,
+        actor_type: str,
+        actor_key: str,
+        run_id: str | None = None,
+        trace_id: str | None = None,
+        before: Any = None,
+        after: Any = None,
+        meta: dict | None = None,
+    ):
+        self.store.insert_memory_audit_event(
+            event_type=event_type,
+            memory_scope=memory_scope,
+            entity_key=entity_key,
+            action=action,
+            actor_type=actor_type,
+            actor_key=actor_key,
+            run_id=run_id,
+            trace_id=trace_id,
+            before=before,
+            after=after,
+            meta=meta or {},
+        )
+
+    def list_audit_events(
+        self,
+        *,
+        memory_scope: str | None = None,
+        entity_key: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        return self.store.list_memory_audit_events(
+            memory_scope=memory_scope,
+            entity_key=entity_key,
+            limit=limit,
+        )

@@ -1,0 +1,16 @@
+version: 1
+levels:
+  low:
+    description: Non-sensitive preferences and format options.
+  medium:
+    description: Potentially identifying but non-critical operational context.
+  high:
+    description: Sensitive personal or security-relevant information.
+defaults:
+  memory_write: medium
+redaction:
+  enabled: true
+  patterns:
+    - api_key
+    - token
+    - password

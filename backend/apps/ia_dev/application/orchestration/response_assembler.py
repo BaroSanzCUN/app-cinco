@@ -18,8 +18,20 @@ class LegacyResponseAssembler:
         route: dict[str, Any],
         policy_decision: PolicyDecision,
         divergence: dict[str, Any],
+        memory_effects: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         response = ensure_chat_response_contract(legacy_response)
+
+        # Always expose memory loop outputs for incremental frontend adoption.
+        effects = dict(memory_effects or {})
+        existing_actions = list(response.get("actions") or [])
+        injected_actions = list(effects.get("actions") or [])
+        if injected_actions:
+            existing_actions.extend(injected_actions)
+        response["actions"] = existing_actions
+        response["memory_candidates"] = list(effects.get("memory_candidates") or [])
+        response["pending_proposals"] = list(effects.get("pending_proposals") or [])
+
         if not run_context.is_shadow_mode and not run_context.is_capability_mode_requested:
             return response
 
@@ -37,6 +49,10 @@ class LegacyResponseAssembler:
                 "metadata": dict(policy_decision.metadata or {}),
             },
             "divergence": divergence,
+            "memory": {
+                "candidate_count": len(response.get("memory_candidates") or []),
+                "pending_proposals_count": len(response.get("pending_proposals") or []),
+            },
         }
         response["orchestrator"] = orchestrator
 
@@ -78,6 +94,17 @@ class LegacyResponseAssembler:
                 detail=divergence,
             )
         )
+        if response.get("memory_candidates"):
+            trace.append(
+                self._trace_event(
+                    phase="memory_feedback_loop",
+                    status="ok",
+                    detail={
+                        "candidate_count": len(response.get("memory_candidates") or []),
+                        "pending_count": len(response.get("pending_proposals") or []),
+                    },
+                )
+            )
         response["trace"] = trace
         return response
 
@@ -90,3 +117,4 @@ class LegacyResponseAssembler:
             "detail": detail,
             "active_nodes": ["q", "gpt", "route"],
         }
+

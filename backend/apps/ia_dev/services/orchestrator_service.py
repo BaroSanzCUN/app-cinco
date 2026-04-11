@@ -73,7 +73,13 @@ class IADevOrchestratorService:
             os.getenv("OPENAI_API_KEY") or os.getenv("IA_DEV_OPENAI_API_KEY") or ""
         ).strip()
 
-    def run(self, message: str, session_id: str | None = None, reset_memory: bool = False) -> dict:
+    def run(
+        self,
+        message: str,
+        session_id: str | None = None,
+        reset_memory: bool = False,
+        actor_user_key: str | None = None,
+    ) -> dict:
         if self._chat_application_service is not None and not self._is_delegate_skipped():
             try:
                 return self._chat_application_service.run(
@@ -82,6 +88,7 @@ class IADevOrchestratorService:
                     reset_memory=reset_memory,
                     legacy_runner=self.run_legacy,
                     observability=self.observability,
+                    actor_user_key=actor_user_key,
                 )
             except Exception:
                 logger.exception(

@@ -52,8 +52,41 @@ class CapabilityPlanner:
     def _rollout_enabled(definition) -> bool:
         if not definition or not definition.rollout_flag:
             return True
-        value = os.getenv(str(definition.rollout_flag), "1").strip().lower()
-        return value in {"1", "true", "yes", "on"}
+        raw_flag = str(definition.rollout_flag or "").strip()
+        if not raw_flag:
+            return True
+        required_flags = [
+            token.strip()
+            for token in raw_flag.replace(",", "|").split("|")
+            if token.strip()
+        ]
+        if not required_flags:
+            return True
+        for name in required_flags:
+            value = CapabilityPlanner._resolve_rollout_flag_value(name)
+            if value not in {"1", "true", "yes", "on"}:
+                return False
+        return True
+
+    @staticmethod
+    def _resolve_rollout_flag_value(name: str) -> str:
+        aliases = {
+            "IA_DEV_CAP_ATTENDANCE_SUMMARY_ENABLED": ("IA_DEV_CAP_ATTENDANCE_SUMMARY_V1",),
+            "IA_DEV_CAP_ATTENDANCE_TABLE_ENABLED": (
+                "IA_DEV_CAP_ATTENDANCE_TABLE_V1",
+                "IA_DEV_CAP_ATTENDANCE_TABLE_WITH_PERSONAL_V1",
+            ),
+            "IA_DEV_CAP_ATTENDANCE_RECURRENCE_ENABLED": (
+                "IA_DEV_CAP_ATTENDANCE_RECURRENCE_GROUPED_V1",
+                "IA_DEV_CAP_ATTENDANCE_RECURRENCE_ITEMIZED_V1",
+            ),
+        }
+        candidates = (name, *aliases.get(name, ()))
+        for key in candidates:
+            if key in os.environ:
+                return str(os.getenv(key, "")).strip().lower()
+        default = "0" if name.startswith("IA_DEV_CAP_ATTENDANCE") else "1"
+        return str(os.getenv(name, default)).strip().lower()
 
     @staticmethod
     def _dictionary_hints(raw_context: Any) -> dict[str, Any]:

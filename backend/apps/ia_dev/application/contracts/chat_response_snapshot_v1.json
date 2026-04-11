@@ -22,6 +22,8 @@
     }
   },
   "actions": [],
+  "memory_candidates": [],
+  "pending_proposals": [],
   "data_sources": {},
   "trace": [],
   "memory": {
