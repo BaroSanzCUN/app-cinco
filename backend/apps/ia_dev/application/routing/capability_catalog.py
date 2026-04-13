@@ -126,6 +126,15 @@ class CapabilityCatalog:
                 rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_ANALYTICS_ENABLED",
             ),
             CapabilityDefinition(
+                capability_id="attendance.summary.by_attribute.v1",
+                domain="attendance",
+                handler_key="attendance.summary_by_attribute",
+                description="Resumen de ausentismos agrupado por atributo semantico (supervisor/area/cargo/carpeta/justificacion/tipo).",
+                legacy_intents=("attendance_query",),
+                policy_tags=("contains_personal_data", "contains_operational_data"),
+                rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_ANALYTICS_ENABLED",
+            ),
+            CapabilityDefinition(
                 capability_id="attendance.trend.daily.v1",
                 domain="attendance",
                 handler_key="attendance.trend_daily",
@@ -151,6 +160,15 @@ class CapabilityCatalog:
                 legacy_intents=("transport_query",),
                 policy_tags=("contains_operational_data",),
                 rollout_flag="IA_DEV_CAP_TRANSPORT_ENABLED|IA_DEV_CAP_TRANSPORT_SUMMARY_ENABLED",
+            ),
+            CapabilityDefinition(
+                capability_id="empleados.count.active.v1",
+                domain="empleados",
+                handler_key="empleados.count_active",
+                description="Cantidad de empleados activos.",
+                legacy_intents=("empleados_query",),
+                policy_tags=("contains_personal_data", "contains_operational_data"),
+                rollout_flag="IA_DEV_CAP_EMPLEADOS_ENABLED|IA_DEV_CAP_EMPLEADOS_COUNT_ENABLED",
             ),
             CapabilityDefinition(
                 capability_id="knowledge.proposal.create.v1",

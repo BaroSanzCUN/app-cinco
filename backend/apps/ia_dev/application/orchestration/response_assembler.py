@@ -37,6 +37,7 @@ class LegacyResponseAssembler:
 
         orchestrator = response.get("orchestrator") or {}
         proactive_loop = dict(run_context.metadata.get("proactive_loop") or {})
+        query_intelligence = dict(run_context.metadata.get("query_intelligence") or {})
         orchestrator["capability_shadow"] = {
             "run_id": run_context.run_id,
             "trace_id": run_context.trace_id,
@@ -55,6 +56,7 @@ class LegacyResponseAssembler:
                 "pending_proposals_count": len(response.get("pending_proposals") or []),
             },
             "proactive_loop": proactive_loop,
+            "query_intelligence": query_intelligence,
         }
         response["orchestrator"] = orchestrator
 

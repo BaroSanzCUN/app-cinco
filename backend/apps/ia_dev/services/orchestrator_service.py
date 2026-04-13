@@ -360,6 +360,10 @@ class IADevOrchestratorService:
         focus = str(classification.get("focus", "all"))
         intent = str(classification.get("intent", "general_question"))
         dictionary_context = None
+        last_group_dimension_key = str(session_context.get("last_group_dimension_key") or "").strip().lower()
+        last_group_dimension_label = str(session_context.get("last_group_dimension_label") or "").strip()
+        last_aggregation_focus = str(session_context.get("last_aggregation_focus") or "").strip().lower()
+        last_metric_key = str(session_context.get("last_metric_key") or "").strip().lower()
 
         if needs_database:
             try:
@@ -557,18 +561,102 @@ class IADevOrchestratorService:
                     ),
                 )
 
+        elif domain == "rrhh" and needs_database:
+            if self._is_count_active_employees_request(message):
+                try:
+                    from apps.empleados.services.empleado_service import EmpleadoService
+
+                    empleados_service = EmpleadoService()
+                    total_activos = int(empleados_service.listar(query_params={"estado": "ACTIVO"}).count())
+                    used_tools.append("get_empleados_count_active")
+                    payload["kpis"] = {
+                        "total_empleados_activos": total_activos,
+                    }
+                    payload["table"] = {
+                        "columns": ["estado", "total_empleados"],
+                        "rows": [{"estado": "ACTIVO", "total_empleados": total_activos}],
+                        "rowcount": 1,
+                    }
+                    payload["insights"] = [
+                        "Conteo calculado con criterio de estado=ACTIVO del dominio empleados."
+                    ]
+                    reply = f"Cantidad de empleados activos: {total_activos}."
+                    push_trace(
+                        "tool_execution",
+                        "ok",
+                        {
+                            "tools": used_tools,
+                            "rowcount": payload["table"].get("rowcount", 0),
+                        },
+                        self._resolve_active_nodes(
+                            domain=domain,
+                            selected_agent=classification.get("selected_agent"),
+                            used_tools=used_tools,
+                            has_actions=bool(actions),
+                            needs_database=needs_database,
+                        ),
+                    )
+                except Exception as exc:
+                    push_trace(
+                        "tool_execution",
+                        "error",
+                        {
+                            "tools": used_tools,
+                            "error": str(exc),
+                        },
+                        self._resolve_active_nodes(
+                            domain=domain,
+                            selected_agent=classification.get("selected_agent"),
+                            used_tools=used_tools,
+                            has_actions=bool(actions),
+                            needs_database=needs_database,
+                        ),
+                    )
+                    reply = (
+                        "No fue posible calcular la cantidad de empleados activos en este momento. "
+                        "Valida conexion y configuracion del dominio empleados."
+                    )
+            else:
+                reply = (
+                    "Puedo ayudarte con RRHH. Intenta por ejemplo: "
+                    "\"Cantidad empleados activos\" o \"Empleados activos por area\"."
+                )
+
         elif domain == "attendance" and needs_database:
             period = self._resolve_period_for_attendance(message, session_context, recent_messages)
             personal_status = self._resolve_personal_status_filter(
                 message=message,
                 session_context=session_context,
             )
+            target_cedula = self._extract_cedula_from_message(message)
+            group_dimension = self._resolve_attendance_group_dimension(message)
+            normalized_message = self._normalize_text(message)
+            contextual_reference = bool(
+                _YES_FOLLOW_UP_RE.match(normalized_message)
+                or self._is_contextual_reference_request(normalized_message)
+            )
+            group_dimension_from_context = False
+            if (
+                group_dimension is None
+                and self._is_chart_request(message)
+                and contextual_reference
+                and last_group_dimension_key
+            ):
+                context_group_dimension = self._group_dimension_from_context(
+                    last_group_dimension_key=last_group_dimension_key,
+                    last_group_dimension_label=last_group_dimension_label,
+                )
+                if context_group_dimension is not None:
+                    group_dimension = context_group_dimension
+                    group_dimension_from_context = True
             push_trace(
                 "period_resolver",
                 "ok",
                 {
                     **period,
                     "personal_status_filter": personal_status,
+                    "target_cedula": target_cedula,
+                    "group_dimension": group_dimension,
                 },
                 self._resolve_active_nodes(
                     domain=domain,
@@ -580,7 +668,117 @@ class IADevOrchestratorService:
             )
 
             try:
-                if output_mode in ("table", "list"):
+                should_group_aggregate = self._is_attendance_group_count_request(
+                    message=message,
+                    group_dimension=group_dimension,
+                ) or (
+                    bool(group_dimension_from_context)
+                    and self._is_chart_request(message)
+                    and bool(group_dimension)
+                )
+                if should_group_aggregate:
+                    focus_unjustified = (
+                        focus in ("unjustified", "missing_personal")
+                        or self._contains_unjustified_focus(message)
+                    )
+                    group_key, group_label = group_dimension or ("supervisor", "Supervisor")
+                    top_n = self._extract_top_n(message, default=15)
+
+                    if focus_unjustified:
+                        detail = _measure_tool(
+                            "get_attendance_unjustified_with_personal",
+                            self.attendance_tool.get_unjustified_with_personal,
+                            period["start"],
+                            period["end"],
+                            limit=500,
+                            personal_status=personal_status,
+                            cedula=target_cedula,
+                        )
+                        used_tools.append("get_attendance_unjustified_with_personal")
+                    else:
+                        detail = _measure_tool(
+                            "get_attendance_detail_with_personal",
+                            self.attendance_tool.get_detail_with_personal,
+                            period["start"],
+                            period["end"],
+                            limit=500,
+                            personal_status=personal_status,
+                            cedula=target_cedula,
+                        )
+                        used_tools.append("get_attendance_detail_with_personal")
+
+                    source_rows = list(detail.get("rows", []) or [])
+                    aggregate = self._aggregate_attendance_rows(
+                        rows=source_rows,
+                        group_key=group_key,
+                        top_n=top_n,
+                        metric_key=("total_injustificados" if focus_unjustified else "total_ausentismos"),
+                    )
+                    metric_key = "total_injustificados" if focus_unjustified else "total_ausentismos"
+                    aggregated_rows = aggregate.get("rows", [])
+                    total_metric = int(aggregate.get("total") or 0)
+                    total_groups = int(aggregate.get("total_groups") or 0)
+                    payload["table"] = {
+                        "columns": list(aggregated_rows[0].keys()) if aggregated_rows else [group_key, metric_key, "porcentaje"],
+                        "rows": aggregated_rows,
+                        "rowcount": len(aggregated_rows),
+                    }
+                    payload["kpis"] = {
+                        metric_key: total_metric,
+                        "total_grupos": total_groups,
+                        "top_n": int(top_n),
+                    }
+                    payload["labels"] = [str(row.get(group_key) or "N/D") for row in aggregated_rows]
+                    payload["series"] = [int(row.get(metric_key) or 0) for row in aggregated_rows]
+
+                    if not aggregated_rows:
+                        reply = (
+                            f"No se encontraron ausentismos para agrupar por {group_label.lower()} "
+                            f"entre {detail.get('periodo_inicio')} y {detail.get('periodo_fin')}."
+                        )
+                    else:
+                        focus_label = "injustificados" if focus_unjustified else "totales"
+                        reply = (
+                            f"Cantidad de ausentismos {focus_label} por {group_label.lower()} "
+                            f"({detail.get('periodo_inicio')} a {detail.get('periodo_fin')}, top {top_n}):\n\n"
+                            f"{self._format_rows_table(aggregated_rows)}"
+                        )
+
+                    if self._is_chart_request(message):
+                        chart_payload = {
+                            "engine": "amcharts5",
+                            "chart_library": "amcharts5",
+                            "type": "bar",
+                            "title": f"Ausentismos por {group_label.lower()}",
+                            "x_key": group_key,
+                            "series": [{"name": metric_key, "value_key": metric_key}],
+                            "data": aggregated_rows,
+                            "meta": {
+                                "periodo_inicio": detail.get("periodo_inicio"),
+                                "periodo_fin": detail.get("periodo_fin"),
+                                "group_by": group_key,
+                            },
+                        }
+                        payload["chart"] = chart_payload
+                        payload["charts"] = [chart_payload]
+                        actions.append(
+                            {
+                                "id": "attendance-legacy-chart-grouped",
+                                "type": "render_chart",
+                                "label": "Ver grafica agrupada",
+                                "payload": {
+                                    "chart": chart_payload,
+                                    "capability_id": "attendance.summary.by_attribute.legacy",
+                                },
+                            }
+                        )
+
+                    last_group_dimension_key = str(group_key or "").strip().lower()
+                    last_group_dimension_label = str(group_label or "").strip()
+                    last_aggregation_focus = "unjustified" if focus_unjustified else "all"
+                    last_metric_key = str(metric_key or "").strip().lower()
+
+                elif output_mode in ("table", "list"):
                     if intent == "attendance_recurrence":
                         wants_itemized = self._wants_itemized_absence_view(message)
                         recurrence = _measure_tool(
@@ -609,6 +807,7 @@ class IADevOrchestratorService:
                                 period["end"],
                                 limit=500,
                                 personal_status=personal_status,
+                                cedula=target_cedula,
                             )
                             used_tools.append("get_attendance_unjustified_with_personal")
                             detail_rows = list(detail.get("rows", []) or [])
@@ -671,6 +870,7 @@ class IADevOrchestratorService:
                                     period["end"],
                                     limit=150,
                                     personal_status=personal_status,
+                                    cedula=target_cedula,
                                 )
                                 used_tools.append("get_attendance_unjustified_with_personal")
                             except Exception as join_exc:
@@ -680,6 +880,7 @@ class IADevOrchestratorService:
                                     period["start"],
                                     period["end"],
                                     limit=150,
+                                    cedula=target_cedula,
                                 )
                                 used_tools.append("get_attendance_unjustified_table")
                                 actions.append(
@@ -701,6 +902,7 @@ class IADevOrchestratorService:
                                 period["start"],
                                 period["end"],
                                 limit=150,
+                                cedula=target_cedula,
                             )
                             used_tools.append("get_attendance_unjustified_table")
 
@@ -775,6 +977,7 @@ class IADevOrchestratorService:
                             period["end"],
                             limit=150,
                             personal_status=personal_status,
+                            cedula=target_cedula,
                         )
                         used_tools.append("get_attendance_detail_with_personal")
                         rows = detail.get("rows", [])
@@ -800,6 +1003,7 @@ class IADevOrchestratorService:
                         self.attendance_tool.get_summary,
                         period["start"],
                         period["end"],
+                        cedula=target_cedula,
                     )
                     used_tools.append("get_attendance_summary")
                     payload["kpis"] = {
@@ -1110,6 +1314,26 @@ class IADevOrchestratorService:
                 "last_period_end": (
                     period["end"].isoformat() if domain == "attendance" and needs_database else None
                 ),
+                "last_group_dimension_key": (
+                    last_group_dimension_key
+                    if domain == "attendance" and needs_database
+                    else session_context.get("last_group_dimension_key")
+                ),
+                "last_group_dimension_label": (
+                    last_group_dimension_label
+                    if domain == "attendance" and needs_database
+                    else session_context.get("last_group_dimension_label")
+                ),
+                "last_aggregation_focus": (
+                    last_aggregation_focus
+                    if domain == "attendance" and needs_database
+                    else session_context.get("last_aggregation_focus")
+                ),
+                "last_metric_key": (
+                    last_metric_key
+                    if domain == "attendance" and needs_database
+                    else session_context.get("last_metric_key")
+                ),
             },
         )
 
@@ -1273,6 +1497,139 @@ class IADevOrchestratorService:
         raw = str(value or "").strip()
         digits = "".join(ch for ch in raw if ch.isdigit())
         return digits or raw.lower()
+
+    def _contains_unjustified_focus(self, message: str) -> bool:
+        normalized = self._normalize_text(message)
+        return "injustific" in normalized or "sin justificar" in normalized
+
+    def _resolve_attendance_group_dimension(self, message: str) -> tuple[str, str] | None:
+        normalized = self._normalize_text(message)
+        mappings = (
+            ("por supervisor", ("supervisor", "Supervisor")),
+            ("supervisor", ("supervisor", "Supervisor")),
+            ("por area", ("area", "Area")),
+            ("area", ("area", "Area")),
+            ("por cargo", ("cargo", "Cargo")),
+            ("cargo", ("cargo", "Cargo")),
+            ("por carpeta", ("carpeta", "Carpeta")),
+            ("carpeta", ("carpeta", "Carpeta")),
+            ("por justificacion", ("justificacion", "Justificacion")),
+            ("justificacion", ("justificacion", "Justificacion")),
+            ("por causa", ("justificacion", "Justificacion")),
+            ("causa", ("justificacion", "Justificacion")),
+            ("por motivo", ("justificacion", "Justificacion")),
+            ("motivo", ("justificacion", "Justificacion")),
+            ("por tipo", ("estado_justificacion", "Estado")),
+            ("tipo", ("estado_justificacion", "Estado")),
+            ("por estado", ("estado_justificacion", "Estado")),
+            ("estado", ("estado_justificacion", "Estado")),
+        )
+        for token, dimension in mappings:
+            if token in normalized:
+                return dimension
+        return None
+
+    @staticmethod
+    def _group_dimension_from_context(
+        *,
+        last_group_dimension_key: str,
+        last_group_dimension_label: str | None = None,
+    ) -> tuple[str, str] | None:
+        key = str(last_group_dimension_key or "").strip().lower()
+        if not key:
+            return None
+        label = str(last_group_dimension_label or "").strip()
+        label_map = {
+            "supervisor": "Supervisor",
+            "area": "Area",
+            "cargo": "Cargo",
+            "carpeta": "Carpeta",
+            "justificacion": "Justificacion",
+            "estado_justificacion": "Estado",
+        }
+        return (key, label or label_map.get(key, key.replace("_", " ").title()))
+
+    def _is_attendance_group_count_request(
+        self,
+        *,
+        message: str,
+        group_dimension: tuple[str, str] | None,
+    ) -> bool:
+        if group_dimension is None:
+            return False
+        normalized = self._normalize_text(message)
+        asks_count = any(token in normalized for token in ("cantidad", "cuantos", "cuantas", "total", "numero"))
+        asks_group = "por " in normalized
+        return bool(asks_count and asks_group)
+
+    def _extract_top_n(self, message: str, *, default: int = 10) -> int:
+        normalized = self._normalize_text(message)
+        match = re.search(r"\btop\s*(\d{1,2})\b", normalized)
+        if match:
+            try:
+                return max(1, min(int(match.group(1)), 50))
+            except ValueError:
+                pass
+        return max(1, min(int(default), 50))
+
+    @staticmethod
+    def _normalize_group_value(value: object) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "N/D"
+        return re.sub(r"\s+", " ", text)
+
+    def _aggregate_attendance_rows(
+        self,
+        *,
+        rows: list[dict],
+        group_key: str,
+        top_n: int,
+        metric_key: str = "total_ausentismos",
+    ) -> dict[str, object]:
+        from collections import defaultdict
+
+        grouped_counts: dict[str, int] = defaultdict(int)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            grouped_value = self._normalize_group_value(row.get(group_key))
+            grouped_counts[grouped_value] += 1
+
+        total_events = sum(grouped_counts.values())
+        result_rows = []
+        safe_metric_key = str(metric_key or "total_ausentismos")
+        for key, count in grouped_counts.items():
+            result_rows.append(
+                {
+                    group_key: key,
+                    safe_metric_key: int(count),
+                    "porcentaje": round((count / total_events) * 100.0, 2) if total_events > 0 else 0.0,
+                }
+            )
+        result_rows.sort(key=lambda item: (-int(item.get(safe_metric_key) or 0), str(item.get(group_key) or "")))
+        safe_top_n = max(1, min(int(top_n), 50))
+        top_rows = result_rows[:safe_top_n]
+        return {
+            "rows": top_rows,
+            "total": int(total_events),
+            "total_groups": len(result_rows),
+        }
+
+    def _extract_cedula_from_message(self, message: str) -> str | None:
+        normalized = self._normalize_text(message)
+        match = re.search(r"\b\d{6,13}\b", normalized)
+        if not match:
+            return None
+        value = self._normalize_identifier(match.group(0))
+        return value or None
+
+    def _is_count_active_employees_request(self, message: str) -> bool:
+        normalized = self._normalize_text(message)
+        mentions_employee = any(token in normalized for token in ("empleado", "empleados", "rrhh"))
+        asks_count = any(token in normalized for token in ("cantidad", "cuantos", "cuantas", "total", "numero"))
+        asks_active = any(token in normalized for token in ("activo", "activos"))
+        return bool(mentions_employee and asks_count and asks_active)
 
     def _wants_itemized_absence_view(self, message: str) -> bool:
         msg = self._normalize_text(message)
@@ -1609,6 +1966,19 @@ class IADevOrchestratorService:
                     "output_mode": "summary",
                     "needs_personal_join": bool(session_context.get("last_output_mode") == "table"),
                     "focus": str(session_context.get("last_focus") or "all"),
+                    "contextual_reference": self._is_contextual_reference_request(normalized),
+                    "last_group_dimension_key": str(
+                        session_context.get("last_group_dimension_key") or ""
+                    ).strip().lower(),
+                    "last_group_dimension_label": str(
+                        session_context.get("last_group_dimension_label") or ""
+                    ).strip(),
+                    "last_aggregation_focus": str(
+                        session_context.get("last_aggregation_focus") or ""
+                    ).strip().lower(),
+                    "last_metric_key": str(
+                        session_context.get("last_metric_key") or ""
+                    ).strip().lower(),
                     "classifier_source": f"{classification.get('classifier_source', 'rules')}_followup_chart",
                 }
             )
@@ -1648,6 +2018,13 @@ class IADevOrchestratorService:
                 "esta consulta",
                 "ese reporte",
                 "ese resultado",
+                "informacion anterior",
+                "info anterior",
+                "lo anterior",
+                "mismo periodo",
+                "mismo rango",
+                "ese periodo",
+                "ese rango",
             )
         )
 

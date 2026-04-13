@@ -313,9 +313,22 @@ class AttendanceToolService:
             "catalog_count": len(by_cedula),
         }
 
-    def _attendance_base_unjustified(self, start_date: date, end_date: date, limit: int) -> list[tuple]:
+    def _attendance_base_unjustified(
+        self,
+        start_date: date,
+        end_date: date,
+        limit: int,
+        *,
+        cedula: str | None = None,
+    ) -> list[tuple]:
         table = self._safe_table()
         safe_limit = max(1, min(int(limit), 500))
+        normalized_cedula = self._normalize_id_value(cedula)
+        cedula_clause = ""
+        params: list[Any] = [start_date, end_date]
+        if normalized_cedula:
+            cedula_clause = f" AND {self._normalized_id_sql('g.cedula')} = %s"
+            params.append(normalized_cedula)
         query = f"""
             SELECT
                 g.cedula,
@@ -323,6 +336,7 @@ class AttendanceToolService:
                 COALESCE(g.justificacion, '') AS justificacion
             FROM {table} AS g
             WHERE DATE(g.fecha_edit) BETWEEN %s AND %s
+            {cedula_clause}
               AND UPPER(TRIM(g.ausentismo)) = 'SI'
               AND (
                     g.justificacion IS NULL
@@ -332,12 +346,19 @@ class AttendanceToolService:
             ORDER BY DATE(g.fecha_edit) DESC, g.cedula
             LIMIT %s
         """
+        params.append(safe_limit)
         with connections[self.db_alias].cursor() as cursor:
-            cursor.execute(query, [start_date, end_date, safe_limit])
+            cursor.execute(query, params)
             return cursor.fetchall()
 
-    def get_summary(self, start_date: date, end_date: date) -> dict:
+    def get_summary(self, start_date: date, end_date: date, *, cedula: str | None = None) -> dict:
         table = self._safe_table()
+        normalized_cedula = self._normalize_id_value(cedula)
+        cedula_clause = ""
+        params: list[Any] = [start_date, end_date, start_date, end_date]
+        if normalized_cedula:
+            cedula_clause = f" AND {self._normalized_id_sql('g.cedula')} = %s"
+            params.append(normalized_cedula)
         sql = f"""
             SELECT
                 %s AS periodo_inicio,
@@ -365,9 +386,8 @@ class AttendanceToolService:
                 ), 0) AS injustificados
             FROM {table} AS g
             WHERE DATE(g.fecha_edit) BETWEEN %s AND %s
+            {cedula_clause}
         """
-
-        params = [start_date, end_date, start_date, end_date]
 
         with connections[self.db_alias].cursor() as cursor:
             cursor.execute(sql, params)
@@ -390,9 +410,16 @@ class AttendanceToolService:
             "injustificados": int(row[4] or 0),
         }
 
-    def get_unjustified_table(self, start_date: date, end_date: date, limit: int = 100) -> dict:
+    def get_unjustified_table(
+        self,
+        start_date: date,
+        end_date: date,
+        limit: int = 100,
+        *,
+        cedula: str | None = None,
+    ) -> dict:
         rows = []
-        base_rows = self._attendance_base_unjustified(start_date, end_date, limit)
+        base_rows = self._attendance_base_unjustified(start_date, end_date, limit, cedula=cedula)
         for cedula, fecha_ausentismo, justificacion in base_rows:
             rows.append(
                 {
@@ -418,11 +445,12 @@ class AttendanceToolService:
         limit: int = 100,
         *,
         personal_status: str = "all",
+        cedula: str | None = None,
     ) -> dict:
-        base_rows = self._attendance_base_unjustified(start_date, end_date, limit)
+        base_rows = self._attendance_base_unjustified(start_date, end_date, limit, cedula=cedula)
         cedulas = [str(row[0] or "") for row in base_rows]
         employer_catalog = self.get_data_employers(
-            ["cedula", "nombre", "apellido", "supervisor", "area", "cargo"],
+            ["cedula", "nombre", "apellido", "supervisor", "area", "cargo", "carpeta"],
             cedulas,
             status=personal_status,
         )
@@ -471,9 +499,11 @@ class AttendanceToolService:
                     "supervisor_cedula": supervisor_cedula_raw,
                     "area": str((emp or {}).get("area") or ""),
                     "cargo": str((emp or {}).get("cargo") or ""),
+                    "carpeta": str((emp or {}).get("carpeta") or ""),
                     "supervisor": supervisor,
                     "personal_match": bool(emp),
                     "justificacion": str(justificacion or ""),
+                    "estado_justificacion": "INJUSTIFICADO",
                 }
             )
 
@@ -505,9 +535,16 @@ class AttendanceToolService:
         *,
         limit: int = 150,
         personal_status: str = "all",
+        cedula: str | None = None,
     ) -> dict:
         table = self._safe_table()
         safe_limit = max(1, min(int(limit), 500))
+        normalized_cedula = self._normalize_id_value(cedula)
+        cedula_clause = ""
+        params: list[Any] = [start_date, end_date]
+        if normalized_cedula:
+            cedula_clause = f" AND {self._normalized_id_sql('g.cedula')} = %s"
+            params.append(normalized_cedula)
 
         query = f"""
             SELECT
@@ -517,13 +554,15 @@ class AttendanceToolService:
                 COALESCE(g.justificacion, '') AS justificacion
             FROM {table} AS g
             WHERE DATE(g.fecha_edit) BETWEEN %s AND %s
+            {cedula_clause}
               AND UPPER(TRIM(COALESCE(g.ausentismo, ''))) = 'SI'
             ORDER BY DATE(g.fecha_edit) DESC, g.cedula
             LIMIT %s
         """
+        params.append(safe_limit)
 
         with connections[self.db_alias].cursor() as cursor:
-            cursor.execute(query, [start_date, end_date, safe_limit])
+            cursor.execute(query, params)
             base_rows = cursor.fetchall()
 
         cedulas = [str(row[0] or "") for row in base_rows]

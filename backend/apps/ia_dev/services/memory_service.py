@@ -9,7 +9,7 @@ from .sql_store import IADevSqlStore
 
 class SessionMemoryStore:
     _lock = threading.Lock()
-    _max_messages = max(4, int(os.getenv("IA_DEV_MAX_MESSAGES", "20")))
+    _max_messages = max(100, int(os.getenv("IA_DEV_MAX_MESSAGES", "100")))
     _store = IADevSqlStore()
     _cache = RedisCacheService()
 

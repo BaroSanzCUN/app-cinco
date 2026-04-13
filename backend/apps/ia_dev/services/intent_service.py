@@ -34,6 +34,31 @@ class IntentClassifierService:
         msg = self._normalize_text(message)
         return "injustific" in msg or "sin justificar" in msg
 
+    def _contains_attendance_domain(self, message: str) -> bool:
+        msg = self._normalize_text(message)
+        return any(token in msg for token in ("ausent", "asistenc", "injustific", "justific"))
+
+    def _contains_count_request(self, message: str) -> bool:
+        msg = self._normalize_text(message)
+        return any(token in msg for token in ("cantidad", "cuantos", "cuantas", "total", "numero"))
+
+    def _contains_group_dimension_request(self, message: str) -> bool:
+        msg = self._normalize_text(message)
+        return any(
+            token in msg
+            for token in (
+                "por supervisor",
+                "por area",
+                "por cargo",
+                "por carpeta",
+                "por justificacion",
+                "por causa",
+                "por motivo",
+                "por tipo",
+                "por estado",
+            )
+        )
+
     def _contains_missing_personal_focus(self, message: str) -> bool:
         msg = self._normalize_text(message)
         return any(
@@ -60,6 +85,18 @@ class IntentClassifierService:
 
     def _apply_deterministic_overrides(self, classification: dict, message: str) -> dict:
         result = dict(classification)
+        if self._contains_attendance_domain(message) and self._contains_count_request(message) and self._contains_group_dimension_request(message):
+            result.update(
+                {
+                    "domain": "attendance",
+                    "intent": "attendance_query",
+                    "selected_agent": "attendance_agent",
+                    "needs_database": True,
+                    "output_mode": "summary",
+                    "needs_personal_join": True,
+                }
+            )
+            return result
         if self._contains_missing_personal_focus(message):
             result.update(
                 {

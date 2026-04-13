@@ -53,6 +53,7 @@ Se agrego un nucleo de gobierno/autoevolucion para propuestas de reglas de negoc
 ## IA DEV: estado distribuido, cola y observabilidad
 
 - Memoria de sesion y tickets persistidos en DB.
+- Recomendado para continuidad conversacional: `IA_DEV_MAX_MESSAGES=100` (o mayor segun carga).
 - Cache opcional con Redis (desactivada por defecto):
   - `IA_DEV_USE_REDIS`
   - `IA_DEV_REDIS_URL`
@@ -70,8 +71,9 @@ Se agrego un nucleo de gobierno/autoevolucion para propuestas de reglas de negoc
   - `IA_DEV_DELEGATION_ENABLED=1|0`
   - `IA_DEV_DELEGATION_MODE=off|shadow|active`
   - `IA_DEV_SYSTEM_SCHEMA=<schema_opcional>`: enruta tablas `ia_dev_*` a un schema especifico sin cambiar el `db_alias`.
-    - Si no se define, mantiene el comportamiento actual (schema por defecto de `IA_DEV_DB_ALIAS`).
-    - `ai_dictionary` se mantiene como fuente semantica para sync/catalogo; no se usa como destino por defecto.
+    - Regla operativa recomendada: usar `IA_DEV_SYSTEM_SCHEMA=ai_dictionary` para toda tabla del sistema multiagente IA (`ia_dev_*`).
+    - Separacion de responsabilidades: `ai_dictionary` para metadata/semantica; bases operativas de dominio para datos de negocio.
+    - Compatibilidad: si no se define, mantiene el comportamiento actual (schema por defecto de `IA_DEV_DB_ALIAS`).
   - `shadow`: planifica subtareas y registra observabilidad sin alterar la respuesta visible.
   - `active`: habilita ejecucion delegada para dominios soportados.
   - `IA_DEV_DOMAIN_REGISTRY_SYNC_ENABLED=1|0`: sincroniza catalogo desde `ai_dictionary` en runtime.
