@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import threading
 import time
 from collections import defaultdict
@@ -11,33 +12,53 @@ from django.db import connections
 class IADevSqlStore:
     _init_lock = threading.Lock()
     _initialized_by_alias: set[str] = set()
+    _ia_dev_table_pattern = re.compile(r"(?<![A-Za-z0-9_`\.])(ia_dev_[A-Za-z0-9_]+)\b")
 
     def __init__(self):
         self.db_alias = (os.getenv("IA_DEV_DB_ALIAS", "default") or "default").strip()
+        raw_system_schema = str(os.getenv("IA_DEV_SYSTEM_SCHEMA", "") or "").strip()
+        if raw_system_schema and not self._is_safe_identifier(raw_system_schema):
+            raise ValueError("Invalid IA_DEV_SYSTEM_SCHEMA value")
+        self.system_schema = raw_system_schema or None
 
     def _execute(self, sql: str, params: list | tuple | None = None):
+        prepared_sql = self._prepare_sql(sql)
         with connections[self.db_alias].cursor() as cursor:
-            cursor.execute(sql, params or [])
+            cursor.execute(prepared_sql, params or [])
 
     def _fetchone(self, sql: str, params: list | tuple | None = None) -> tuple | None:
+        prepared_sql = self._prepare_sql(sql)
         with connections[self.db_alias].cursor() as cursor:
-            cursor.execute(sql, params or [])
+            cursor.execute(prepared_sql, params or [])
             return cursor.fetchone()
 
     def _fetchall(self, sql: str, params: list | tuple | None = None) -> list[tuple]:
+        prepared_sql = self._prepare_sql(sql)
         with connections[self.db_alias].cursor() as cursor:
-            cursor.execute(sql, params or [])
+            cursor.execute(prepared_sql, params or [])
             return cursor.fetchall()
+
+    def _prepare_sql(self, sql: str) -> str:
+        rendered = str(sql or "")
+        if not self.system_schema:
+            return rendered
+
+        schema = str(self.system_schema)
+        return self._ia_dev_table_pattern.sub(
+            lambda match: f"`{schema}`.`{match.group(1)}`",
+            rendered,
+        )
 
     @staticmethod
     def _now() -> int:
         return int(time.time())
 
     def ensure_tables(self):
-        if self.db_alias in self._initialized_by_alias:
+        init_key = f"{self.db_alias}:{self.system_schema or '_default_'}"
+        if init_key in self._initialized_by_alias:
             return
         with self._init_lock:
-            if self.db_alias in self._initialized_by_alias:
+            if init_key in self._initialized_by_alias:
                 return
 
             self._execute(
@@ -122,7 +143,315 @@ class IADevSqlStore:
                 )
                 """
             )
-            self._initialized_by_alias.add(self.db_alias)
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_user_memory (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    user_key VARCHAR(128) NOT NULL,
+                    memory_key VARCHAR(120) NOT NULL,
+                    memory_value_json LONGTEXT NOT NULL,
+                    sensitivity VARCHAR(16) NOT NULL DEFAULT 'medium',
+                    source VARCHAR(40) NOT NULL DEFAULT 'api',
+                    confidence DECIMAL(6,5) NOT NULL DEFAULT 1.00000,
+                    expires_at BIGINT NULL,
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    UNIQUE KEY uq_ia_dev_user_memory (user_key, memory_key),
+                    KEY idx_ia_dev_user_memory_user (user_key),
+                    KEY idx_ia_dev_user_memory_updated (updated_at)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_business_memory (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    domain_code VARCHAR(64) NOT NULL,
+                    capability_id VARCHAR(120) NOT NULL,
+                    memory_key VARCHAR(120) NOT NULL,
+                    memory_value_json LONGTEXT NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'active',
+                    source_type VARCHAR(40) NOT NULL DEFAULT 'manual',
+                    version INT NOT NULL DEFAULT 1,
+                    approved_by VARCHAR(64) NULL,
+                    approved_at BIGINT NULL,
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    UNIQUE KEY uq_ia_dev_business_memory (domain_code, capability_id, memory_key),
+                    KEY idx_ia_dev_business_memory_domain (domain_code),
+                    KEY idx_ia_dev_business_memory_capability (capability_id),
+                    KEY idx_ia_dev_business_memory_status (status)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_learned_memory_proposals (
+                    proposal_id VARCHAR(40) PRIMARY KEY,
+                    scope VARCHAR(20) NOT NULL,
+                    status VARCHAR(24) NOT NULL,
+                    proposer_user_key VARCHAR(128) NOT NULL,
+                    source_run_id VARCHAR(64) NULL,
+                    candidate_key VARCHAR(120) NOT NULL,
+                    candidate_value_json LONGTEXT NOT NULL,
+                    reason TEXT NULL,
+                    sensitivity VARCHAR(16) NOT NULL DEFAULT 'medium',
+                    domain_code VARCHAR(64) NULL,
+                    capability_id VARCHAR(120) NULL,
+                    policy_action VARCHAR(24) NULL,
+                    policy_id VARCHAR(80) NULL,
+                    idempotency_key VARCHAR(120) NULL UNIQUE,
+                    error TEXT NULL,
+                    version INT NOT NULL DEFAULT 1,
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    KEY idx_ia_dev_lmp_status (status),
+                    KEY idx_ia_dev_lmp_scope (scope),
+                    KEY idx_ia_dev_lmp_created (created_at)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_learned_memory_approvals (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    proposal_id VARCHAR(40) NOT NULL,
+                    action VARCHAR(16) NOT NULL,
+                    actor_user_key VARCHAR(128) NOT NULL,
+                    actor_role VARCHAR(64) NOT NULL,
+                    comment TEXT NULL,
+                    created_at BIGINT NOT NULL,
+                    KEY idx_ia_dev_lma_proposal (proposal_id),
+                    KEY idx_ia_dev_lma_created (created_at)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_workflow_state (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    workflow_type VARCHAR(64) NOT NULL,
+                    workflow_key VARCHAR(120) NOT NULL UNIQUE,
+                    status VARCHAR(24) NOT NULL,
+                    state_json LONGTEXT NOT NULL,
+                    retry_count INT NOT NULL DEFAULT 0,
+                    lock_version INT NOT NULL DEFAULT 1,
+                    next_retry_at BIGINT NULL,
+                    last_error TEXT NULL,
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    KEY idx_ia_dev_workflow_type (workflow_type),
+                    KEY idx_ia_dev_workflow_status (status)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_memory_audit_trail (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    event_type VARCHAR(64) NOT NULL,
+                    memory_scope VARCHAR(20) NOT NULL,
+                    entity_key VARCHAR(140) NOT NULL,
+                    action VARCHAR(24) NOT NULL,
+                    actor_type VARCHAR(24) NOT NULL,
+                    actor_key VARCHAR(128) NOT NULL,
+                    run_id VARCHAR(64) NULL,
+                    trace_id VARCHAR(64) NULL,
+                    before_json LONGTEXT NULL,
+                    after_json LONGTEXT NULL,
+                    meta_json LONGTEXT NULL,
+                    created_at BIGINT NOT NULL,
+                    KEY idx_ia_dev_mat_scope (memory_scope),
+                    KEY idx_ia_dev_mat_entity (entity_key),
+                    KEY idx_ia_dev_mat_run (run_id),
+                    KEY idx_ia_dev_mat_trace (trace_id),
+                    KEY idx_ia_dev_mat_created (created_at)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_dominios (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    codigo_dominio VARCHAR(80) NOT NULL UNIQUE,
+                    nombre_dominio VARCHAR(120) NOT NULL,
+                    objetivo_negocio TEXT NULL,
+                    entidad_principal VARCHAR(80) NULL,
+                    estado_dominio VARCHAR(24) NOT NULL DEFAULT 'planned',
+                    nivel_madurez VARCHAR(24) NOT NULL DEFAULT 'initial',
+                    nivel_confianza_esquema DECIMAL(6,5) NOT NULL DEFAULT 0.00000,
+                    source_of_truth VARCHAR(24) NOT NULL DEFAULT 'db',
+                    source_ref VARCHAR(255) NULL,
+                    flags_json LONGTEXT NULL,
+                    contexto_semantico_json LONGTEXT NULL,
+                    version INT NOT NULL DEFAULT 1,
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    KEY idx_ia_dev_dominios_estado (estado_dominio),
+                    KEY idx_ia_dev_dominios_madurez (nivel_madurez),
+                    KEY idx_ia_dev_dominios_updated (updated_at)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_estado_dominio (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    dominio_id BIGINT NOT NULL,
+                    estado_origen VARCHAR(24) NULL,
+                    estado_destino VARCHAR(24) NOT NULL,
+                    actor VARCHAR(120) NULL,
+                    motivo TEXT NULL,
+                    source VARCHAR(40) NOT NULL DEFAULT 'system',
+                    run_id VARCHAR(64) NULL,
+                    trace_id VARCHAR(64) NULL,
+                    created_at BIGINT NOT NULL,
+                    KEY idx_ia_dev_estado_dominio_dominio (dominio_id),
+                    KEY idx_ia_dev_estado_dominio_destino (estado_destino),
+                    KEY idx_ia_dev_estado_dominio_created (created_at)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_tablas_dominio (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    dominio_id BIGINT NOT NULL,
+                    schema_name VARCHAR(120) NULL,
+                    table_name VARCHAR(120) NOT NULL,
+                    table_fqn VARCHAR(260) NOT NULL,
+                    nombre_tabla_logico VARCHAR(120) NULL,
+                    rol_tabla VARCHAR(40) NULL,
+                    es_principal TINYINT(1) NOT NULL DEFAULT 0,
+                    source_of_truth VARCHAR(24) NOT NULL DEFAULT 'db',
+                    source_ref VARCHAR(255) NULL,
+                    estado VARCHAR(24) NOT NULL DEFAULT 'active',
+                    metadata_json LONGTEXT NULL,
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    UNIQUE KEY uq_ia_dev_tablas_dominio (dominio_id, table_fqn),
+                    KEY idx_ia_dev_tablas_dominio_dominio (dominio_id),
+                    KEY idx_ia_dev_tablas_dominio_estado (estado)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_columnas (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    tabla_dominio_id BIGINT NOT NULL,
+                    column_name VARCHAR(120) NOT NULL,
+                    nombre_columna_logico VARCHAR(120) NULL,
+                    descripcion TEXT NULL,
+                    data_type VARCHAR(80) NULL,
+                    es_clave TINYINT(1) NOT NULL DEFAULT 0,
+                    es_filtro TINYINT(1) NOT NULL DEFAULT 0,
+                    es_group_by TINYINT(1) NOT NULL DEFAULT 0,
+                    es_metrica TINYINT(1) NOT NULL DEFAULT 0,
+                    es_sensible TINYINT(1) NOT NULL DEFAULT 0,
+                    operadores_permitidos_json LONGTEXT NULL,
+                    source_of_truth VARCHAR(24) NOT NULL DEFAULT 'db',
+                    estado VARCHAR(24) NOT NULL DEFAULT 'active',
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    UNIQUE KEY uq_ia_dev_columnas (tabla_dominio_id, column_name),
+                    KEY idx_ia_dev_columnas_tabla (tabla_dominio_id),
+                    KEY idx_ia_dev_columnas_estado (estado)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_relaciones (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    dominio_id BIGINT NOT NULL,
+                    tabla_origen_id BIGINT NOT NULL,
+                    tabla_destino_id BIGINT NOT NULL,
+                    nombre_relacion VARCHAR(160) NOT NULL,
+                    tipo_join VARCHAR(24) NOT NULL DEFAULT 'inner',
+                    condicion_join_sql TEXT NOT NULL,
+                    cardinalidad VARCHAR(40) NULL,
+                    es_interdominio TINYINT(1) NOT NULL DEFAULT 0,
+                    nivel_confianza DECIMAL(6,5) NOT NULL DEFAULT 0.00000,
+                    source_of_truth VARCHAR(24) NOT NULL DEFAULT 'db',
+                    estado VARCHAR(24) NOT NULL DEFAULT 'active',
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    KEY idx_ia_dev_relaciones_dominio (dominio_id),
+                    KEY idx_ia_dev_relaciones_origen (tabla_origen_id),
+                    KEY idx_ia_dev_relaciones_destino (tabla_destino_id),
+                    KEY idx_ia_dev_relaciones_estado (estado)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_capacidades (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    dominio_id BIGINT NOT NULL,
+                    capability_id VARCHAR(160) NOT NULL UNIQUE,
+                    capability_key VARCHAR(120) NOT NULL,
+                    tipo_tarea VARCHAR(80) NOT NULL,
+                    contrato_input_json LONGTEXT NULL,
+                    contrato_output_json LONGTEXT NULL,
+                    filtros_soportados_json LONGTEXT NULL,
+                    group_by_soportados_json LONGTEXT NULL,
+                    metricas_soportadas_json LONGTEXT NULL,
+                    policy_tags_json LONGTEXT NULL,
+                    rollout_flag VARCHAR(120) NULL,
+                    handler_class VARCHAR(160) NULL,
+                    estado VARCHAR(24) NOT NULL DEFAULT 'planned',
+                    version INT NOT NULL DEFAULT 1,
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    KEY idx_ia_dev_capacidades_dominio (dominio_id),
+                    KEY idx_ia_dev_capacidades_estado (estado),
+                    KEY idx_ia_dev_capacidades_updated (updated_at)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_skills (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    dominio_id BIGINT NOT NULL,
+                    skill_code VARCHAR(120) NOT NULL,
+                    skill_type VARCHAR(80) NOT NULL,
+                    metadata_json LONGTEXT NULL,
+                    prompt_template TEXT NULL,
+                    estado VARCHAR(24) NOT NULL DEFAULT 'active',
+                    version INT NOT NULL DEFAULT 1,
+                    created_at BIGINT NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    UNIQUE KEY uq_ia_dev_skills (dominio_id, skill_code),
+                    KEY idx_ia_dev_skills_dominio (dominio_id),
+                    KEY idx_ia_dev_skills_estado (estado)
+                )
+                """
+            )
+            self._execute(
+                """
+                CREATE TABLE IF NOT EXISTS ia_dev_auditoria_semantica (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    entity_type VARCHAR(64) NOT NULL,
+                    entity_id VARCHAR(120) NOT NULL,
+                    change_type VARCHAR(32) NOT NULL,
+                    change_source VARCHAR(40) NOT NULL,
+                    before_json LONGTEXT NULL,
+                    after_json LONGTEXT NULL,
+                    version_from INT NULL,
+                    version_to INT NULL,
+                    actor VARCHAR(120) NULL,
+                    run_id VARCHAR(64) NULL,
+                    trace_id VARCHAR(64) NULL,
+                    created_at BIGINT NOT NULL,
+                    KEY idx_ia_dev_auditoria_entidad (entity_type, entity_id),
+                    KEY idx_ia_dev_auditoria_created (created_at),
+                    KEY idx_ia_dev_auditoria_run (run_id)
+                )
+                """
+            )
+            self._initialized_by_alias.add(init_key)
 
     @staticmethod
     def _to_json(value: Any) -> str:
@@ -136,6 +465,887 @@ class IADevSqlStore:
             return json.loads(raw)
         except Exception:
             return default
+
+    # Catalogo semantico de dominios
+    def list_dominios(self, *, status: str | None = None, limit: int = 200) -> list[dict]:
+        self.ensure_tables()
+        safe_limit = max(1, min(int(limit), 1000))
+        where = ""
+        params: list[Any] = []
+        if status:
+            where = "WHERE estado_dominio = %s"
+            params.append(str(status).strip().lower())
+        rows = self._fetchall(
+            f"""
+            SELECT
+                id,
+                codigo_dominio,
+                nombre_dominio,
+                objetivo_negocio,
+                entidad_principal,
+                estado_dominio,
+                nivel_madurez,
+                nivel_confianza_esquema,
+                source_of_truth,
+                source_ref,
+                flags_json,
+                contexto_semantico_json,
+                version,
+                created_at,
+                updated_at
+            FROM ia_dev_dominios
+            {where}
+            ORDER BY codigo_dominio
+            LIMIT %s
+            """,
+            [*params, safe_limit],
+        )
+        payload: list[dict] = []
+        for row in rows:
+            payload.append(
+                {
+                    "id": int(row[0]),
+                    "codigo_dominio": str(row[1] or ""),
+                    "nombre_dominio": str(row[2] or ""),
+                    "objetivo_negocio": str(row[3] or ""),
+                    "entidad_principal": str(row[4] or ""),
+                    "estado_dominio": str(row[5] or ""),
+                    "nivel_madurez": str(row[6] or ""),
+                    "nivel_confianza_esquema": float(row[7] or 0.0),
+                    "source_of_truth": str(row[8] or ""),
+                    "source_ref": str(row[9] or ""),
+                    "flags_json": self._from_json(row[10], {}),
+                    "contexto_semantico_json": self._from_json(row[11], {}),
+                    "version": int(row[12] or 1),
+                    "created_at": int(row[13] or 0),
+                    "updated_at": int(row[14] or 0),
+                }
+            )
+        return payload
+
+    def get_dominio(self, *, codigo_dominio: str) -> dict | None:
+        self.ensure_tables()
+        code = str(codigo_dominio or "").strip().lower()
+        if not code:
+            return None
+        row = self._fetchone(
+            """
+            SELECT
+                id,
+                codigo_dominio,
+                nombre_dominio,
+                objetivo_negocio,
+                entidad_principal,
+                estado_dominio,
+                nivel_madurez,
+                nivel_confianza_esquema,
+                source_of_truth,
+                source_ref,
+                flags_json,
+                contexto_semantico_json,
+                version,
+                created_at,
+                updated_at
+            FROM ia_dev_dominios
+            WHERE codigo_dominio = %s
+            LIMIT 1
+            """,
+            [code],
+        )
+        if not row:
+            return None
+        return {
+            "id": int(row[0]),
+            "codigo_dominio": str(row[1] or ""),
+            "nombre_dominio": str(row[2] or ""),
+            "objetivo_negocio": str(row[3] or ""),
+            "entidad_principal": str(row[4] or ""),
+            "estado_dominio": str(row[5] or ""),
+            "nivel_madurez": str(row[6] or ""),
+            "nivel_confianza_esquema": float(row[7] or 0.0),
+            "source_of_truth": str(row[8] or ""),
+            "source_ref": str(row[9] or ""),
+            "flags_json": self._from_json(row[10], {}),
+            "contexto_semantico_json": self._from_json(row[11], {}),
+            "version": int(row[12] or 1),
+            "created_at": int(row[13] or 0),
+            "updated_at": int(row[14] or 0),
+        }
+
+    def upsert_dominio(
+        self,
+        *,
+        codigo_dominio: str,
+        nombre_dominio: str,
+        objetivo_negocio: str = "",
+        entidad_principal: str = "",
+        estado_dominio: str = "planned",
+        nivel_madurez: str = "initial",
+        nivel_confianza_esquema: float = 0.0,
+        source_of_truth: str = "db",
+        source_ref: str | None = None,
+        flags: dict | None = None,
+        contexto_semantico: dict | None = None,
+    ) -> dict:
+        self.ensure_tables()
+        ts = self._now()
+        code = str(codigo_dominio or "").strip().lower()
+        if not code:
+            raise ValueError("codigo_dominio is required")
+        existing = self.get_dominio(codigo_dominio=code)
+        if existing:
+            new_version = int(existing.get("version") or 1) + 1
+            self._execute(
+                """
+                UPDATE ia_dev_dominios
+                SET nombre_dominio = %s,
+                    objetivo_negocio = %s,
+                    entidad_principal = %s,
+                    estado_dominio = %s,
+                    nivel_madurez = %s,
+                    nivel_confianza_esquema = %s,
+                    source_of_truth = %s,
+                    source_ref = %s,
+                    flags_json = %s,
+                    contexto_semantico_json = %s,
+                    version = %s,
+                    updated_at = %s
+                WHERE codigo_dominio = %s
+                """,
+                [
+                    str(nombre_dominio or code),
+                    str(objetivo_negocio or ""),
+                    str(entidad_principal or ""),
+                    str(estado_dominio or "planned").strip().lower(),
+                    str(nivel_madurez or "initial").strip().lower(),
+                    float(nivel_confianza_esquema or 0.0),
+                    str(source_of_truth or "db"),
+                    str(source_ref or ""),
+                    self._to_json(flags or {}),
+                    self._to_json(contexto_semantico or {}),
+                    new_version,
+                    ts,
+                    code,
+                ],
+            )
+            return self.get_dominio(codigo_dominio=code) or {}
+
+        self._execute(
+            """
+            INSERT INTO ia_dev_dominios (
+                codigo_dominio,
+                nombre_dominio,
+                objetivo_negocio,
+                entidad_principal,
+                estado_dominio,
+                nivel_madurez,
+                nivel_confianza_esquema,
+                source_of_truth,
+                source_ref,
+                flags_json,
+                contexto_semantico_json,
+                version,
+                created_at,
+                updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                code,
+                str(nombre_dominio or code),
+                str(objetivo_negocio or ""),
+                str(entidad_principal or ""),
+                str(estado_dominio or "planned").strip().lower(),
+                str(nivel_madurez or "initial").strip().lower(),
+                float(nivel_confianza_esquema or 0.0),
+                str(source_of_truth or "db"),
+                str(source_ref or ""),
+                self._to_json(flags or {}),
+                self._to_json(contexto_semantico or {}),
+                1,
+                ts,
+                ts,
+            ],
+        )
+        return self.get_dominio(codigo_dominio=code) or {}
+
+    def upsert_tabla_dominio(
+        self,
+        *,
+        dominio_id: int,
+        schema_name: str | None,
+        table_name: str,
+        table_fqn: str,
+        nombre_tabla_logico: str | None = None,
+        rol_tabla: str | None = None,
+        es_principal: bool = False,
+        source_of_truth: str = "db",
+        source_ref: str | None = None,
+        estado: str = "active",
+        metadata: dict | None = None,
+    ) -> dict:
+        self.ensure_tables()
+        ts = self._now()
+        did = int(dominio_id)
+        fqn = str(table_fqn or "").strip().lower()
+        existing = self._fetchone(
+            """
+            SELECT id
+            FROM ia_dev_tablas_dominio
+            WHERE dominio_id = %s
+              AND table_fqn = %s
+            LIMIT 1
+            """,
+            [did, fqn],
+        )
+        if existing:
+            self._execute(
+                """
+                UPDATE ia_dev_tablas_dominio
+                SET schema_name = %s,
+                    table_name = %s,
+                    nombre_tabla_logico = %s,
+                    rol_tabla = %s,
+                    es_principal = %s,
+                    source_of_truth = %s,
+                    source_ref = %s,
+                    estado = %s,
+                    metadata_json = %s,
+                    updated_at = %s
+                WHERE id = %s
+                """,
+                [
+                    str(schema_name or ""),
+                    str(table_name or ""),
+                    str(nombre_tabla_logico or ""),
+                    str(rol_tabla or ""),
+                    1 if es_principal else 0,
+                    str(source_of_truth or "db"),
+                    str(source_ref or ""),
+                    str(estado or "active").strip().lower(),
+                    self._to_json(metadata or {}),
+                    ts,
+                    int(existing[0]),
+                ],
+            )
+        else:
+            self._execute(
+                """
+                INSERT INTO ia_dev_tablas_dominio (
+                    dominio_id,
+                    schema_name,
+                    table_name,
+                    table_fqn,
+                    nombre_tabla_logico,
+                    rol_tabla,
+                    es_principal,
+                    source_of_truth,
+                    source_ref,
+                    estado,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    did,
+                    str(schema_name or ""),
+                    str(table_name or ""),
+                    fqn,
+                    str(nombre_tabla_logico or ""),
+                    str(rol_tabla or ""),
+                    1 if es_principal else 0,
+                    str(source_of_truth or "db"),
+                    str(source_ref or ""),
+                    str(estado or "active").strip().lower(),
+                    self._to_json(metadata or {}),
+                    ts,
+                    ts,
+                ],
+            )
+
+        row = self._fetchone(
+            """
+            SELECT
+                id,
+                dominio_id,
+                schema_name,
+                table_name,
+                table_fqn,
+                nombre_tabla_logico,
+                rol_tabla,
+                es_principal,
+                source_of_truth,
+                source_ref,
+                estado,
+                metadata_json
+            FROM ia_dev_tablas_dominio
+            WHERE dominio_id = %s
+              AND table_fqn = %s
+            LIMIT 1
+            """,
+            [did, fqn],
+        )
+        if not row:
+            return {}
+        return {
+            "id": int(row[0]),
+            "dominio_id": int(row[1]),
+            "schema_name": str(row[2] or ""),
+            "table_name": str(row[3] or ""),
+            "table_fqn": str(row[4] or ""),
+            "nombre_tabla_logico": str(row[5] or ""),
+            "rol_tabla": str(row[6] or ""),
+            "es_principal": bool(row[7]),
+            "source_of_truth": str(row[8] or ""),
+            "source_ref": str(row[9] or ""),
+            "estado": str(row[10] or ""),
+            "metadata": self._from_json(row[11], {}),
+        }
+
+    def transition_estado_dominio(
+        self,
+        *,
+        codigo_dominio: str,
+        estado_destino: str,
+        actor: str = "system",
+        motivo: str = "",
+        run_id: str | None = None,
+        trace_id: str | None = None,
+        source: str = "workflow",
+    ) -> dict:
+        self.ensure_tables()
+        code = str(codigo_dominio or "").strip().lower()
+        target = str(estado_destino or "").strip().lower()
+        valid_states = {"planned", "partial", "active", "deprecated"}
+        if target not in valid_states:
+            return {"ok": False, "error": "invalid_target_status"}
+
+        domain = self.get_dominio(codigo_dominio=code)
+        if not domain:
+            return {"ok": False, "error": "domain_not_found"}
+
+        current = str(domain.get("estado_dominio") or "").strip().lower() or "planned"
+        valid_transitions = {
+            "planned": {"partial", "active", "deprecated"},
+            "partial": {"active", "deprecated"},
+            "active": {"partial", "deprecated"},
+            "deprecated": {"planned"},
+        }
+        if current == target:
+            return {"ok": True, "idempotent": True, "domain": domain}
+        if target not in valid_transitions.get(current, set()):
+            return {"ok": False, "error": "invalid_status_transition", "from_status": current, "to_status": target}
+
+        ts = self._now()
+        self._execute(
+            """
+            UPDATE ia_dev_dominios
+            SET estado_dominio = %s,
+                version = version + 1,
+                updated_at = %s
+            WHERE codigo_dominio = %s
+            """,
+            [target, ts, code],
+        )
+        self._execute(
+            """
+            INSERT INTO ia_dev_estado_dominio (
+                dominio_id,
+                estado_origen,
+                estado_destino,
+                actor,
+                motivo,
+                source,
+                run_id,
+                trace_id,
+                created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                int(domain.get("id") or 0),
+                current,
+                target,
+                str(actor or "system"),
+                str(motivo or ""),
+                str(source or "workflow"),
+                str(run_id or ""),
+                str(trace_id or ""),
+                ts,
+            ],
+        )
+        self._execute(
+            """
+            INSERT INTO ia_dev_auditoria_semantica (
+                entity_type,
+                entity_id,
+                change_type,
+                change_source,
+                before_json,
+                after_json,
+                version_from,
+                version_to,
+                actor,
+                run_id,
+                trace_id,
+                created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                "dominio",
+                str(domain.get("id") or ""),
+                "status_transition",
+                str(source or "workflow"),
+                self._to_json({"estado_dominio": current}),
+                self._to_json({"estado_dominio": target}),
+                int(domain.get("version") or 1),
+                int(domain.get("version") or 1) + 1,
+                str(actor or "system"),
+                str(run_id or ""),
+                str(trace_id or ""),
+                ts,
+            ],
+        )
+        return {
+            "ok": True,
+            "idempotent": False,
+            "from_status": current,
+            "to_status": target,
+            "domain": self.get_dominio(codigo_dominio=code),
+        }
+
+    def list_estado_dominio(
+        self,
+        *,
+        codigo_dominio: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        self.ensure_tables()
+        where = ""
+        params: list[Any] = []
+        if codigo_dominio:
+            domain = self.get_dominio(codigo_dominio=str(codigo_dominio))
+            if not domain:
+                return []
+            where = "WHERE e.dominio_id = %s"
+            params.append(int(domain.get("id") or 0))
+        rows = self._fetchall(
+            f"""
+            SELECT
+                e.id,
+                e.dominio_id,
+                d.codigo_dominio,
+                e.estado_origen,
+                e.estado_destino,
+                e.actor,
+                e.motivo,
+                e.source,
+                e.run_id,
+                e.trace_id,
+                e.created_at
+            FROM ia_dev_estado_dominio AS e
+            JOIN ia_dev_dominios AS d ON d.id = e.dominio_id
+            {where}
+            ORDER BY e.id DESC
+            LIMIT %s
+            """,
+            [*params, max(1, min(int(limit), 1000))],
+        )
+        payload: list[dict] = []
+        for row in rows:
+            payload.append(
+                {
+                    "id": int(row[0]),
+                    "dominio_id": int(row[1]),
+                    "codigo_dominio": str(row[2] or ""),
+                    "estado_origen": str(row[3] or ""),
+                    "estado_destino": str(row[4] or ""),
+                    "actor": str(row[5] or ""),
+                    "motivo": str(row[6] or ""),
+                    "source": str(row[7] or ""),
+                    "run_id": str(row[8] or ""),
+                    "trace_id": str(row[9] or ""),
+                    "created_at": int(row[10] or 0),
+                }
+            )
+        return payload
+
+    def list_tablas_dominio(self, *, dominio_id: int, status: str | None = None, limit: int = 200) -> list[dict]:
+        self.ensure_tables()
+        where = "WHERE dominio_id = %s"
+        params: list[Any] = [int(dominio_id)]
+        if status:
+            where += " AND estado = %s"
+            params.append(str(status).strip().lower())
+        rows = self._fetchall(
+            f"""
+            SELECT
+                id,
+                dominio_id,
+                schema_name,
+                table_name,
+                table_fqn,
+                nombre_tabla_logico,
+                rol_tabla,
+                es_principal,
+                source_of_truth,
+                source_ref,
+                estado,
+                metadata_json
+            FROM ia_dev_tablas_dominio
+            {where}
+            ORDER BY table_fqn
+            LIMIT %s
+            """,
+            [*params, max(1, min(int(limit), 1000))],
+        )
+        payload: list[dict] = []
+        for row in rows:
+            payload.append(
+                {
+                    "id": int(row[0]),
+                    "dominio_id": int(row[1]),
+                    "schema_name": str(row[2] or ""),
+                    "table_name": str(row[3] or ""),
+                    "table_fqn": str(row[4] or ""),
+                    "nombre_tabla_logico": str(row[5] or ""),
+                    "rol_tabla": str(row[6] or ""),
+                    "es_principal": bool(row[7]),
+                    "source_of_truth": str(row[8] or ""),
+                    "source_ref": str(row[9] or ""),
+                    "estado": str(row[10] or ""),
+                    "metadata": self._from_json(row[11], {}),
+                }
+            )
+        return payload
+
+    def list_columnas_dominio(self, *, dominio_id: int, status: str | None = None, limit: int = 500) -> list[dict]:
+        self.ensure_tables()
+        where = "WHERE t.dominio_id = %s"
+        params: list[Any] = [int(dominio_id)]
+        if status:
+            where += " AND c.estado = %s"
+            params.append(str(status).strip().lower())
+        rows = self._fetchall(
+            f"""
+            SELECT
+                c.id,
+                c.tabla_dominio_id,
+                t.table_fqn,
+                c.column_name,
+                c.nombre_columna_logico,
+                c.descripcion,
+                c.data_type,
+                c.es_clave,
+                c.es_filtro,
+                c.es_group_by,
+                c.es_metrica,
+                c.es_sensible,
+                c.operadores_permitidos_json,
+                c.source_of_truth,
+                c.estado
+            FROM ia_dev_columnas AS c
+            JOIN ia_dev_tablas_dominio AS t ON t.id = c.tabla_dominio_id
+            {where}
+            ORDER BY t.table_fqn, c.column_name
+            LIMIT %s
+            """,
+            [*params, max(1, min(int(limit), 3000))],
+        )
+        payload: list[dict] = []
+        for row in rows:
+            payload.append(
+                {
+                    "id": int(row[0]),
+                    "tabla_dominio_id": int(row[1]),
+                    "table_fqn": str(row[2] or ""),
+                    "column_name": str(row[3] or ""),
+                    "nombre_columna_logico": str(row[4] or ""),
+                    "descripcion": str(row[5] or ""),
+                    "data_type": str(row[6] or ""),
+                    "es_clave": bool(row[7]),
+                    "es_filtro": bool(row[8]),
+                    "es_group_by": bool(row[9]),
+                    "es_metrica": bool(row[10]),
+                    "es_sensible": bool(row[11]),
+                    "operadores_permitidos": self._from_json(row[12], []),
+                    "source_of_truth": str(row[13] or ""),
+                    "estado": str(row[14] or ""),
+                }
+            )
+        return payload
+
+    def list_relaciones_dominio(self, *, dominio_id: int, status: str | None = None, limit: int = 500) -> list[dict]:
+        self.ensure_tables()
+        where = "WHERE r.dominio_id = %s"
+        params: list[Any] = [int(dominio_id)]
+        if status:
+            where += " AND r.estado = %s"
+            params.append(str(status).strip().lower())
+        rows = self._fetchall(
+            f"""
+            SELECT
+                r.id,
+                r.dominio_id,
+                r.tabla_origen_id,
+                r.tabla_destino_id,
+                tor.table_fqn,
+                tde.table_fqn,
+                r.nombre_relacion,
+                r.tipo_join,
+                r.condicion_join_sql,
+                r.cardinalidad,
+                r.es_interdominio,
+                r.nivel_confianza,
+                r.source_of_truth,
+                r.estado
+            FROM ia_dev_relaciones AS r
+            LEFT JOIN ia_dev_tablas_dominio AS tor ON tor.id = r.tabla_origen_id
+            LEFT JOIN ia_dev_tablas_dominio AS tde ON tde.id = r.tabla_destino_id
+            {where}
+            ORDER BY r.id
+            LIMIT %s
+            """,
+            [*params, max(1, min(int(limit), 3000))],
+        )
+        payload: list[dict] = []
+        for row in rows:
+            payload.append(
+                {
+                    "id": int(row[0]),
+                    "dominio_id": int(row[1]),
+                    "tabla_origen_id": int(row[2]),
+                    "tabla_destino_id": int(row[3]),
+                    "tabla_origen_fqn": str(row[4] or ""),
+                    "tabla_destino_fqn": str(row[5] or ""),
+                    "nombre_relacion": str(row[6] or ""),
+                    "tipo_join": str(row[7] or ""),
+                    "condicion_join_sql": str(row[8] or ""),
+                    "cardinalidad": str(row[9] or ""),
+                    "es_interdominio": bool(row[10]),
+                    "nivel_confianza": float(row[11] or 0.0),
+                    "source_of_truth": str(row[12] or ""),
+                    "estado": str(row[13] or ""),
+                }
+            )
+        return payload
+
+    def list_capacidades_dominio(self, *, dominio_id: int, status: str | None = None, limit: int = 200) -> list[dict]:
+        self.ensure_tables()
+        where = "WHERE dominio_id = %s"
+        params: list[Any] = [int(dominio_id)]
+        if status:
+            where += " AND estado = %s"
+            params.append(str(status).strip().lower())
+        rows = self._fetchall(
+            f"""
+            SELECT
+                id,
+                dominio_id,
+                capability_id,
+                capability_key,
+                tipo_tarea,
+                filtros_soportados_json,
+                group_by_soportados_json,
+                metricas_soportadas_json,
+                policy_tags_json,
+                rollout_flag,
+                handler_class,
+                estado,
+                version
+            FROM ia_dev_capacidades
+            {where}
+            ORDER BY capability_id
+            LIMIT %s
+            """,
+            [*params, max(1, min(int(limit), 1000))],
+        )
+        payload: list[dict] = []
+        for row in rows:
+            payload.append(
+                {
+                    "id": int(row[0]),
+                    "dominio_id": int(row[1]),
+                    "capability_id": str(row[2] or ""),
+                    "capability_key": str(row[3] or ""),
+                    "tipo_tarea": str(row[4] or ""),
+                    "filtros_soportados": self._from_json(row[5], []),
+                    "group_by_soportados": self._from_json(row[6], []),
+                    "metricas_soportadas": self._from_json(row[7], []),
+                    "policy_tags": self._from_json(row[8], []),
+                    "rollout_flag": str(row[9] or ""),
+                    "handler_class": str(row[10] or ""),
+                    "estado": str(row[11] or ""),
+                    "version": int(row[12] or 1),
+                }
+            )
+        return payload
+
+    def list_skills_dominio(self, *, dominio_id: int, status: str | None = None, limit: int = 200) -> list[dict]:
+        self.ensure_tables()
+        where = "WHERE dominio_id = %s"
+        params: list[Any] = [int(dominio_id)]
+        if status:
+            where += " AND estado = %s"
+            params.append(str(status).strip().lower())
+        rows = self._fetchall(
+            f"""
+            SELECT
+                id,
+                dominio_id,
+                skill_code,
+                skill_type,
+                metadata_json,
+                prompt_template,
+                estado,
+                version
+            FROM ia_dev_skills
+            {where}
+            ORDER BY skill_code
+            LIMIT %s
+            """,
+            [*params, max(1, min(int(limit), 1000))],
+        )
+        payload: list[dict] = []
+        for row in rows:
+            payload.append(
+                {
+                    "id": int(row[0]),
+                    "dominio_id": int(row[1]),
+                    "skill_code": str(row[2] or ""),
+                    "skill_type": str(row[3] or ""),
+                    "metadata": self._from_json(row[4], {}),
+                    "prompt_template": str(row[5] or ""),
+                    "estado": str(row[6] or ""),
+                    "version": int(row[7] or 1),
+                }
+            )
+        return payload
+
+    def sync_dominios_desde_ai_dictionary(self, *, limit: int = 500) -> dict:
+        self.ensure_tables()
+        dictionary_table = str(os.getenv("IA_DEV_DICTIONARY_TABLE", "ai_dictionary.dd_dominios") or "").strip()
+        if "." in dictionary_table:
+            dictionary_schema = dictionary_table.split(".", 1)[0]
+        else:
+            dictionary_schema = "ai_dictionary"
+        if not self._is_safe_identifier(dictionary_schema):
+            return {"ok": False, "error": "invalid_dictionary_schema"}
+
+        domain_rows = self._fetchall(
+            f"""
+            SELECT id, codigo, nombre, descripcion
+            FROM {dictionary_schema}.dd_dominios
+            WHERE activo = 1
+            ORDER BY id
+            LIMIT %s
+            """,
+            [max(1, min(int(limit), 2000))],
+        )
+
+        synced_domains = 0
+        synced_tables = 0
+        for row in domain_rows:
+            dd_domain_id = int(row[0] or 0)
+            codigo = str(row[1] or "").strip().lower()
+            nombre = str(row[2] or codigo)
+            descripcion = str(row[3] or "")
+            if not codigo:
+                continue
+            local_domain = self.upsert_dominio(
+                codigo_dominio=codigo,
+                nombre_dominio=nombre,
+                objetivo_negocio=descripcion,
+                entidad_principal="empresa",
+                estado_dominio="planned",
+                nivel_madurez="initial",
+                nivel_confianza_esquema=0.60,
+                source_of_truth="ai_dictionary",
+                source_ref=f"{dictionary_schema}.dd_dominios:{dd_domain_id}",
+            )
+            local_domain_id = int(local_domain.get("id") or 0)
+            if local_domain_id <= 0:
+                continue
+            synced_domains += 1
+            self._execute(
+                """
+                INSERT INTO ia_dev_auditoria_semantica (
+                    entity_type,
+                    entity_id,
+                    change_type,
+                    change_source,
+                    before_json,
+                    after_json,
+                    version_from,
+                    version_to,
+                    actor,
+                    run_id,
+                    trace_id,
+                    created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    "dominio",
+                    str(local_domain_id),
+                    "sync",
+                    "ai_dictionary",
+                    self._to_json({}),
+                    self._to_json({"codigo_dominio": codigo, "nombre_dominio": nombre}),
+                    0,
+                    int(local_domain.get("version") or 1),
+                    "system_sync",
+                    "",
+                    "",
+                    self._now(),
+                ],
+            )
+
+            table_rows = self._fetchall(
+                f"""
+                SELECT
+                    id,
+                    schema_name,
+                    table_name,
+                    alias_negocio,
+                    descripcion
+                FROM {dictionary_schema}.dd_tablas
+                WHERE activo = 1
+                  AND dominio_id = %s
+                ORDER BY id
+                LIMIT %s
+                """,
+                [dd_domain_id, 2000],
+            )
+            for trow in table_rows:
+                schema_name = str(trow[1] or "").strip()
+                table_name = str(trow[2] or "").strip()
+                if not table_name:
+                    continue
+                table_fqn = f"{schema_name}.{table_name}".strip(".").lower()
+                self.upsert_tabla_dominio(
+                    dominio_id=local_domain_id,
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    table_fqn=table_fqn,
+                    nombre_tabla_logico=str(trow[3] or ""),
+                    rol_tabla="dataset",
+                    es_principal=False,
+                    source_of_truth="ai_dictionary",
+                    source_ref=f"{dictionary_schema}.dd_tablas:{int(trow[0] or 0)}",
+                    estado="active",
+                    metadata={"descripcion": str(trow[4] or "")},
+                )
+                synced_tables += 1
+
+        return {
+            "ok": True,
+            "dictionary_schema": dictionary_schema,
+            "synced_domains": synced_domains,
+            "synced_tables": synced_tables,
+        }
+
+    @staticmethod
+    def _is_safe_identifier(value: str) -> bool:
+        return bool(re.match(r"^[A-Za-z0-9_]+$", str(value or "")))
 
     # Session memory
     def upsert_session_memory(
@@ -208,6 +1418,729 @@ class IADevSqlStore:
             "trim_events": int(row[3] or 0),
             "updated_at": int(row[4] or 0),
         }
+
+    # User memory
+    def upsert_user_memory(
+        self,
+        *,
+        user_key: str,
+        memory_key: str,
+        memory_value: Any,
+        sensitivity: str = "medium",
+        source: str = "api",
+        confidence: float = 1.0,
+        expires_at: int | None = None,
+    ):
+        self.ensure_tables()
+        now = self._now()
+        existing = self._fetchone(
+            """
+            SELECT id
+            FROM ia_dev_user_memory
+            WHERE user_key = %s
+              AND memory_key = %s
+            LIMIT 1
+            """,
+            [user_key, memory_key],
+        )
+        if existing:
+            self._execute(
+                """
+                UPDATE ia_dev_user_memory
+                SET memory_value_json = %s,
+                    sensitivity = %s,
+                    source = %s,
+                    confidence = %s,
+                    expires_at = %s,
+                    updated_at = %s
+                WHERE user_key = %s
+                  AND memory_key = %s
+                """,
+                [
+                    self._to_json(memory_value),
+                    sensitivity[:16],
+                    source[:40],
+                    max(0.0, min(float(confidence), 1.0)),
+                    expires_at,
+                    now,
+                    user_key,
+                    memory_key,
+                ],
+            )
+            return
+
+        self._execute(
+            """
+            INSERT INTO ia_dev_user_memory
+                (user_key, memory_key, memory_value_json, sensitivity, source, confidence, expires_at, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                user_key,
+                memory_key,
+                self._to_json(memory_value),
+                sensitivity[:16],
+                source[:40],
+                max(0.0, min(float(confidence), 1.0)),
+                expires_at,
+                now,
+                now,
+            ],
+        )
+
+    def get_user_memory_entry(self, *, user_key: str, memory_key: str) -> dict | None:
+        self.ensure_tables()
+        row = self._fetchone(
+            """
+            SELECT id, user_key, memory_key, memory_value_json, sensitivity, source, confidence, expires_at, created_at, updated_at
+            FROM ia_dev_user_memory
+            WHERE user_key = %s
+              AND memory_key = %s
+            LIMIT 1
+            """,
+            [user_key, memory_key],
+        )
+        if not row:
+            return None
+        return {
+            "id": int(row[0]),
+            "user_key": str(row[1] or ""),
+            "memory_key": str(row[2] or ""),
+            "memory_value": self._from_json(row[3], None),
+            "sensitivity": str(row[4] or "medium"),
+            "source": str(row[5] or "api"),
+            "confidence": float(row[6] or 0.0),
+            "expires_at": int(row[7]) if row[7] is not None else None,
+            "created_at": int(row[8] or 0),
+            "updated_at": int(row[9] or 0),
+        }
+
+    def list_user_memory(self, *, user_key: str, limit: int = 100) -> list[dict]:
+        self.ensure_tables()
+        safe_limit = max(1, min(int(limit), 500))
+        now = self._now()
+        rows = self._fetchall(
+            """
+            SELECT id, user_key, memory_key, memory_value_json, sensitivity, source, confidence, expires_at, created_at, updated_at
+            FROM ia_dev_user_memory
+            WHERE user_key = %s
+              AND (expires_at IS NULL OR expires_at >= %s)
+            ORDER BY updated_at DESC
+            LIMIT %s
+            """,
+            [user_key, now, safe_limit],
+        )
+        return [
+            {
+                "id": int(row[0]),
+                "user_key": str(row[1] or ""),
+                "memory_key": str(row[2] or ""),
+                "memory_value": self._from_json(row[3], None),
+                "sensitivity": str(row[4] or "medium"),
+                "source": str(row[5] or "api"),
+                "confidence": float(row[6] or 0.0),
+                "expires_at": int(row[7]) if row[7] is not None else None,
+                "created_at": int(row[8] or 0),
+                "updated_at": int(row[9] or 0),
+            }
+            for row in rows
+        ]
+
+    # Business memory
+    def upsert_business_memory(
+        self,
+        *,
+        domain_code: str,
+        capability_id: str,
+        memory_key: str,
+        memory_value: Any,
+        status: str = "active",
+        source_type: str = "manual",
+        approved_by: str | None = None,
+        approved_at: int | None = None,
+    ):
+        self.ensure_tables()
+        now = self._now()
+        existing = self._fetchone(
+            """
+            SELECT id, version
+            FROM ia_dev_business_memory
+            WHERE domain_code = %s
+              AND capability_id = %s
+              AND memory_key = %s
+            LIMIT 1
+            """,
+            [domain_code, capability_id, memory_key],
+        )
+        if existing:
+            next_version = int(existing[1] or 1) + 1
+            self._execute(
+                """
+                UPDATE ia_dev_business_memory
+                SET memory_value_json = %s,
+                    status = %s,
+                    source_type = %s,
+                    version = %s,
+                    approved_by = %s,
+                    approved_at = %s,
+                    updated_at = %s
+                WHERE id = %s
+                """,
+                [
+                    self._to_json(memory_value),
+                    status[:20],
+                    source_type[:40],
+                    next_version,
+                    approved_by,
+                    approved_at,
+                    now,
+                    int(existing[0]),
+                ],
+            )
+            return
+
+        self._execute(
+            """
+            INSERT INTO ia_dev_business_memory
+                (domain_code, capability_id, memory_key, memory_value_json, status, source_type, version, approved_by, approved_at, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, 1, %s, %s, %s, %s)
+            """,
+            [
+                domain_code[:64],
+                capability_id[:120],
+                memory_key[:120],
+                self._to_json(memory_value),
+                status[:20],
+                source_type[:40],
+                approved_by,
+                approved_at,
+                now,
+                now,
+            ],
+        )
+
+    def get_business_memory_entry(
+        self,
+        *,
+        domain_code: str,
+        capability_id: str,
+        memory_key: str,
+    ) -> dict | None:
+        self.ensure_tables()
+        row = self._fetchone(
+            """
+            SELECT id, domain_code, capability_id, memory_key, memory_value_json, status, source_type, version, approved_by, approved_at, created_at, updated_at
+            FROM ia_dev_business_memory
+            WHERE domain_code = %s
+              AND capability_id = %s
+              AND memory_key = %s
+            LIMIT 1
+            """,
+            [domain_code, capability_id, memory_key],
+        )
+        if not row:
+            return None
+        return {
+            "id": int(row[0]),
+            "domain_code": str(row[1] or ""),
+            "capability_id": str(row[2] or ""),
+            "memory_key": str(row[3] or ""),
+            "memory_value": self._from_json(row[4], None),
+            "status": str(row[5] or ""),
+            "source_type": str(row[6] or ""),
+            "version": int(row[7] or 1),
+            "approved_by": str(row[8]) if row[8] else None,
+            "approved_at": int(row[9]) if row[9] is not None else None,
+            "created_at": int(row[10] or 0),
+            "updated_at": int(row[11] or 0),
+        }
+
+    def list_business_memory(
+        self,
+        *,
+        domain_code: str | None = None,
+        capability_id: str | None = None,
+        status: str | None = "active",
+        limit: int = 100,
+    ) -> list[dict]:
+        self.ensure_tables()
+        safe_limit = max(1, min(int(limit), 500))
+        where: list[str] = ["1 = 1"]
+        params: list[Any] = []
+        if domain_code:
+            where.append("domain_code = %s")
+            params.append(domain_code)
+        if capability_id:
+            where.append("capability_id = %s")
+            params.append(capability_id)
+        if status:
+            where.append("status = %s")
+            params.append(status)
+        params.append(safe_limit)
+        rows = self._fetchall(
+            f"""
+            SELECT id, domain_code, capability_id, memory_key, memory_value_json, status, source_type, version, approved_by, approved_at, created_at, updated_at
+            FROM ia_dev_business_memory
+            WHERE {" AND ".join(where)}
+            ORDER BY updated_at DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return [
+            {
+                "id": int(row[0]),
+                "domain_code": str(row[1] or ""),
+                "capability_id": str(row[2] or ""),
+                "memory_key": str(row[3] or ""),
+                "memory_value": self._from_json(row[4], None),
+                "status": str(row[5] or ""),
+                "source_type": str(row[6] or ""),
+                "version": int(row[7] or 1),
+                "approved_by": str(row[8]) if row[8] else None,
+                "approved_at": int(row[9]) if row[9] is not None else None,
+                "created_at": int(row[10] or 0),
+                "updated_at": int(row[11] or 0),
+            }
+            for row in rows
+        ]
+
+    # Learned memory proposals
+    def insert_learned_memory_proposal(self, proposal: dict):
+        self.ensure_tables()
+        self._execute(
+            """
+            INSERT INTO ia_dev_learned_memory_proposals
+                (proposal_id, scope, status, proposer_user_key, source_run_id, candidate_key, candidate_value_json, reason,
+                 sensitivity, domain_code, capability_id, policy_action, policy_id, idempotency_key, error, version, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                proposal["proposal_id"],
+                proposal["scope"],
+                proposal.get("status", "pending"),
+                proposal.get("proposer_user_key"),
+                proposal.get("source_run_id"),
+                proposal.get("candidate_key"),
+                self._to_json(proposal.get("candidate_value")),
+                proposal.get("reason"),
+                proposal.get("sensitivity", "medium"),
+                proposal.get("domain_code"),
+                proposal.get("capability_id"),
+                proposal.get("policy_action"),
+                proposal.get("policy_id"),
+                proposal.get("idempotency_key"),
+                proposal.get("error"),
+                int(proposal.get("version") or 1),
+                int(proposal.get("created_at") or self._now()),
+                int(proposal.get("updated_at") or self._now()),
+            ],
+        )
+
+    def get_learned_memory_proposal(self, proposal_id: str, *, for_update: bool = False) -> dict | None:
+        self.ensure_tables()
+        query = (
+            """
+            SELECT proposal_id, scope, status, proposer_user_key, source_run_id, candidate_key, candidate_value_json, reason,
+                   sensitivity, domain_code, capability_id, policy_action, policy_id, idempotency_key, error, version, created_at, updated_at
+            FROM ia_dev_learned_memory_proposals
+            WHERE proposal_id = %s
+            LIMIT 1
+            """
+            + (" FOR UPDATE" if for_update else "")
+        )
+        row = self._fetchone(query, [proposal_id])
+        if not row:
+            return None
+        return {
+            "proposal_id": str(row[0] or ""),
+            "scope": str(row[1] or ""),
+            "status": str(row[2] or ""),
+            "proposer_user_key": str(row[3] or ""),
+            "source_run_id": str(row[4]) if row[4] else None,
+            "candidate_key": str(row[5] or ""),
+            "candidate_value": self._from_json(row[6], None),
+            "reason": str(row[7]) if row[7] else "",
+            "sensitivity": str(row[8] or "medium"),
+            "domain_code": str(row[9]) if row[9] else None,
+            "capability_id": str(row[10]) if row[10] else None,
+            "policy_action": str(row[11]) if row[11] else None,
+            "policy_id": str(row[12]) if row[12] else None,
+            "idempotency_key": str(row[13]) if row[13] else None,
+            "error": str(row[14]) if row[14] else None,
+            "version": int(row[15] or 1),
+            "created_at": int(row[16] or 0),
+            "updated_at": int(row[17] or 0),
+        }
+
+    def get_learned_memory_proposal_by_idempotency(self, idempotency_key: str) -> dict | None:
+        self.ensure_tables()
+        if not str(idempotency_key or "").strip():
+            return None
+        row = self._fetchone(
+            """
+            SELECT proposal_id
+            FROM ia_dev_learned_memory_proposals
+            WHERE idempotency_key = %s
+            LIMIT 1
+            """,
+            [idempotency_key],
+        )
+        if not row:
+            return None
+        return self.get_learned_memory_proposal(str(row[0] or ""))
+
+    def list_learned_memory_proposals(
+        self,
+        *,
+        status: str | None = None,
+        scope: str | None = None,
+        proposer_user_key: str | None = None,
+        limit: int = 30,
+    ) -> list[dict]:
+        self.ensure_tables()
+        safe_limit = max(1, min(int(limit), 200))
+        where: list[str] = ["1 = 1"]
+        params: list[Any] = []
+        if status:
+            where.append("status = %s")
+            params.append(status)
+        if scope:
+            where.append("scope = %s")
+            params.append(scope)
+        if proposer_user_key:
+            where.append("proposer_user_key = %s")
+            params.append(proposer_user_key)
+        params.append(safe_limit)
+        rows = self._fetchall(
+            f"""
+            SELECT proposal_id
+            FROM ia_dev_learned_memory_proposals
+            WHERE {" AND ".join(where)}
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        result: list[dict] = []
+        for row in rows:
+            proposal = self.get_learned_memory_proposal(str(row[0]))
+            if proposal:
+                result.append(proposal)
+        return result
+
+    def update_learned_memory_proposal(self, proposal_id: str, updates: dict):
+        self.ensure_tables()
+        allowed = {
+            "scope",
+            "status",
+            "reason",
+            "sensitivity",
+            "domain_code",
+            "capability_id",
+            "policy_action",
+            "policy_id",
+            "error",
+            "version",
+            "updated_at",
+            "candidate_value",
+        }
+        sets: list[str] = []
+        params: list[Any] = []
+        for key, value in updates.items():
+            if key not in allowed:
+                continue
+            if key == "candidate_value":
+                sets.append("candidate_value_json = %s")
+                params.append(self._to_json(value))
+            else:
+                sets.append(f"{key} = %s")
+                params.append(value)
+        if not sets:
+            return
+        params.append(proposal_id)
+        self._execute(
+            f"""
+            UPDATE ia_dev_learned_memory_proposals
+            SET {", ".join(sets)}
+            WHERE proposal_id = %s
+            """,
+            params,
+        )
+
+    def insert_learned_memory_approval(self, approval: dict):
+        self.ensure_tables()
+        self._execute(
+            """
+            INSERT INTO ia_dev_learned_memory_approvals
+                (proposal_id, action, actor_user_key, actor_role, comment, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            [
+                approval.get("proposal_id"),
+                approval.get("action"),
+                approval.get("actor_user_key"),
+                approval.get("actor_role"),
+                approval.get("comment"),
+                int(approval.get("created_at") or self._now()),
+            ],
+        )
+
+    def list_learned_memory_approvals(self, *, proposal_id: str, limit: int = 20) -> list[dict]:
+        self.ensure_tables()
+        safe_limit = max(1, min(int(limit), 200))
+        rows = self._fetchall(
+            """
+            SELECT id, proposal_id, action, actor_user_key, actor_role, comment, created_at
+            FROM ia_dev_learned_memory_approvals
+            WHERE proposal_id = %s
+            ORDER BY id DESC
+            LIMIT %s
+            """,
+            [proposal_id, safe_limit],
+        )
+        return [
+            {
+                "id": int(row[0]),
+                "proposal_id": str(row[1] or ""),
+                "action": str(row[2] or ""),
+                "actor_user_key": str(row[3] or ""),
+                "actor_role": str(row[4] or ""),
+                "comment": str(row[5]) if row[5] else "",
+                "created_at": int(row[6] or 0),
+            }
+            for row in rows
+        ]
+
+    # Workflow state
+    def upsert_workflow_state(
+        self,
+        *,
+        workflow_type: str,
+        workflow_key: str,
+        status: str,
+        state: dict,
+        retry_count: int = 0,
+        lock_version: int = 1,
+        next_retry_at: int | None = None,
+        last_error: str | None = None,
+    ):
+        self.ensure_tables()
+        now = self._now()
+        existing = self._fetchone(
+            """
+            SELECT id
+            FROM ia_dev_workflow_state
+            WHERE workflow_key = %s
+            LIMIT 1
+            """,
+            [workflow_key],
+        )
+        if existing:
+            self._execute(
+                """
+                UPDATE ia_dev_workflow_state
+                SET workflow_type = %s,
+                    status = %s,
+                    state_json = %s,
+                    retry_count = %s,
+                    lock_version = %s,
+                    next_retry_at = %s,
+                    last_error = %s,
+                    updated_at = %s
+                WHERE workflow_key = %s
+                """,
+                [
+                    workflow_type,
+                    status,
+                    self._to_json(state),
+                    int(retry_count),
+                    int(lock_version),
+                    next_retry_at,
+                    last_error,
+                    now,
+                    workflow_key,
+                ],
+            )
+            return
+        self._execute(
+            """
+            INSERT INTO ia_dev_workflow_state
+                (workflow_type, workflow_key, status, state_json, retry_count, lock_version, next_retry_at, last_error, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                workflow_type,
+                workflow_key,
+                status,
+                self._to_json(state),
+                int(retry_count),
+                int(lock_version),
+                next_retry_at,
+                last_error,
+                now,
+                now,
+            ],
+        )
+
+    def get_workflow_state(self, workflow_key: str, *, for_update: bool = False) -> dict | None:
+        self.ensure_tables()
+        query = (
+            """
+            SELECT id, workflow_type, workflow_key, status, state_json, retry_count, lock_version, next_retry_at, last_error, created_at, updated_at
+            FROM ia_dev_workflow_state
+            WHERE workflow_key = %s
+            LIMIT 1
+            """
+            + (" FOR UPDATE" if for_update else "")
+        )
+        row = self._fetchone(query, [workflow_key])
+        if not row:
+            return None
+        return {
+            "id": int(row[0]),
+            "workflow_type": str(row[1] or ""),
+            "workflow_key": str(row[2] or ""),
+            "status": str(row[3] or ""),
+            "state": self._from_json(row[4], {}),
+            "retry_count": int(row[5] or 0),
+            "lock_version": int(row[6] or 1),
+            "next_retry_at": int(row[7]) if row[7] is not None else None,
+            "last_error": str(row[8]) if row[8] else None,
+            "created_at": int(row[9] or 0),
+            "updated_at": int(row[10] or 0),
+        }
+
+    def list_workflow_states(
+        self,
+        *,
+        workflow_type: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        self.ensure_tables()
+        safe_limit = max(1, min(int(limit), 500))
+        where: list[str] = ["1 = 1"]
+        params: list[Any] = []
+        if workflow_type:
+            where.append("workflow_type = %s")
+            params.append(str(workflow_type))
+        if status:
+            where.append("status = %s")
+            params.append(str(status))
+        params.append(safe_limit)
+        rows = self._fetchall(
+            f"""
+            SELECT id, workflow_type, workflow_key, status, state_json, retry_count, lock_version, next_retry_at, last_error, created_at, updated_at
+            FROM ia_dev_workflow_state
+            WHERE {" AND ".join(where)}
+            ORDER BY updated_at DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return [
+            {
+                "id": int(row[0]),
+                "workflow_type": str(row[1] or ""),
+                "workflow_key": str(row[2] or ""),
+                "status": str(row[3] or ""),
+                "state": self._from_json(row[4], {}),
+                "retry_count": int(row[5] or 0),
+                "lock_version": int(row[6] or 1),
+                "next_retry_at": int(row[7]) if row[7] is not None else None,
+                "last_error": str(row[8]) if row[8] else None,
+                "created_at": int(row[9] or 0),
+                "updated_at": int(row[10] or 0),
+            }
+            for row in rows
+        ]
+
+    # Memory audit
+    def insert_memory_audit_event(
+        self,
+        *,
+        event_type: str,
+        memory_scope: str,
+        entity_key: str,
+        action: str,
+        actor_type: str,
+        actor_key: str,
+        run_id: str | None = None,
+        trace_id: str | None = None,
+        before: Any = None,
+        after: Any = None,
+        meta: dict | None = None,
+    ):
+        self.ensure_tables()
+        self._execute(
+            """
+            INSERT INTO ia_dev_memory_audit_trail
+                (event_type, memory_scope, entity_key, action, actor_type, actor_key, run_id, trace_id, before_json, after_json, meta_json, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            [
+                (event_type or "")[:64],
+                (memory_scope or "")[:20],
+                (entity_key or "")[:140],
+                (action or "")[:24],
+                (actor_type or "")[:24],
+                (actor_key or "")[:128],
+                (run_id or "")[:64] or None,
+                (trace_id or "")[:64] or None,
+                self._to_json(before) if before is not None else None,
+                self._to_json(after) if after is not None else None,
+                self._to_json(meta or {}),
+                self._now(),
+            ],
+        )
+
+    def list_memory_audit_events(
+        self,
+        *,
+        memory_scope: str | None = None,
+        entity_key: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        self.ensure_tables()
+        safe_limit = max(1, min(int(limit), 1000))
+        where: list[str] = ["1 = 1"]
+        params: list[Any] = []
+        if memory_scope:
+            where.append("memory_scope = %s")
+            params.append(memory_scope)
+        if entity_key:
+            where.append("entity_key = %s")
+            params.append(entity_key)
+        params.append(safe_limit)
+        rows = self._fetchall(
+            f"""
+            SELECT id, event_type, memory_scope, entity_key, action, actor_type, actor_key, run_id, trace_id, before_json, after_json, meta_json, created_at
+            FROM ia_dev_memory_audit_trail
+            WHERE {" AND ".join(where)}
+            ORDER BY id DESC
+            LIMIT %s
+            """,
+            params,
+        )
+        return [
+            {
+                "id": int(row[0]),
+                "event_type": str(row[1] or ""),
+                "memory_scope": str(row[2] or ""),
+                "entity_key": str(row[3] or ""),
+                "action": str(row[4] or ""),
+                "actor_type": str(row[5] or ""),
+                "actor_key": str(row[6] or ""),
+                "run_id": str(row[7]) if row[7] else None,
+                "trace_id": str(row[8]) if row[8] else None,
+                "before": self._from_json(row[9], None),
+                "after": self._from_json(row[10], None),
+                "meta": self._from_json(row[11], {}),
+                "created_at": int(row[12] or 0),
+            }
+            for row in rows
+        ]
 
     # Tickets
     def insert_ticket(
@@ -484,13 +2417,15 @@ class IADevSqlStore:
                 continue
             with connections[self.db_alias].cursor() as cursor:
                 cursor.execute(
-                    """
+                    self._prepare_sql(
+                        """
                     UPDATE ia_dev_async_jobs
                     SET status = 'running',
                         updated_at = %s
                     WHERE job_id = %s
                       AND status = 'pending'
-                    """,
+                    """
+                    ),
                     [self._now(), job_id],
                 )
                 if int(cursor.rowcount or 0) != 1:

@@ -66,6 +66,26 @@ Se agrego un nucleo de gobierno/autoevolucion para propuestas de reglas de negoc
   - Latencia por corrida del orquestador
   - Tokens/costo estimado OpenAI
   - Endpoint resumen: `GET /ia-dev/observability/summary/`
+- Delegacion por dominios (PR11 inicial):
+  - `IA_DEV_DELEGATION_ENABLED=1|0`
+  - `IA_DEV_DELEGATION_MODE=off|shadow|active`
+  - `IA_DEV_SYSTEM_SCHEMA=<schema_opcional>`: enruta tablas `ia_dev_*` a un schema especifico sin cambiar el `db_alias`.
+    - Si no se define, mantiene el comportamiento actual (schema por defecto de `IA_DEV_DB_ALIAS`).
+    - `ai_dictionary` se mantiene como fuente semantica para sync/catalogo; no se usa como destino por defecto.
+  - `shadow`: planifica subtareas y registra observabilidad sin alterar la respuesta visible.
+  - `active`: habilita ejecucion delegada para dominios soportados.
+  - `IA_DEV_DOMAIN_REGISTRY_SYNC_ENABLED=1|0`: sincroniza catalogo desde `ai_dictionary` en runtime.
+  - `IA_DEV_SQL_ASSISTED_ENABLED=1|0`: habilita ejecucion de SQL asistido restringido (solo SELECT + LIMIT).
+  - `IA_DEV_DB_READONLY_ALIAS`: alias de conexion read-only para SQL asistido.
+  - `IA_DEV_DOMAIN_ONBOARDING_WORKFLOW_ENABLED=1|0`: activa transiciones `planned -> partial -> active`.
+  - Feature flags por dominio:
+    - `IA_DEV_DOMAIN_AUSENTISMO_ENABLED`
+    - `IA_DEV_DOMAIN_EMPLEADOS_ENABLED`
+    - `IA_DEV_DOMAIN_TRANSPORTE_ENABLED`
+    - `IA_DEV_DOMAIN_COMISIONES_ENABLED`
+    - `IA_DEV_DOMAIN_FACTURACION_ENABLED`
+    - `IA_DEV_DOMAIN_VIATICOS_ENABLED`
+    - `IA_DEV_DOMAIN_HORAS_EXTRAS_ENABLED`
 - Resolucion de periodos para asistencia:
   - `IA_DEV_USE_OPENAI_PERIOD=1` permite que GPT proponga fechas.
   - `IA_DEV_PERIOD_MODEL` define el modelo para extraer rango.

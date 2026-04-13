@@ -28,6 +28,8 @@ import {
   SkipForward,
 } from "lucide-react";
 import IADevFlowCanvas from "./flow/IADevFlowCanvas";
+import IADevChartPanel from "./components/IADevChartPanel";
+import IADevMemoryPanel from "./components/IADevMemoryPanel";
 import {
   loadWorkspaceLayout,
   saveWorkspaceLayout,
@@ -37,7 +39,10 @@ import {
   getIADevHealth,
   resetIADevMemory,
   type IADevAction,
+  type IADevChartPayload,
   type IADevChatResponse,
+  type IADevMemoryCandidate,
+  type IADevMemoryProposal,
   sendIADevMessage,
 } from "@/services/ia-dev.service";
 
@@ -99,6 +104,34 @@ const getAreaFromDomain = (domain?: string | null) => {
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
 
+const asChartPayload = (value: unknown): IADevChartPayload | null => {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as IADevChartPayload;
+  if (
+    candidate.type ||
+    (Array.isArray(candidate.points) && candidate.points.length > 0) ||
+    (Array.isArray(candidate.labels) && candidate.labels.length > 0) ||
+    (Array.isArray(candidate.data) && candidate.data.length > 0)
+  ) {
+    return candidate;
+  }
+  return null;
+};
+
+const extractChartFromResponse = (result: IADevChatResponse): IADevChartPayload | null => {
+  const chartDirect = asChartPayload(result.data?.chart);
+  if (chartDirect) return chartDirect;
+
+  const chartFromArray = Array.isArray(result.data?.charts)
+    ? asChartPayload(result.data?.charts[0])
+    : null;
+  if (chartFromArray) return chartFromArray;
+
+  const chartAction = (result.actions || []).find((action) => action.type === "render_chart");
+  if (!chartAction) return null;
+  return asChartPayload(chartAction.payload?.chart);
+};
+
 const ResizeHandle = ({ onMouseDown }: { onMouseDown: () => void }) => (
   <button
     aria-label="Resize panel"
@@ -113,6 +146,8 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   actions?: IADevAction[];
+  memoryCandidates?: IADevMemoryCandidate[];
+  pendingProposals?: IADevMemoryProposal[];
 };
 
 type ProcessRun = {
@@ -156,6 +191,16 @@ const IADevWorkspace = () => {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [chatStatus, setChatStatus] = useState("");
+  const [latestMemoryCandidates, setLatestMemoryCandidates] = useState<
+    IADevMemoryCandidate[]
+  >([]);
+  const [latestPendingProposals, setLatestPendingProposals] = useState<
+    IADevMemoryProposal[]
+  >([]);
+  const [latestMemoryActions, setLatestMemoryActions] = useState<IADevAction[]>(
+    [],
+  );
+  const [activeChart, setActiveChart] = useState<IADevChartPayload | null>(null);
   const [activeAgent, setActiveAgent] = useState<string>("analista_agent");
   const [activeArea, setActiveArea] = useState<string>("HHGG");
   const [activeNodeIds, setActiveNodeIds] = useState<string[]>(BASE_ACTIVE_NODE_IDS);
@@ -501,8 +546,17 @@ const IADevWorkspace = () => {
           role: "assistant",
           content: assistantMessage,
           actions: result.actions ?? [],
+          memoryCandidates: result.memory_candidates ?? [],
+          pendingProposals: result.pending_proposals ?? [],
         },
       ]);
+      setLatestMemoryCandidates(result.memory_candidates ?? []);
+      setLatestPendingProposals(result.pending_proposals ?? []);
+      setLatestMemoryActions(result.actions ?? []);
+      const chartFromResponse = extractChartFromResponse(result);
+      if (chartFromResponse) {
+        setActiveChart(chartFromResponse);
+      }
 
       const channels = Array.from(
         new Set([
@@ -568,6 +622,7 @@ const IADevWorkspace = () => {
     try {
       setIsSubmitting(true);
       await resetIADevMemory(sessionId);
+      setActiveChart(null);
       setMessages((prev) => [
         ...prev,
         {
@@ -591,7 +646,22 @@ const IADevWorkspace = () => {
   };
 
   const handleActionClick = async (action: IADevAction) => {
-    if (isSubmitting || action.type !== "create_ticket") return;
+    if (isSubmitting) return;
+    if (action.type === "memory_review") {
+      setChatStatus("Panel de memoria abierto para revisar propuestas y auditoria.");
+      return;
+    }
+    if (action.type === "render_chart") {
+      const chart = asChartPayload(action.payload?.chart);
+      if (!chart) {
+        setChatStatus("No se recibio un payload de grafica valido.");
+        return;
+      }
+      setActiveChart(chart);
+      setChatStatus("Grafica cargada desde la accion del agente.");
+      return;
+    }
+    if (action.type !== "create_ticket") return;
 
     const title = action.payload?.title?.trim() || "Solicitud desde IA DEV";
     const description =
@@ -1111,6 +1181,18 @@ const IADevWorkspace = () => {
                 </div>
               )}
 
+              <IADevMemoryPanel
+                latestCandidates={latestMemoryCandidates}
+                latestPendingProposals={latestPendingProposals}
+                latestActions={latestMemoryActions}
+                isBusy={isSubmitting}
+                onStatusChange={setChatStatus}
+              />
+              <IADevChartPanel
+                chart={activeChart}
+                onClose={() => setActiveChart(null)}
+              />
+
               <div className="flex flex-1 flex-col gap-3 overflow-auto p-3">
                 {messages.map((message, index) => (
                   <div
@@ -1122,6 +1204,31 @@ const IADevWorkspace = () => {
                     }`}
                   >
                     {message.content}
+                    {message.role === "assistant" &&
+                      message.pendingProposals &&
+                      message.pendingProposals.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {message.pendingProposals.slice(0, 5).map((proposal) => (
+                            <span
+                              key={proposal.proposal_id}
+                              className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+                              title={`${proposal.proposal_id} · ${proposal.status}`}
+                            >
+                              {proposal.status}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    {message.role === "assistant" &&
+                      message.memoryCandidates &&
+                      message.memoryCandidates.length > 0 && (
+                        <div className="mt-2 rounded-md border border-gray-200 bg-white/70 px-2 py-1 text-[11px] text-gray-600 dark:border-gray-700 dark:bg-gray-900/70 dark:text-gray-300">
+                          Candidatos de memoria detectados:{" "}
+                          {message.memoryCandidates.length}. Usa el panel
+                          &quot;Memoria y Workflow&quot; para guardar preferencia, proponer
+                          regla o ignorar.
+                        </div>
+                      )}
                     {message.role === "assistant" &&
                       message.actions &&
                       message.actions.length > 0 && (

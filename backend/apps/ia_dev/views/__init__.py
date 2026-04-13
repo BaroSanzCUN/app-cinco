@@ -10,3 +10,10 @@ from .chat_view import (
     IADevObservabilitySummaryView,
     IADevTicketView,
 )
+from apps.ia_dev.interfaces.api.views.memory_view import (
+    IADevMemoryAuditView,
+    IADevMemoryProposalApproveView,
+    IADevMemoryProposalRejectView,
+    IADevMemoryProposalView,
+    IADevUserMemoryView,
+)

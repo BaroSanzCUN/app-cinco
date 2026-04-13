@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ia_dev.memory_proposal.schema.v1",
+  "type": "object",
+  "required": ["scope", "candidate_key", "candidate_value"],
+  "properties": {
+    "scope": {
+      "type": "string",
+      "enum": ["session", "user", "business", "workflow", "general"]
+    },
+    "candidate_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "candidate_value": {},
+    "reason": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "sensitivity": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "idempotency_key": {
+      "type": ["string", "null"],
+      "maxLength": 120
+    },
+    "domain_code": {
+      "type": ["string", "null"],
+      "maxLength": 64
+    },
+    "capability_id": {
+      "type": ["string", "null"],
+      "maxLength": 120
+    }
+  }
+}

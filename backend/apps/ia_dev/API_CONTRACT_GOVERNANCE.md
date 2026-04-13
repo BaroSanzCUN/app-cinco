@@ -8,6 +8,8 @@ Ruta base: `/ia-dev`
 
 Autenticacion: JWT/sesion requerida (`IsAuthenticatedUser`).
 
+Contrato relacionado de memoria gobernada: `backend/apps/ia_dev/API_CONTRACT_MEMORY.md`.
+
 ## 1) Crear propuesta
 
 Endpoint: `POST /knowledge/proposals/`

@@ -1,0 +1,69 @@
+dominio: ausentismo
+nombre_dominio: Ausentismo
+objetivo_negocio: Monitorear y analizar ausentismo justificado e injustificado por estructura organizacional.
+entidad_principal: empleado
+estado_dominio: active
+nivel_madurez: mature
+nivel_confianza_esquema: 0.95
+tablas_asociadas:
+  - schema_name: cincosas_cincosas
+    table_name: gestionh_ausentismo
+    nombre_tabla_logico: ausentismo_empleados
+    rol: hechos
+  - schema_name: cincosas_cincosas
+    table_name: cinco_base_de_personal
+    nombre_tabla_logico: empleados_maestro
+    rol: dimension
+columnas_clave:
+  - table_name: gestionh_ausentismo
+    column_name: fecha_edit
+    nombre_columna_logico: fecha_ausentismo
+  - table_name: gestionh_ausentismo
+    column_name: cedula
+    nombre_columna_logico: cedula_empleado
+  - table_name: gestionh_ausentismo
+    column_name: ausentismo
+    nombre_columna_logico: indicador_ausentismo
+  - table_name: gestionh_ausentismo
+    column_name: justificacion
+    nombre_columna_logico: motivo_justificacion
+joins_conocidos:
+  - nombre_relacion: ausentismo_empleado
+    condicion: gestionh_ausentismo.cedula = cinco_base_de_personal.cedula
+    cardinalidad: many_to_one
+filtros_soportados:
+  - fecha_inicio
+  - fecha_fin
+  - supervisor
+  - area
+  - cargo
+  - estado_empleado
+group_by_soportados:
+  - supervisor
+  - area
+  - cargo
+  - periodo
+metricas_soportadas:
+  - total_injustificados
+  - total_justificados
+  - porcentaje_participacion
+sensitividades:
+  - low
+  - medium
+  - high
+capacidades:
+  - capability_id: attendance.summary.by_supervisor.v1
+    nombre: resumen_supervisor
+    tipo: analytics
+  - capability_id: attendance.trend.daily.v1
+    nombre: tendencia_diaria
+    tipo: analytics
+  - capability_id: attendance.trend.monthly.v1
+    nombre: tendencia_mensual
+    tipo: analytics
+skills_metadata:
+  - skill_code: attendance_recurrence
+    skill_type: analysis
+flags:
+  delegation_enabled: true
+  sql_asistido_permitido: false

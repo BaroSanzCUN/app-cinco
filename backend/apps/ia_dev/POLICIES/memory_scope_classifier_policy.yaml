@@ -1,0 +1,14 @@
+version: 1
+scopes:
+  session:
+    description: Conversational short-term context.
+  user:
+    description: User-specific persistent preferences.
+  business:
+    description: Reusable domain/capability operational memory.
+  general:
+    description: Cross-domain global learned behavior.
+keywords:
+  user: [mi formato, prefiero, siempre muestrame, mi estilo]
+  business: [regla funcional, patron operativo, procedimiento de dominio]
+  general: [aplicar globalmente, para todos los dominios, politica global]

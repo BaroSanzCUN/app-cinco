@@ -1,0 +1,13 @@
+version: 1
+approval_required_for:
+  - business
+  - general
+roles:
+  approve:
+    - admin
+    - lead
+    - governance
+  reject:
+    - admin
+    - lead
+    - governance

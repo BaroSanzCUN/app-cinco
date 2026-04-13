@@ -1,0 +1,15 @@
+version: 1
+default_action: require_approval
+rules:
+  - scope: session
+    action: allow
+  - scope: user
+    sensitivity_in: [low, medium]
+    action: allow
+  - scope: user
+    sensitivity_in: [high]
+    action: require_approval
+  - scope: business
+    action: require_approval
+  - scope: general
+    action: require_approval
