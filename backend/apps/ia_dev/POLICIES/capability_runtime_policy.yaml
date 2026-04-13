@@ -1,0 +1,122 @@
+version: 1
+metadata:
+  owner: ia_dev
+  description: Runtime policy for capability execution and safe fallback.
+default_action: allow
+rules:
+  - id: capability.intent_mode.allow
+    when:
+      routing_mode_in: [intent, capability_shadow]
+    action: allow
+    reason: Intent/shadow mode must preserve incremental compatibility.
+
+  - id: capability.execution.disabled
+    when:
+      all:
+        - routing_mode_in: [capability]
+        - flag_disabled: IA_DEV_POLICY_CAPABILITY_EXECUTION_ENABLED
+    action: force_legacy_fallback
+    reason: Capability execution globally disabled by policy flag.
+    metadata:
+      force_legacy_fallback: true
+
+  - id: attendance.capability.disabled
+    when:
+      all:
+        - routing_mode_in: [capability]
+        - capability_prefix_in: [attendance.]
+        - flag_disabled: IA_DEV_CAP_ATTENDANCE_ENABLED
+    action: disable_capability
+    reason: Attendance capability rollout is disabled.
+    metadata:
+      force_legacy_fallback: true
+
+  - id: attendance.database.required
+    when:
+      all:
+        - routing_mode_in: [capability]
+        - capability_prefix_in: [attendance.]
+        - needs_database: false
+    action: deny
+    reason: Attendance capabilities require database context.
+
+  - id: attendance.personal_join.restricted
+    when:
+      all:
+        - routing_mode_in: [capability]
+        - capability_prefix_in: [attendance.]
+        - requires_personal_join: true
+        - flag_disabled: IA_DEV_POLICY_ATTENDANCE_PERSONAL_JOIN_ENABLED
+    action: restrict_scope
+    reason: Join with personal data is restricted.
+    metadata:
+      force_legacy_fallback: true
+      restricted_scope: no_personal_join
+
+  - id: attendance.memory_hints.disabled
+    when:
+      all:
+        - routing_mode_in: [capability]
+        - capability_prefix_in: [attendance.]
+        - uses_memory_hints: true
+        - flag_disabled: IA_DEV_POLICY_MEMORY_HINTS_ENABLED
+    action: mask_sensitive_fields
+    reason: Memory hints are disabled by policy. Mask sensitive fields.
+    metadata:
+      disable_memory_hints: true
+      force_legacy_fallback: true
+
+  - id: attendance.force_legacy.flag
+    when:
+      all:
+        - routing_mode_in: [capability]
+        - capability_prefix_in: [attendance.]
+        - flag_enabled: IA_DEV_POLICY_ATTENDANCE_FORCE_LEGACY
+    action: force_legacy_fallback
+    reason: Emergency force legacy toggle for attendance.
+    metadata:
+      force_legacy_fallback: true
+
+  - id: transport.capability.disabled
+    when:
+      all:
+        - routing_mode_in: [capability]
+        - capability_prefix_in: [transport.]
+        - flag_disabled: IA_DEV_CAP_TRANSPORT_ENABLED
+    action: disable_capability
+    reason: Transport capability rollout is disabled.
+    metadata:
+      force_legacy_fallback: true
+
+  - id: transport.database.required
+    when:
+      all:
+        - routing_mode_in: [capability]
+        - capability_prefix_in: [transport.]
+        - needs_database: false
+    action: deny
+    reason: Transport capabilities require database context.
+
+  - id: transport.memory_hints.disabled
+    when:
+      all:
+        - routing_mode_in: [capability]
+        - capability_prefix_in: [transport.]
+        - uses_memory_hints: true
+        - flag_disabled: IA_DEV_POLICY_MEMORY_HINTS_ENABLED
+    action: force_legacy_fallback
+    reason: Memory hints are disabled for transport.
+    metadata:
+      disable_memory_hints: true
+      force_legacy_fallback: true
+
+  - id: transport.force_legacy.flag
+    when:
+      all:
+        - routing_mode_in: [capability]
+        - capability_prefix_in: [transport.]
+        - flag_enabled: IA_DEV_POLICY_TRANSPORT_FORCE_LEGACY
+    action: force_legacy_fallback
+    reason: Emergency force legacy toggle for transport.
+    metadata:
+      force_legacy_fallback: true

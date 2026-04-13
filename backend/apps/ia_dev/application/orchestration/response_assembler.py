@@ -36,6 +36,7 @@ class LegacyResponseAssembler:
             return response
 
         orchestrator = response.get("orchestrator") or {}
+        proactive_loop = dict(run_context.metadata.get("proactive_loop") or {})
         orchestrator["capability_shadow"] = {
             "run_id": run_context.run_id,
             "trace_id": run_context.trace_id,
@@ -53,6 +54,7 @@ class LegacyResponseAssembler:
                 "candidate_count": len(response.get("memory_candidates") or []),
                 "pending_proposals_count": len(response.get("pending_proposals") or []),
             },
+            "proactive_loop": proactive_loop,
         }
         response["orchestrator"] = orchestrator
 
@@ -105,6 +107,20 @@ class LegacyResponseAssembler:
                     },
                 )
             )
+        if proactive_loop:
+            trace.append(
+                self._trace_event(
+                    phase="proactive_loop",
+                    status="ok" if not proactive_loop.get("used_legacy") else "warning",
+                    detail={
+                        "enabled": bool(proactive_loop.get("enabled")),
+                        "iterations_ran": int(proactive_loop.get("iterations_ran") or 0),
+                        "max_iterations": int(proactive_loop.get("max_iterations") or 0),
+                        "selected_capability_id": proactive_loop.get("selected_capability_id"),
+                        "used_legacy": bool(proactive_loop.get("used_legacy")),
+                    },
+                )
+            )
         response["trace"] = trace
         return response
 
@@ -117,4 +133,3 @@ class LegacyResponseAssembler:
             "detail": detail,
             "active_nodes": ["q", "gpt", "route"],
         }
-

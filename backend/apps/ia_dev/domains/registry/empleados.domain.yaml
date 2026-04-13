@@ -1,0 +1,64 @@
+dominio: empleados
+nombre_dominio: Empleados
+objetivo_negocio: Resolver y normalizar entidades organizacionales para enriquecer consultas de negocio.
+entidad_principal: empleado
+estado_dominio: active
+nivel_madurez: growing
+nivel_confianza_esquema: 0.9
+tablas_asociadas:
+  - schema_name: cincosas_cincosas
+    table_name: cinco_base_de_personal
+    nombre_tabla_logico: empleados_maestro
+    rol: dimension
+columnas_clave:
+  - table_name: cinco_base_de_personal
+    column_name: cedula
+    nombre_columna_logico: cedula_empleado
+  - table_name: cinco_base_de_personal
+    column_name: nombre
+    nombre_columna_logico: nombre_empleado
+  - table_name: cinco_base_de_personal
+    column_name: apellido
+    nombre_columna_logico: apellido_empleado
+  - table_name: cinco_base_de_personal
+    column_name: supervisor
+    nombre_columna_logico: supervisor
+  - table_name: cinco_base_de_personal
+    column_name: area
+    nombre_columna_logico: area
+  - table_name: cinco_base_de_personal
+    column_name: cargo
+    nombre_columna_logico: cargo
+  - table_name: cinco_base_de_personal
+    column_name: carpeta
+    nombre_columna_logico: carpeta
+joins_conocidos:
+  - nombre_relacion: empleado_supervisor
+    condicion: cinco_base_de_personal.supervisor = cinco_base_de_personal.cedula
+    cardinalidad: many_to_one
+filtros_soportados:
+  - cedula
+  - nombre
+  - supervisor
+  - area
+  - cargo
+  - carpeta
+group_by_soportados:
+  - supervisor
+  - area
+  - cargo
+metricas_soportadas:
+  - total_empleados
+sensitividades:
+  - medium
+  - high
+capacidades:
+  - capability_id: empleados.entity.resolve.v1
+    nombre: resolver_entidad_objetivo
+    tipo: enrichment
+skills_metadata:
+  - skill_code: empleados_org_hierarchy
+    skill_type: enrichment
+flags:
+  delegation_enabled: true
+  sql_asistido_permitido: false

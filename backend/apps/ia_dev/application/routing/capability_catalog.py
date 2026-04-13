@@ -43,7 +43,6 @@ class CapabilityCatalog:
 
     @staticmethod
     def _build_default_capabilities() -> list[CapabilityDefinition]:
-        # PR1 sin transport por requerimiento.
         return [
             CapabilityDefinition(
                 capability_id="attendance.period.resolve.v1",
@@ -98,6 +97,60 @@ class CapabilityCatalog:
                 legacy_intents=("attendance_recurrence",),
                 policy_tags=("contains_personal_data",),
                 rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_RECURRENCE_ENABLED",
+            ),
+            CapabilityDefinition(
+                capability_id="attendance.summary.by_supervisor.v1",
+                domain="attendance",
+                handler_key="attendance.summary_by_supervisor",
+                description="Resumen de ausentismos injustificados agrupado por supervisor.",
+                legacy_intents=("attendance_query",),
+                policy_tags=("contains_personal_data", "contains_operational_data"),
+                rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_ANALYTICS_ENABLED",
+            ),
+            CapabilityDefinition(
+                capability_id="attendance.summary.by_area.v1",
+                domain="attendance",
+                handler_key="attendance.summary_by_area",
+                description="Resumen de ausentismos injustificados agrupado por area.",
+                legacy_intents=("attendance_query",),
+                policy_tags=("contains_personal_data", "contains_operational_data"),
+                rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_ANALYTICS_ENABLED",
+            ),
+            CapabilityDefinition(
+                capability_id="attendance.summary.by_cargo.v1",
+                domain="attendance",
+                handler_key="attendance.summary_by_cargo",
+                description="Resumen de ausentismos injustificados agrupado por cargo.",
+                legacy_intents=("attendance_query",),
+                policy_tags=("contains_personal_data", "contains_operational_data"),
+                rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_ANALYTICS_ENABLED",
+            ),
+            CapabilityDefinition(
+                capability_id="attendance.trend.daily.v1",
+                domain="attendance",
+                handler_key="attendance.trend_daily",
+                description="Tendencia diaria de ausentismos injustificados.",
+                legacy_intents=("attendance_query",),
+                policy_tags=("contains_operational_data",),
+                rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_ANALYTICS_ENABLED",
+            ),
+            CapabilityDefinition(
+                capability_id="attendance.trend.monthly.v1",
+                domain="attendance",
+                handler_key="attendance.trend_monthly",
+                description="Tendencia mensual de ausentismos injustificados.",
+                legacy_intents=("attendance_query",),
+                policy_tags=("contains_operational_data",),
+                rollout_flag="IA_DEV_CAP_ATTENDANCE_ENABLED|IA_DEV_CAP_ATTENDANCE_ANALYTICS_ENABLED",
+            ),
+            CapabilityDefinition(
+                capability_id="transport.departures.summary.v1",
+                domain="transport",
+                handler_key="transport.departures_summary",
+                description="Resumen de salidas de vehiculos por fecha.",
+                legacy_intents=("transport_query",),
+                policy_tags=("contains_operational_data",),
+                rollout_flag="IA_DEV_CAP_TRANSPORT_ENABLED|IA_DEV_CAP_TRANSPORT_SUMMARY_ENABLED",
             ),
             CapabilityDefinition(
                 capability_id="knowledge.proposal.create.v1",

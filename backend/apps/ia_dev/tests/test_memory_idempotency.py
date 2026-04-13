@@ -30,6 +30,10 @@ class MemoryWriteServiceIdempotencyTests(SimpleTestCase):
                 allow=False,
             )
         )
+        service.workflow_state = SimpleNamespace(
+            ensure_for_proposal=lambda **_: {"ok": True, "workflow": None},
+            enrich_proposal=lambda proposal: proposal,
+        )
         return service
 
     def test_create_proposal_handles_integrity_collision_as_idempotent(self):

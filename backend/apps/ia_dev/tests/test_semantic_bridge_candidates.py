@@ -1,0 +1,45 @@
+from __future__ import annotations
+
+from django.test import SimpleTestCase
+
+from apps.ia_dev.application.routing.intent_to_capability_bridge import (
+    IntentToCapabilityBridge,
+)
+
+
+class SemanticBridgeCandidateTests(SimpleTestCase):
+    def setUp(self):
+        self.bridge = IntentToCapabilityBridge()
+
+    def test_resolve_candidates_includes_comparative_trend_fallbacks(self):
+        candidates = self.bridge.resolve_candidates(
+            message="Dame comparativo de ausentismos, ultimo mes vs mes anterior con grafica",
+            classification={
+                "intent": "attendance_query",
+                "domain": "attendance",
+                "output_mode": "summary",
+                "needs_database": True,
+                "used_tools": [],
+                "needs_personal_join": False,
+            },
+            max_candidates=4,
+        )
+        capability_ids = [str(item.get("capability_id") or "") for item in candidates]
+        self.assertIn("attendance.trend.monthly.v1", capability_ids)
+        self.assertIn("attendance.trend.daily.v1", capability_ids)
+
+    def test_resolve_candidates_recovers_attendance_from_general_semantics(self):
+        candidates = self.bridge.resolve_candidates(
+            message="grafica de ausentismos por supervisor",
+            classification={
+                "intent": "general_question",
+                "domain": "general",
+                "output_mode": "summary",
+                "needs_database": True,
+                "used_tools": [],
+                "needs_personal_join": False,
+            },
+            max_candidates=4,
+        )
+        capability_ids = [str(item.get("capability_id") or "") for item in candidates]
+        self.assertIn("attendance.summary.by_supervisor.v1", capability_ids)

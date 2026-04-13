@@ -11,6 +11,8 @@ Contrato incremental para endpoints de memoria bajo `/ia-dev/memory/*`.
   - `IA_DEV_MEMORY_READ_ENABLED`
   - `IA_DEV_MEMORY_WRITE_ENABLED`
   - `IA_DEV_MEMORY_PROPOSALS_ENABLED`
+  - `IA_DEV_POLICY_RUNTIME_ENABLED`
+  - `IA_DEV_WORKFLOW_STATE_ENABLED`
 
 ## Extensiones en `POST /ia-dev/chat/`
 
@@ -29,6 +31,7 @@ Semantica:
 - `memory_candidates`: candidatos detectados por loop agentic en la corrida.
 - `pending_proposals`: propuestas de memoria en estado pendiente/approval relacionadas.
 - `actions`: acciones sugeridas para frontend (por ejemplo, revisar propuestas).
+  El payload puede incluir `workflow_statuses` para priorizacion visual.
 
 ## 1) Memoria de usuario
 
@@ -98,6 +101,14 @@ RBAC:
 - admin/lead/governance: puede listar global
 - usuario normal: solo sus propuestas (`proposer_user_key`)
 
+Extensiones PR7:
+
+- Cada propuesta puede incluir:
+  - `workflow_status`
+  - `workflow_key`
+  - `workflow` (detalle del estado operativo)
+- La respuesta incluye `approval_policy` (metadata cargada desde `POLICIES/approval_policy.yaml`).
+
 ### POST `/ia-dev/memory/proposals/`
 
 Request minimo:
@@ -142,7 +153,7 @@ Request:
 
 RBAC:
 
-- Alcance `business` o `general`: solo admin/lead/governance
+- Alcance `business` o `general`: gobernado por `POLICIES/approval_policy.yaml`
 - Usuario normal: no puede aprobar/rechazar global
 
 Estados:
@@ -172,3 +183,16 @@ RBAC:
 - Propuestas soportan `idempotency_key`.
 - En colision de concurrencia (`IntegrityError`) se reintenta lookup y se responde idempotente cuando aplica.
 - Operaciones criticas ejecutan `transaction.atomic(using=db_alias)`.
+
+## Workflow state (PR7)
+
+- Tabla operativa: `ia_dev_workflow_state`
+- Tipo usado para propuestas: `workflow_type=memory_proposal`
+- Estados soportados:
+  - `pending`
+  - `approved`
+  - `rejected`
+  - `applied`
+  - `failed`
+  - `expired`
+- Transiciones invalidas se bloquean cuando `IA_DEV_WORKFLOW_ENFORCE_TRANSITIONS=1`.

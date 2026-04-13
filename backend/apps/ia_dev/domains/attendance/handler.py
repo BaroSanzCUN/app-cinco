@@ -56,6 +56,14 @@ class AttendanceHandler:
         "nombre",
         "apellido",
     )
+    _CHART_TOKENS = (
+        "grafica",
+        "grafico",
+        "chart",
+        "linea",
+        "barra",
+        "barras",
+    )
 
     def __init__(self, *, tool: AttendanceBusinessTool | None = None):
         self.tool = tool or AttendanceBusinessTool()
@@ -319,6 +327,167 @@ class AttendanceHandler:
                         payload["insights"].append(
                             "Si quieres, puedo mostrarlo dia a dia (ausentismo por ausentismo)."
                         )
+            elif capability_id in {
+                "attendance.summary.by_supervisor.v1",
+                "attendance.summary.by_area.v1",
+                "attendance.summary.by_cargo.v1",
+            }:
+                response_output_mode = "summary"
+                needs_personal_join = True
+                top_n = self._extract_top_n(message, hints=memory_hints, default=10)
+                chart_type = self._resolve_chart_type(message=message, hints=memory_hints)
+                if chart_type and not self._message_requests_chart(message) and memory_hints.get("analytics_chart_type"):
+                    memory_hints_used.append(
+                        {
+                            "memory_key": "attendance.analytics.chart_type",
+                            "memory_value": chart_type,
+                            "reason": "chart_type_loaded_from_user_memory",
+                        }
+                    )
+
+                group_by = "supervisor"
+                if capability_id.endswith("by_area.v1"):
+                    group_by = "area"
+                elif capability_id.endswith("by_cargo.v1"):
+                    group_by = "cargo"
+
+                analytics = _measure_tool(
+                    f"attendance_get_summary_by_{group_by}",
+                    self.tool.get_unjustified_aggregation,
+                    period=period,
+                    group_by=group_by,
+                    personal_status=personal_status,
+                    top_n=top_n,
+                    chart_type=chart_type,
+                )
+                used_tools.append("get_attendance_unjustified_with_personal")
+                used_tools.append(f"attendance_analytics_summary_by_{group_by}")
+
+                rows_for_response = list(analytics.get("rows") or [])
+                group_key = str(analytics.get("group_key") or group_by)
+                group_label = str(analytics.get("group_label") or group_by.capitalize())
+                payload["table"] = {
+                    "columns": list(rows_for_response[0].keys()) if rows_for_response else [group_key, "total_injustificados", "porcentaje"],
+                    "rows": rows_for_response,
+                    "rowcount": len(rows_for_response),
+                }
+                payload["kpis"] = {
+                    "total_injustificados": int(analytics.get("total_injustificados") or 0),
+                    "total_grupos": int(analytics.get("total_groups") or 0),
+                    "top_n": int(analytics.get("top_n") or top_n),
+                }
+                payload["labels"] = list(analytics.get("labels") or [])
+                payload["series"] = list(analytics.get("series") or [])
+                chart_payload = dict(analytics.get("chart") or {})
+                if chart_payload:
+                    payload["chart"] = chart_payload
+                    payload["charts"] = [chart_payload]
+                    actions.append(
+                        {
+                            "id": f"attendance-chart-{capability_id}",
+                            "type": "render_chart",
+                            "label": "Ver grafica de ausentismo",
+                            "payload": {
+                                "chart": chart_payload,
+                                "capability_id": capability_id,
+                            },
+                        }
+                    )
+
+                if not rows_for_response:
+                    reply = (
+                        "No se encontraron ausentismos injustificados para agrupar por "
+                        f"{group_label.lower()} entre {analytics.get('periodo_inicio')} y {analytics.get('periodo_fin')}."
+                    )
+                else:
+                    reply = (
+                        f"Resumen de ausentismos injustificados por {group_label.lower()} "
+                        f"({analytics.get('periodo_inicio')} a {analytics.get('periodo_fin')}, top {payload['kpis']['top_n']}):\n\n"
+                        f"{self._format_rows_table(rows_for_response)}"
+                    )
+
+                payload["insights"].append(
+                    f"Se agruparon {payload['kpis']['total_injustificados']} registros en {payload['kpis']['total_grupos']} grupos."
+                )
+                if bool(analytics.get("source_truncated")):
+                    payload["insights"].append(
+                        "La agregacion se calculo sobre una muestra truncada por limite de seguridad (max 500 registros)."
+                    )
+            elif capability_id in {
+                "attendance.trend.daily.v1",
+                "attendance.trend.monthly.v1",
+            }:
+                response_output_mode = "summary"
+                granularity = "monthly" if capability_id.endswith("monthly.v1") else "daily"
+                chart_type = self._resolve_chart_type(
+                    message=message,
+                    hints=memory_hints,
+                    fallback=("bar" if granularity == "monthly" else "line"),
+                )
+                if chart_type and not self._message_requests_chart(message) and memory_hints.get("analytics_chart_type"):
+                    memory_hints_used.append(
+                        {
+                            "memory_key": "attendance.analytics.chart_type",
+                            "memory_value": chart_type,
+                            "reason": "chart_type_loaded_from_user_memory",
+                        }
+                    )
+                trend = _measure_tool(
+                    f"attendance_get_trend_{granularity}",
+                    self.tool.get_unjustified_trend,
+                    period=period,
+                    granularity=granularity,
+                    personal_status=personal_status,
+                    chart_type=chart_type,
+                )
+                used_tools.append("get_attendance_unjustified_table")
+                used_tools.append(f"attendance_analytics_trend_{granularity}")
+
+                rows_for_response = list(trend.get("rows") or [])
+                payload["table"] = {
+                    "columns": list(rows_for_response[0].keys()) if rows_for_response else ["periodo", "total_injustificados"],
+                    "rows": rows_for_response,
+                    "rowcount": len(rows_for_response),
+                }
+                payload["kpis"] = {
+                    "total_injustificados": int(trend.get("total_injustificados") or 0),
+                    "periodos": len(rows_for_response),
+                    "granularity": granularity,
+                }
+                payload["labels"] = list(trend.get("labels") or [])
+                payload["series"] = list(trend.get("series") or [])
+                chart_payload = dict(trend.get("chart") or {})
+                if chart_payload:
+                    payload["chart"] = chart_payload
+                    payload["charts"] = [chart_payload]
+                    actions.append(
+                        {
+                            "id": f"attendance-chart-{capability_id}",
+                            "type": "render_chart",
+                            "label": "Ver grafica de tendencia",
+                            "payload": {
+                                "chart": chart_payload,
+                                "capability_id": capability_id,
+                            },
+                        }
+                    )
+
+                granularity_label = "mensual" if granularity == "monthly" else "diaria"
+                if not rows_for_response:
+                    reply = (
+                        f"No se encontraron datos para tendencia {granularity_label} "
+                        f"entre {trend.get('periodo_inicio')} y {trend.get('periodo_fin')}."
+                    )
+                else:
+                    reply = (
+                        f"Tendencia {granularity_label} de ausentismos injustificados "
+                        f"({trend.get('periodo_inicio')} a {trend.get('periodo_fin')}):\n\n"
+                        f"{self._format_rows_table(rows_for_response)}"
+                    )
+                if bool(trend.get("source_truncated")):
+                    payload["insights"].append(
+                        "La tendencia se calculo sobre una muestra truncada por limite de seguridad (max 500 registros)."
+                    )
             else:
                 return AttendanceHandleResult(
                     ok=False,
@@ -330,6 +499,16 @@ class AttendanceHandler:
             if period_alternative_hint:
                 payload["insights"].append(period_alternative_hint)
                 reply = f"{reply}\n\n{period_alternative_hint}" if reply else period_alternative_hint
+
+            if capability_id.startswith("attendance.summary.by_") or capability_id.startswith("attendance.trend."):
+                self._record_analytics_event(
+                    observability=observability,
+                    run_context=run_context,
+                    sid=sid,
+                    capability_id=capability_id,
+                    rowcount=int(payload.get("table", {}).get("rowcount") or 0),
+                    chart_type=str(dict(payload.get("chart") or {}).get("type") or ""),
+                )
 
             for hint in memory_hints_used:
                 self._record_memory_hint_event(
@@ -444,7 +623,10 @@ class AttendanceHandler:
         end = period.get("end")
 
         normalized = self._normalize_text(message)
-        if _YES_FOLLOW_UP_RE.match(normalized) and not self._has_explicit_period(message):
+        if (
+            (_YES_FOLLOW_UP_RE.match(normalized) or self._is_contextual_reference_request(normalized))
+            and not self._has_explicit_period(message)
+        ):
             prev_start = str(session_context.get("last_period_start") or "").strip()
             prev_end = str(session_context.get("last_period_end") or "").strip()
             if prev_start and prev_end:
@@ -476,6 +658,8 @@ class AttendanceHandler:
             "recurrence_view": None,
             "team": None,
             "supervisor": None,
+            "analytics_chart_type": None,
+            "analytics_top_n": None,
         }
 
         for row in user_memory:
@@ -489,6 +673,10 @@ class AttendanceHandler:
                 hints["team"] = value
             elif key == "attendance.supervisor" and value:
                 hints["supervisor"] = value
+            elif key == "attendance.analytics.chart_type" and value:
+                hints["analytics_chart_type"] = value
+            elif key == "attendance.analytics.top_n" and value:
+                hints["analytics_top_n"] = value
 
         for row in business_memory:
             key = str(row.get("memory_key") or "").strip().lower()
@@ -556,13 +744,83 @@ class AttendanceHandler:
         normalized = self._normalize_text(message)
         return any(token in normalized for token in self._GROUPED_TOKENS)
 
+    def _message_requests_chart(self, message: str) -> bool:
+        normalized = self._normalize_text(message)
+        return any(token in normalized for token in self._CHART_TOKENS)
+
+    @staticmethod
+    def _is_contextual_reference_request(normalized: str) -> bool:
+        return any(
+            token in normalized
+            for token in (
+                "reporte",
+                "resultado",
+                "consulta",
+                "este reporte",
+                "este resultado",
+                "esta consulta",
+                "ese reporte",
+                "ese resultado",
+            )
+        )
+
+    def _resolve_chart_type(
+        self,
+        *,
+        message: str,
+        hints: dict[str, Any],
+        fallback: str = "bar",
+    ) -> str:
+        normalized = self._normalize_text(message)
+        if "linea" in normalized:
+            return "line"
+        if "area" in normalized:
+            return "area"
+        if "barra" in normalized or "barras" in normalized:
+            return "bar"
+
+        hint_chart = str(hints.get("analytics_chart_type") or "").strip().lower()
+        if hint_chart in {"bar", "line", "area"}:
+            return hint_chart
+        return fallback
+
+    def _extract_top_n(self, message: str, *, hints: dict[str, Any] | None = None, default: int = 10) -> int:
+        normalized = self._normalize_text(message)
+        match = re.search(r"\btop\s*(\d{1,2})\b", normalized)
+        if match:
+            try:
+                return max(1, min(int(match.group(1)), 50))
+            except ValueError:
+                pass
+
+        hint_raw = str((hints or {}).get("analytics_top_n") or "").strip()
+        if hint_raw.isdigit():
+            return max(1, min(int(hint_raw), 50))
+
+        return max(1, min(int(default), 50))
+
     def _has_explicit_period(self, text: str) -> bool:
         msg = self._normalize_text(text)
         if re.search(r"\d{4}-\d{2}-\d{2}", msg):
             return True
         if re.search(r"\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b", msg):
             return True
-        return any(token in msg for token in ("hoy", "ayer", "ultima semana", "ultimos", "mes", "anio", "rango"))
+        return any(
+            token in msg
+            for token in (
+                "hoy",
+                "ayer",
+                "esta semana",
+                "semana actual",
+                "semana pasada",
+                "semana anterior",
+                "ultima semana",
+                "ultimos",
+                "mes",
+                "anio",
+                "rango",
+            )
+        )
 
     @staticmethod
     def _format_rows_table(rows: list[dict[str, Any]], max_rows: int = 20) -> str:
@@ -613,7 +871,34 @@ class AttendanceHandler:
             active.update({"personal", "join"})
         if any("recurrence" in tool for tool in used_tools):
             active.add("rules")
+        if any("analytics" in tool or "trend" in tool for tool in used_tools):
+            active.update({"chart", "rules"})
         return sorted(active)
+
+    @staticmethod
+    def _record_analytics_event(
+        *,
+        observability,
+        run_context: RunContext,
+        sid: str,
+        capability_id: str,
+        rowcount: int,
+        chart_type: str,
+    ) -> None:
+        if observability is None or not hasattr(observability, "record_event"):
+            return
+        observability.record_event(
+            event_type="attendance_analytics_generated",
+            source="AttendanceHandler",
+            meta={
+                "run_id": run_context.run_id,
+                "trace_id": run_context.trace_id,
+                "session_id": sid,
+                "capability_id": capability_id,
+                "rowcount": int(rowcount),
+                "chart_type": chart_type or None,
+            },
+        )
 
     @staticmethod
     def _record_memory_hint_event(

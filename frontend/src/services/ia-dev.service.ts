@@ -8,14 +8,40 @@ export type IADevChatRequest = {
   reset_memory?: boolean;
 };
 
+export type IADevChartPoint = {
+  x: string;
+  y: number;
+};
+
+export type IADevChartSeriesMeta = {
+  name?: string;
+  value_key?: string;
+};
+
+export type IADevChartPayload = {
+  engine?: string;
+  chart_library?: string;
+  type?: "bar" | "line" | "area" | string;
+  title?: string;
+  x_key?: string;
+  y_key?: string;
+  labels?: string[];
+  series?: number[] | IADevChartSeriesMeta[];
+  points?: IADevChartPoint[];
+  data?: Array<Record<string, unknown>>;
+  meta?: Record<string, unknown>;
+};
+
 export type IADevAction = {
   id: string;
-  type: "create_ticket" | string;
+  type: "create_ticket" | "render_chart" | string;
   label: string;
   payload?: Record<string, unknown> & {
     category?: string;
     title?: string;
     description?: string;
+    chart?: IADevChartPayload;
+    capability_id?: string;
   };
 };
 
@@ -51,6 +77,8 @@ export type IADevChatResponse = {
     series?: unknown[];
     labels?: unknown[];
     insights?: string[];
+    chart?: IADevChartPayload;
+    charts?: IADevChartPayload[];
   };
   data_sources?: {
     ai_dictionary?: {

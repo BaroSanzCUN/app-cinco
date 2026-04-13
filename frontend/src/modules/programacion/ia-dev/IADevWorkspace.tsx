@@ -28,6 +28,7 @@ import {
   SkipForward,
 } from "lucide-react";
 import IADevFlowCanvas from "./flow/IADevFlowCanvas";
+import IADevChartPanel from "./components/IADevChartPanel";
 import IADevMemoryPanel from "./components/IADevMemoryPanel";
 import {
   loadWorkspaceLayout,
@@ -38,6 +39,7 @@ import {
   getIADevHealth,
   resetIADevMemory,
   type IADevAction,
+  type IADevChartPayload,
   type IADevChatResponse,
   type IADevMemoryCandidate,
   type IADevMemoryProposal,
@@ -101,6 +103,34 @@ const getAreaFromDomain = (domain?: string | null) => {
 
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
+
+const asChartPayload = (value: unknown): IADevChartPayload | null => {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as IADevChartPayload;
+  if (
+    candidate.type ||
+    (Array.isArray(candidate.points) && candidate.points.length > 0) ||
+    (Array.isArray(candidate.labels) && candidate.labels.length > 0) ||
+    (Array.isArray(candidate.data) && candidate.data.length > 0)
+  ) {
+    return candidate;
+  }
+  return null;
+};
+
+const extractChartFromResponse = (result: IADevChatResponse): IADevChartPayload | null => {
+  const chartDirect = asChartPayload(result.data?.chart);
+  if (chartDirect) return chartDirect;
+
+  const chartFromArray = Array.isArray(result.data?.charts)
+    ? asChartPayload(result.data?.charts[0])
+    : null;
+  if (chartFromArray) return chartFromArray;
+
+  const chartAction = (result.actions || []).find((action) => action.type === "render_chart");
+  if (!chartAction) return null;
+  return asChartPayload(chartAction.payload?.chart);
+};
 
 const ResizeHandle = ({ onMouseDown }: { onMouseDown: () => void }) => (
   <button
@@ -170,6 +200,7 @@ const IADevWorkspace = () => {
   const [latestMemoryActions, setLatestMemoryActions] = useState<IADevAction[]>(
     [],
   );
+  const [activeChart, setActiveChart] = useState<IADevChartPayload | null>(null);
   const [activeAgent, setActiveAgent] = useState<string>("analista_agent");
   const [activeArea, setActiveArea] = useState<string>("HHGG");
   const [activeNodeIds, setActiveNodeIds] = useState<string[]>(BASE_ACTIVE_NODE_IDS);
@@ -522,6 +553,10 @@ const IADevWorkspace = () => {
       setLatestMemoryCandidates(result.memory_candidates ?? []);
       setLatestPendingProposals(result.pending_proposals ?? []);
       setLatestMemoryActions(result.actions ?? []);
+      const chartFromResponse = extractChartFromResponse(result);
+      if (chartFromResponse) {
+        setActiveChart(chartFromResponse);
+      }
 
       const channels = Array.from(
         new Set([
@@ -587,6 +622,7 @@ const IADevWorkspace = () => {
     try {
       setIsSubmitting(true);
       await resetIADevMemory(sessionId);
+      setActiveChart(null);
       setMessages((prev) => [
         ...prev,
         {
@@ -613,6 +649,16 @@ const IADevWorkspace = () => {
     if (isSubmitting) return;
     if (action.type === "memory_review") {
       setChatStatus("Panel de memoria abierto para revisar propuestas y auditoria.");
+      return;
+    }
+    if (action.type === "render_chart") {
+      const chart = asChartPayload(action.payload?.chart);
+      if (!chart) {
+        setChatStatus("No se recibio un payload de grafica valido.");
+        return;
+      }
+      setActiveChart(chart);
+      setChatStatus("Grafica cargada desde la accion del agente.");
       return;
     }
     if (action.type !== "create_ticket") return;
@@ -1141,6 +1187,10 @@ const IADevWorkspace = () => {
                 latestActions={latestMemoryActions}
                 isBusy={isSubmitting}
                 onStatusChange={setChatStatus}
+              />
+              <IADevChartPanel
+                chart={activeChart}
+                onClose={() => setActiveChart(null)}
               />
 
               <div className="flex flex-1 flex-col gap-3 overflow-auto p-3">

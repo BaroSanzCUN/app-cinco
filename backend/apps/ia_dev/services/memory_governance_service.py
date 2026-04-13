@@ -3,6 +3,8 @@ from __future__ import annotations
 from apps.ia_dev.application.memory.memory_read_service import MemoryReadService
 from apps.ia_dev.application.memory.memory_router import MemoryRouter
 from apps.ia_dev.application.memory.memory_write_service import MemoryWriteService
+from apps.ia_dev.application.policies.approval_policy_service import ApprovalPolicyService
+from apps.ia_dev.application.workflow.workflow_state_service import WorkflowStateService
 
 
 class MemoryGovernanceService:
@@ -10,6 +12,10 @@ class MemoryGovernanceService:
         self.reader = MemoryReadService()
         self.writer = MemoryWriteService()
         self.router = MemoryRouter()
+        self.router.reader = self.reader
+        self.router.writer = self.writer
+        self.approval_policy = ApprovalPolicyService()
+        self.workflow_state = WorkflowStateService(repo=self.writer.repo)
 
     def list_proposals(
         self,
@@ -19,12 +25,13 @@ class MemoryGovernanceService:
         proposer_user_key: str | None = None,
         limit: int = 30,
     ) -> list[dict]:
-        return self.writer.repo.list_learning_proposals(
+        proposals = self.writer.repo.list_learning_proposals(
             status=status,
             scope=scope,
             proposer_user_key=proposer_user_key,
             limit=limit,
         )
+        return [self.writer.attach_workflow(item) for item in proposals]
 
     def create_proposal(
         self,
@@ -40,7 +47,10 @@ class MemoryGovernanceService:
         )
 
     def get_proposal(self, *, proposal_id: str) -> dict | None:
-        return self.writer.repo.get_learning_proposal(proposal_id, for_update=False)
+        proposal = self.writer.repo.get_learning_proposal(proposal_id, for_update=False)
+        if not proposal:
+            return None
+        return self.writer.attach_workflow(proposal)
 
     def approve_proposal(
         self,
@@ -100,3 +110,12 @@ class MemoryGovernanceService:
         limit: int = 100,
     ) -> list[dict]:
         return self.reader.get_audit_events(memory_scope=memory_scope, entity_key=entity_key, limit=limit)
+
+    def can_actor_review(self, *, scope: str | None, actor_role: str | None, action: str) -> bool:
+        return self.approval_policy.can_review(scope=scope, role=actor_role, action=action)
+
+    def approval_policy_metadata(self) -> dict:
+        return self.approval_policy.as_metadata()
+
+    def list_workflow_states(self, *, status: str | None = None, limit: int = 100) -> list[dict]:
+        return self.workflow_state.list_proposal_workflows(status=status, limit=limit)

@@ -147,3 +147,43 @@ class MemoryRepository:
             entity_key=entity_key,
             limit=limit,
         )
+
+    # Workflow state
+    def upsert_workflow_state(
+        self,
+        *,
+        workflow_type: str,
+        workflow_key: str,
+        status: str,
+        state: dict,
+        retry_count: int = 0,
+        lock_version: int = 1,
+        next_retry_at: int | None = None,
+        last_error: str | None = None,
+    ) -> None:
+        self.store.upsert_workflow_state(
+            workflow_type=workflow_type,
+            workflow_key=workflow_key,
+            status=status,
+            state=state,
+            retry_count=retry_count,
+            lock_version=lock_version,
+            next_retry_at=next_retry_at,
+            last_error=last_error,
+        )
+
+    def get_workflow_state(self, workflow_key: str, *, for_update: bool = False) -> dict | None:
+        return self.store.get_workflow_state(workflow_key, for_update=for_update)
+
+    def list_workflow_states(
+        self,
+        *,
+        workflow_type: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        return self.store.list_workflow_states(
+            workflow_type=workflow_type,
+            status=status,
+            limit=limit,
+        )

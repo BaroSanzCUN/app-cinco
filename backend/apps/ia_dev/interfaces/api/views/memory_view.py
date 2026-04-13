@@ -73,6 +73,7 @@ class IADevMemoryProposalView(APIView):
                 "status": "ok",
                 "count": len(proposals),
                 "proposals": proposals,
+                "approval_policy": memory_governance_service.approval_policy_metadata(),
             },
             status=status.HTTP_200_OK,
         )
@@ -116,15 +117,24 @@ class IADevMemoryProposalApproveView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         proposal_scope = str(proposal.get("scope") or "").lower()
-        if proposal_scope in ("business", "general") and not _is_admin_like(request):
+        actor_role = _resolve_role(request)
+        if not memory_governance_service.can_actor_review(
+            scope=proposal_scope,
+            actor_role=actor_role,
+            action="approve",
+        ):
             return Response(
-                {"ok": False, "error": "No autorizado para aprobar memoria business/general"},
+                {
+                    "ok": False,
+                    "error": "No autorizado para aprobar memoria business/general",
+                    "approval_policy": memory_governance_service.approval_policy_metadata(),
+                },
                 status=status.HTTP_403_FORBIDDEN,
             )
         result = memory_governance_service.approve_proposal(
             proposal_id=proposal_id,
             actor_user_key=_resolve_user_key(request),
-            actor_role=_resolve_role(request),
+            actor_role=actor_role,
             comment=str(request.data.get("comment", "")).strip(),
         )
         if not result.get("ok"):
@@ -149,15 +159,24 @@ class IADevMemoryProposalRejectView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         proposal_scope = str(proposal.get("scope") or "").lower()
-        if proposal_scope in ("business", "general") and not _is_admin_like(request):
+        actor_role = _resolve_role(request)
+        if not memory_governance_service.can_actor_review(
+            scope=proposal_scope,
+            actor_role=actor_role,
+            action="reject",
+        ):
             return Response(
-                {"ok": False, "error": "No autorizado para rechazar memoria business/general"},
+                {
+                    "ok": False,
+                    "error": "No autorizado para rechazar memoria business/general",
+                    "approval_policy": memory_governance_service.approval_policy_metadata(),
+                },
                 status=status.HTTP_403_FORBIDDEN,
             )
         result = memory_governance_service.reject_proposal(
             proposal_id=proposal_id,
             actor_user_key=_resolve_user_key(request),
-            actor_role=_resolve_role(request),
+            actor_role=actor_role,
             comment=str(request.data.get("comment", "")).strip(),
         )
         if not result.get("ok"):

@@ -818,6 +818,46 @@ class IADevOrchestratorService:
                         f"justificados={summary['justificados']}, "
                         f"injustificados={summary['injustificados']}."
                     )
+                    if self._is_chart_request(message):
+                        chart_payload = {
+                            "engine": "amcharts5",
+                            "chart_library": "amcharts5",
+                            "type": "bar",
+                            "title": "Ausentismo justificado vs injustificado",
+                            "x_key": "categoria",
+                            "series": [
+                                {
+                                    "name": "casos",
+                                    "value_key": "valor",
+                                }
+                            ],
+                            "data": [
+                                {"categoria": "Justificados", "valor": int(summary["justificados"] or 0)},
+                                {"categoria": "Injustificados", "valor": int(summary["injustificados"] or 0)},
+                            ],
+                            "meta": {
+                                "periodo_inicio": summary["periodo_inicio"],
+                                "periodo_fin": summary["periodo_fin"],
+                            },
+                        }
+                        payload["chart"] = chart_payload
+                        payload["charts"] = [chart_payload]
+                        payload["labels"] = ["Justificados", "Injustificados"]
+                        payload["series"] = [int(summary["justificados"] or 0), int(summary["injustificados"] or 0)]
+                        actions.append(
+                            {
+                                "id": "attendance-legacy-chart-summary",
+                                "type": "render_chart",
+                                "label": "Ver grafica del resumen",
+                                "payload": {
+                                    "chart": chart_payload,
+                                    "capability_id": "attendance.unjustified.summary.legacy",
+                                },
+                            }
+                        )
+                        payload["insights"].append(
+                            "Inclui una grafica de barras del resumen para visualizacion ejecutiva."
+                        )
 
                 push_trace(
                     "tool_execution",
@@ -1339,6 +1379,10 @@ class IADevOrchestratorService:
         period_tokens = (
             "hoy",
             "ayer",
+            "esta semana",
+            "semana actual",
+            "semana pasada",
+            "semana anterior",
             "ultima semana",
             "ultimos",
             "mes",
@@ -1358,6 +1402,8 @@ class IADevOrchestratorService:
         explicit_period = self._has_explicit_period(message) or "reincid" in normalized
 
         if explicit_period:
+            if self._prefers_rules_period_resolution(normalized):
+                return {**period, "source": "rules"}
             openai_period = self._resolve_period_with_openai(
                 message=message,
                 recent_messages=recent_messages,
@@ -1367,7 +1413,7 @@ class IADevOrchestratorService:
                 return openai_period
             return {**period, "source": "rules"}
 
-        if not _YES_FOLLOW_UP_RE.match(normalized):
+        if not (_YES_FOLLOW_UP_RE.match(normalized) or self._is_contextual_reference_request(normalized)):
             return {**period, "source": "rules"}
 
         start = session_context.get("last_period_start")
@@ -1384,6 +1430,21 @@ class IADevOrchestratorService:
             }
         except ValueError:
             return {**period, "source": "rules"}
+
+    @staticmethod
+    def _prefers_rules_period_resolution(normalized_message: str) -> bool:
+        msg = IADevOrchestratorService._normalize_text(normalized_message)
+        if any(
+            token in msg
+            for token in (
+                "esta semana",
+                "semana actual",
+                "semana pasada",
+                "semana anterior",
+            )
+        ):
+            return True
+        return False
 
     def _resolve_period_with_openai(
         self,
@@ -1533,7 +1594,62 @@ class IADevOrchestratorService:
             )
             return merged
 
+        if (
+            last_domain == "attendance"
+            and last_needs_db
+            and self._is_chart_request(normalized)
+        ):
+            merged = dict(classification)
+            merged.update(
+                {
+                    "domain": "attendance",
+                    "intent": "attendance_query",
+                    "selected_agent": "attendance_agent",
+                    "needs_database": True,
+                    "output_mode": "summary",
+                    "needs_personal_join": bool(session_context.get("last_output_mode") == "table"),
+                    "focus": str(session_context.get("last_focus") or "all"),
+                    "classifier_source": f"{classification.get('classifier_source', 'rules')}_followup_chart",
+                }
+            )
+            return merged
+
         return classification
+
+    @staticmethod
+    def _is_chart_request(message: str) -> bool:
+        normalized = IADevOrchestratorService._normalize_text(message)
+        return any(
+            token in normalized
+            for token in (
+                "grafica",
+                "grafico",
+                "graficar",
+                "chart",
+                "linea",
+                "barras",
+                "barra",
+                "visual",
+                "visualizar",
+            )
+        )
+
+    @staticmethod
+    def _is_contextual_reference_request(message: str) -> bool:
+        normalized = IADevOrchestratorService._normalize_text(message)
+        return any(
+            token in normalized
+            for token in (
+                "reporte",
+                "resultado",
+                "consulta",
+                "este reporte",
+                "este resultado",
+                "esta consulta",
+                "ese reporte",
+                "ese resultado",
+            )
+        )
 
     def _generate_general_reply(
         self,

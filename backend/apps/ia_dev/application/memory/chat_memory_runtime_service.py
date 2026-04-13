@@ -204,6 +204,66 @@ class ChatMemoryRuntimeService:
                     }
                 )
 
+            if any(token in msg for token in ("grafica", "grafico", "chart", "linea", "barra", "barras")):
+                chart_type = "bar"
+                if "linea" in msg:
+                    chart_type = "line"
+                elif "area" in msg:
+                    chart_type = "area"
+                candidates.append(
+                    {
+                        "scope": "user",
+                        "candidate_key": "attendance.analytics.chart_type",
+                        "candidate_value": {"value": chart_type},
+                        "reason": "preferencia de visualizacion detectada en conversacion",
+                        "sensitivity": "low",
+                        "domain_code": "ATTENDANCE",
+                        "capability_id": capability_id or "attendance.trend.daily.v1",
+                    }
+                )
+
+            if "top " in msg:
+                for token in msg.split():
+                    if token.isdigit():
+                        top_n = max(1, min(int(token), 50))
+                        candidates.append(
+                            {
+                                "scope": "user",
+                                "candidate_key": "attendance.analytics.top_n",
+                                "candidate_value": {"value": str(top_n)},
+                                "reason": "preferencia top_n detectada en conversacion",
+                                "sensitivity": "low",
+                                "domain_code": "ATTENDANCE",
+                                "capability_id": capability_id or "attendance.summary.by_supervisor.v1",
+                            }
+                        )
+                        break
+        elif domain == "transport":
+            if any(token in msg for token in ("hoy", "hoy dia")):
+                candidates.append(
+                    {
+                        "scope": "user",
+                        "candidate_key": "transport.default_period_label",
+                        "candidate_value": {"value": "hoy"},
+                        "reason": "preferencia detectada para consultas de transporte en hoy",
+                        "sensitivity": "low",
+                        "domain_code": "TRANSPORT",
+                        "capability_id": capability_id or "transport.departures.summary.v1",
+                    }
+                )
+            elif any(token in msg for token in ("ayer", "dia anterior", "día anterior")):
+                candidates.append(
+                    {
+                        "scope": "user",
+                        "candidate_key": "transport.default_period_label",
+                        "candidate_value": {"value": "ayer"},
+                        "reason": "preferencia detectada para consultas de transporte en ayer",
+                        "sensitivity": "low",
+                        "domain_code": "TRANSPORT",
+                        "capability_id": capability_id or "transport.departures.summary.v1",
+                    }
+                )
+
         if any(token in msg for token in ("para todos", "globalmente", "en toda la empresa")):
             candidates.append(
                 {
@@ -343,9 +403,17 @@ class ChatMemoryRuntimeService:
                 proposer_user_key=user_key,
                 limit=5,
             )
+            pending_proposals = [
+                self.router.writer.attach_workflow(item)
+                for item in pending_proposals
+            ]
 
         actions: list[dict[str, Any]] = []
         if pending_proposals:
+            workflow_statuses: dict[str, int] = {}
+            for item in pending_proposals:
+                status_key = str(item.get("workflow_status") or item.get("status") or "pending").strip().lower()
+                workflow_statuses[status_key] = int(workflow_statuses.get(status_key) or 0) + 1
             actions.append(
                 {
                     "id": f"action-memory-review-{run_context.run_id}",
@@ -355,6 +423,7 @@ class ChatMemoryRuntimeService:
                         "run_id": run_context.run_id,
                         "trace_id": run_context.trace_id,
                         "pending_count": len(pending_proposals),
+                        "workflow_statuses": workflow_statuses,
                     },
                 }
             )
@@ -364,4 +433,3 @@ class ChatMemoryRuntimeService:
             "pending_proposals": pending_proposals,
             "actions": actions,
         }
-

@@ -39,6 +39,10 @@ def _most_recent_weekday(today: date, target_weekday: int, *, include_today: boo
     return today - timedelta(days=delta)
 
 
+def _week_start(base: date) -> date:
+    return base - timedelta(days=base.weekday())
+
+
 def _normalize_text(text: str) -> str:
     lowered = (text or "").strip().lower()
     normalized = unicodedata.normalize("NFKD", lowered)
@@ -76,8 +80,24 @@ def resolve_period_from_text(text: str, today: date | None = None) -> dict:
             suffix = "pasado" if is_past_reference else "reciente"
             return {"label": f"{weekday_name}_{suffix}", "start": d, "end": d}
 
+    if re.search(r"\b(esta\s+semana|semana\s+actual)\b", norm):
+        start = _week_start(now)
+        return {"label": "semana_actual", "start": start, "end": now}
+
+    if re.search(r"\b(semana\s+pasad[ao]|semana\s+anterior)\b", norm):
+        current_week_start = _week_start(now)
+        end = current_week_start - timedelta(days=1)
+        start = end - timedelta(days=6)
+        return {"label": "semana_anterior", "start": start, "end": end}
+
     if "ultima semana" in norm:
         return {"label": "ultima_semana", "start": now - timedelta(days=6), "end": now}
+
+    m_weeks = re.search(r"ultimas?\s+(\d+)\s+semanas", norm)
+    if m_weeks:
+        n = max(1, int(m_weeks.group(1)))
+        start = _week_start(now) - timedelta(days=7 * (n - 1))
+        return {"label": f"ultimas_{n}_semanas", "start": start, "end": now}
 
     m_days = re.search(r"ultimos?\s+(\d+)\s+dias", norm)
     if m_days:
