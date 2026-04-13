@@ -23,6 +23,9 @@ class IntentToCapabilityBridge:
         "kpi",
         "totales",
         "total de",
+        "cantidad",
+        "cuantos",
+        "cuantas",
     )
     _TABLE_TOKENS = (
         "tabla",
@@ -47,6 +50,20 @@ class IntentToCapabilityBridge:
         "vehiculos",
         "salieron",
         "salidas",
+    )
+    _EMPLOYEES_TOKENS = (
+        "empleado",
+        "empleados",
+        "cedula",
+        "cedulas",
+        "rrhh",
+        "recurso humano",
+        "recursos humanos",
+    )
+    _ACTIVE_STATUS_TOKENS = (
+        "activo",
+        "activos",
+        "empleados activos",
     )
     _TREND_TOKENS = (
         "tendencia",
@@ -97,6 +114,24 @@ class IntentToCapabilityBridge:
         "por cargo",
         "cargo",
     )
+    _BY_CARPETA_TOKENS = (
+        "por carpeta",
+        "carpeta",
+    )
+    _BY_JUSTIFICACION_TOKENS = (
+        "por justificacion",
+        "justificacion",
+        "por motivo",
+        "motivo",
+        "por causa",
+        "causa",
+    )
+    _BY_TIPO_TOKENS = (
+        "por tipo",
+        "tipo",
+        "por estado",
+        "estado",
+    )
     _COMPARATIVE_TOKENS = (
         "comparativo",
         "comparar",
@@ -135,6 +170,9 @@ class IntentToCapabilityBridge:
         needs_database = bool(classification.get("needs_database"))
         used_tools = list(classification.get("used_tools") or [])
         needs_personal_join = bool(classification.get("needs_personal_join"))
+        mentions_attendance = any(
+            token in msg for token in ("ausent", "asistenc", "injustific", "justific", "incapacidad", "vacaciones")
+        )
 
         capability_id = "legacy.passthrough.v1"
         reason = "fallback_to_legacy"
@@ -145,7 +183,7 @@ class IntentToCapabilityBridge:
         elif intent == "knowledge_change_request":
             capability_id = "knowledge.proposal.create.v1"
             reason = "legacy_intent_match_knowledge_change_request"
-        elif domain == "attendance":
+        elif domain == "attendance" or mentions_attendance:
             wants_itemized = any(token in msg for token in self._ITEMIZED_TOKENS)
             wants_grouped = any(token in msg for token in self._GROUPED_TOKENS)
             wants_summary = any(token in msg for token in self._SUMMARY_TOKENS)
@@ -160,6 +198,21 @@ class IntentToCapabilityBridge:
             wants_by_supervisor = any(token in msg for token in self._BY_SUPERVISOR_TOKENS)
             wants_by_area = any(token in msg for token in self._BY_AREA_TOKENS)
             wants_by_cargo = any(token in msg for token in self._BY_CARGO_TOKENS)
+            wants_by_carpeta = any(token in msg for token in self._BY_CARPETA_TOKENS)
+            wants_by_justificacion = any(token in msg for token in self._BY_JUSTIFICACION_TOKENS)
+            wants_by_tipo = any(token in msg for token in self._BY_TIPO_TOKENS)
+            wants_group_dimension = any(
+                (
+                    wants_by_supervisor,
+                    wants_by_area,
+                    wants_by_cargo,
+                    wants_by_carpeta,
+                    wants_by_justificacion,
+                    wants_by_tipo,
+                )
+            )
+            contextual_reference = bool(classification.get("contextual_reference"))
+            last_group_dimension_key = str(classification.get("last_group_dimension_key") or "").strip().lower()
             wants_personal_join = needs_personal_join or any(
                 token in msg for token in self._PERSONAL_TOKENS
             )
@@ -184,6 +237,24 @@ class IntentToCapabilityBridge:
                         else "attendance.recurrence.grouped.v1"
                     )
                     reason = "attendance_recurrence_detected"
+            elif (
+                wants_chart
+                and contextual_reference
+                and last_group_dimension_key
+                and not (wants_trend or wants_monthly or wants_daily)
+            ):
+                if last_group_dimension_key == "supervisor":
+                    capability_id = "attendance.summary.by_supervisor.v1"
+                    reason = "attendance_followup_chart_from_context_supervisor"
+                elif last_group_dimension_key == "area":
+                    capability_id = "attendance.summary.by_area.v1"
+                    reason = "attendance_followup_chart_from_context_area"
+                elif last_group_dimension_key == "cargo":
+                    capability_id = "attendance.summary.by_cargo.v1"
+                    reason = "attendance_followup_chart_from_context_cargo"
+                else:
+                    capability_id = "attendance.summary.by_attribute.v1"
+                    reason = "attendance_followup_chart_from_context_attribute"
             elif wants_trend or (wants_chart and ("tendencia" in msg or "evolucion" in msg)):
                 capability_id = (
                     "attendance.trend.monthly.v1"
@@ -200,6 +271,9 @@ class IntentToCapabilityBridge:
             elif wants_by_cargo and wants_analytics:
                 capability_id = "attendance.summary.by_cargo.v1"
                 reason = "attendance_summary_by_cargo_detected"
+            elif wants_group_dimension and (wants_analytics or wants_summary):
+                capability_id = "attendance.summary.by_attribute.v1"
+                reason = "attendance_summary_by_attribute_detected"
             elif wants_chart and not wants_table:
                 capability_id = (
                     "attendance.trend.monthly.v1"
@@ -222,6 +296,15 @@ class IntentToCapabilityBridge:
             else:
                 capability_id = "attendance.unjustified.table.v1"
                 reason = "attendance_table_detected"
+        elif domain in {"empleados", "rrhh"} or any(token in msg for token in self._EMPLOYEES_TOKENS):
+            wants_count = any(token in msg for token in self._SUMMARY_TOKENS)
+            wants_active = any(token in msg for token in self._ACTIVE_STATUS_TOKENS)
+            if wants_count and wants_active:
+                capability_id = "empleados.count.active.v1"
+                reason = "empleados_count_active_detected"
+            else:
+                capability_id = "general.answer.v1"
+                reason = "empleados_query_without_supported_capability"
         elif not needs_database:
             capability_id = "general.answer.v1"
             reason = "legacy_general_no_database"
@@ -266,6 +349,9 @@ class IntentToCapabilityBridge:
         elif domain == "transport":
             diverged = capability_domain != "transport"
             reason = "transport_capability_expected"
+        elif domain in {"empleados", "rrhh"}:
+            diverged = capability_domain != "empleados"
+            reason = "empleados_capability_expected"
         elif domain == "general":
             diverged = capability_domain not in ("general", "knowledge")
             reason = "general_capability_expected"
@@ -296,6 +382,10 @@ class IntentToCapabilityBridge:
 
         domain = str(classification.get("domain") or "").strip().lower()
         needs_database = bool(classification.get("needs_database"))
+        contextual_reference = bool(classification.get("contextual_reference"))
+        last_group_dimension_key = str(
+            classification.get("last_group_dimension_key") or ""
+        ).strip().lower()
 
         def add(capability_id: str, reason: str) -> None:
             if not capability_id:
@@ -313,6 +403,32 @@ class IntentToCapabilityBridge:
             )
 
         if domain == "attendance":
+            if (
+                signals["wants_chart"]
+                and contextual_reference
+                and last_group_dimension_key
+                and not (signals["wants_trend"] or signals["wants_monthly"] or signals["wants_daily"])
+            ):
+                if last_group_dimension_key == "supervisor":
+                    add(
+                        "attendance.summary.by_supervisor.v1",
+                        "semantic_followup_chart_from_context_supervisor",
+                    )
+                elif last_group_dimension_key == "area":
+                    add(
+                        "attendance.summary.by_area.v1",
+                        "semantic_followup_chart_from_context_area",
+                    )
+                elif last_group_dimension_key == "cargo":
+                    add(
+                        "attendance.summary.by_cargo.v1",
+                        "semantic_followup_chart_from_context_cargo",
+                    )
+                else:
+                    add(
+                        "attendance.summary.by_attribute.v1",
+                        "semantic_followup_chart_from_context_attribute",
+                    )
             if signals["wants_trend"] or signals["wants_comparative"]:
                 add("attendance.trend.monthly.v1", "semantic_alt_monthly_trend")
                 add("attendance.trend.daily.v1", "semantic_alt_daily_trend")
@@ -325,17 +441,27 @@ class IntentToCapabilityBridge:
                 add("attendance.summary.by_area.v1", "semantic_alt_group_area")
             if signals["wants_by_cargo"]:
                 add("attendance.summary.by_cargo.v1", "semantic_alt_group_cargo")
+            if signals["wants_group_dimension"] and not (
+                signals["wants_by_supervisor"] or signals["wants_by_area"] or signals["wants_by_cargo"]
+            ):
+                add("attendance.summary.by_attribute.v1", "semantic_alt_group_attribute")
             if signals["wants_distribution"]:
                 add("attendance.summary.by_area.v1", "semantic_distribution_area")
                 add("attendance.summary.by_cargo.v1", "semantic_distribution_cargo")
             if signals["wants_top"]:
                 add("attendance.summary.by_supervisor.v1", "semantic_top_supervisor")
 
+        if domain in {"empleados", "rrhh"} or signals["mentions_empleados"]:
+            if signals["wants_count"] and signals["wants_active"]:
+                add("empleados.count.active.v1", "semantic_empleados_count_active")
+
         if domain in {"general", "rrhh"} and needs_database and (
             signals["mentions_attendance"] or signals["wants_trend"] or signals["wants_chart"]
         ):
             # Reduce fallback erratico a general/rrhh cuando semantica sugiere attendance analytics.
             add("attendance.summary.by_supervisor.v1", "semantic_recovery_from_general_or_rrhh")
+            if signals["wants_group_dimension"]:
+                add("attendance.summary.by_attribute.v1", "semantic_recovery_attendance_group_attribute")
             add("attendance.trend.daily.v1", "semantic_recovery_attendance_trend")
 
         if domain == "general" and signals["mentions_transport"] and needs_database:
@@ -358,14 +484,28 @@ class IntentToCapabilityBridge:
         return {
             "wants_chart": any(token in msg for token in self._CHART_TOKENS),
             "wants_trend": any(token in msg for token in self._TREND_TOKENS),
+            "wants_count": any(token in msg for token in self._SUMMARY_TOKENS),
             "wants_monthly": any(token in msg for token in self._MONTHLY_TOKENS),
             "wants_daily": any(token in msg for token in self._DAILY_TOKENS),
             "wants_comparative": any(token in msg for token in self._COMPARATIVE_TOKENS),
             "wants_distribution": any(token in msg for token in self._DISTRIBUTION_TOKENS),
             "wants_top": any(token in msg for token in self._TOP_TOKENS),
+            "wants_active": any(token in msg for token in self._ACTIVE_STATUS_TOKENS),
             "wants_by_supervisor": any(token in msg for token in self._BY_SUPERVISOR_TOKENS),
             "wants_by_area": any(token in msg for token in self._BY_AREA_TOKENS),
             "wants_by_cargo": any(token in msg for token in self._BY_CARGO_TOKENS),
+            "wants_group_dimension": any(
+                token in msg
+                for token in (
+                    *self._BY_SUPERVISOR_TOKENS,
+                    *self._BY_AREA_TOKENS,
+                    *self._BY_CARGO_TOKENS,
+                    *self._BY_CARPETA_TOKENS,
+                    *self._BY_JUSTIFICACION_TOKENS,
+                    *self._BY_TIPO_TOKENS,
+                )
+            ),
             "mentions_attendance": any(token in msg for token in ("ausent", "asistencia", "injustific", "reincid")),
+            "mentions_empleados": any(token in msg for token in self._EMPLOYEES_TOKENS),
             "mentions_transport": any(token in msg for token in self._TRANSPORT_TOKENS),
         }

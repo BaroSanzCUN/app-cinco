@@ -67,6 +67,17 @@ def _response(reply: str, capability_id: str) -> dict:
     }
 
 
+def _response_with_cedulas(reply: str, capability_id: str, cedulas: list[str]) -> dict:
+    payload = _response(reply, capability_id)
+    rows = [{"cedula": str(item), "total_injustificados": 1} for item in cedulas]
+    payload["data"]["table"] = {
+        "columns": ["cedula", "total_injustificados"],
+        "rows": rows,
+        "rowcount": len(rows),
+    }
+    return payload
+
+
 class _FakeMemoryRuntime:
     def load_context_for_chat(self, **kwargs):
         return {
@@ -261,3 +272,80 @@ class ProactiveLoopTests(SimpleTestCase):
         loop_meta = dict(((response.get("orchestrator") or {}).get("capability_shadow") or {}).get("proactive_loop") or {})
         self.assertTrue(loop_meta.get("enabled"))
         self.assertTrue(bool(loop_meta.get("used_legacy")))
+
+    def test_proactive_loop_runs_next_candidate_when_first_is_unsatisfied(self):
+        class _UnsatisfiedFirstRouter:
+            def __init__(self):
+                self.execute_calls: list[str] = []
+
+            def route(self, **kwargs):
+                planned_capability = kwargs.get("planned_capability") or {}
+                capability_id = str(planned_capability.get("capability_id") or "")
+                return {
+                    "routing_mode": "capability",
+                    "selected_capability_id": capability_id,
+                    "execute_capability": True,
+                    "use_legacy": False,
+                    "shadow_enabled": True,
+                    "reason": "test_route",
+                    "policy_action": "allow",
+                    "policy_allowed": True,
+                    "capability_exists": True,
+                    "rollout_enabled": True,
+                }
+
+            def execute(self, **kwargs):
+                planned_capability = kwargs.get("planned_capability") or {}
+                capability_id = str(planned_capability.get("capability_id") or "")
+                self.execute_calls.append(capability_id)
+                if capability_id == "attendance.summary.by_supervisor.v1":
+                    return {
+                        "ok": True,
+                        "response": _response_with_cedulas(
+                            "primera respuesta no filtrada",
+                            capability_id,
+                            ["1000087030", "1011510709"],
+                        ),
+                    }
+                return {
+                    "ok": True,
+                    "response": _response_with_cedulas(
+                        "segunda respuesta filtrada",
+                        capability_id,
+                        ["1055837370"],
+                    ),
+                }
+
+        with patch.dict(
+            os.environ,
+            {
+                "IA_DEV_ROUTING_MODE": "capability",
+                "IA_DEV_PROACTIVE_LOOP_ENABLED": "1",
+                "IA_DEV_PROACTIVE_LOOP_MAX_ITERATIONS": "3",
+            },
+            clear=False,
+        ):
+            service = ChatApplicationService(
+                planner=_FakePlanner(),
+                router=_UnsatisfiedFirstRouter(),
+                bridge=_FakeBridge(),
+                policy_guard=_FakePolicyGuard(),
+                memory_runtime=_FakeMemoryRuntime(),
+            )
+            legacy_runner = MagicMock(side_effect=AssertionError("legacy should not be called"))
+            response = service.run(
+                message="Ausentismos del ultimo ano del empleado 1055837370",
+                session_id="sess-loop-3",
+                reset_memory=False,
+                legacy_runner=legacy_runner,
+                actor_user_key="user:loop",
+            )
+
+        self.assertEqual(response.get("reply"), "segunda respuesta filtrada")
+        loop_meta = dict(((response.get("orchestrator") or {}).get("capability_shadow") or {}).get("proactive_loop") or {})
+        self.assertTrue(loop_meta.get("enabled"))
+        self.assertEqual(int(loop_meta.get("iterations_ran") or 0), 2)
+        iterations = list(loop_meta.get("iterations") or [])
+        self.assertGreaterEqual(len(iterations), 2)
+        self.assertFalse(bool(iterations[0].get("satisfied")))
+        self.assertEqual(str(iterations[0].get("satisfaction_reason") or ""), "entity_filter_not_applied_for_cedula")

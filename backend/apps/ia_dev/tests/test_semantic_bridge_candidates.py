@@ -43,3 +43,35 @@ class SemanticBridgeCandidateTests(SimpleTestCase):
         )
         capability_ids = [str(item.get("capability_id") or "") for item in candidates]
         self.assertIn("attendance.summary.by_supervisor.v1", capability_ids)
+
+    def test_resolve_candidates_maps_active_employee_count(self):
+        candidates = self.bridge.resolve_candidates(
+            message="Cantidad empleados activos",
+            classification={
+                "intent": "employee_query",
+                "domain": "rrhh",
+                "output_mode": "summary",
+                "needs_database": True,
+                "used_tools": [],
+                "needs_personal_join": False,
+            },
+            max_candidates=4,
+        )
+        capability_ids = [str(item.get("capability_id") or "") for item in candidates]
+        self.assertIn("empleados.count.active.v1", capability_ids)
+
+    def test_resolve_candidates_maps_attendance_group_attribute(self):
+        candidates = self.bridge.resolve_candidates(
+            message="Cantidad de ausentismos por carpeta en los ultimos 15 dias",
+            classification={
+                "intent": "attendance_query",
+                "domain": "attendance",
+                "output_mode": "summary",
+                "needs_database": True,
+                "used_tools": [],
+                "needs_personal_join": True,
+            },
+            max_candidates=4,
+        )
+        capability_ids = [str(item.get("capability_id") or "") for item in candidates]
+        self.assertIn("attendance.summary.by_attribute.v1", capability_ids)

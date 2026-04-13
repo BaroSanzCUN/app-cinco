@@ -42,8 +42,13 @@ class AttendanceBusinessTool:
     def personal_table_source(self) -> str:
         return str(getattr(self.service, "personal_table_source", "") or "env")
 
-    def get_unjustified_summary(self, *, period: AttendancePeriod) -> dict[str, Any]:
-        return self.service.get_summary(period.start, period.end)
+    def get_unjustified_summary(
+        self,
+        *,
+        period: AttendancePeriod,
+        cedula: str | None = None,
+    ) -> dict[str, Any]:
+        return self.service.get_summary(period.start, period.end, cedula=cedula)
 
     def get_unjustified_table(
         self,
@@ -52,6 +57,7 @@ class AttendanceBusinessTool:
         include_personal: bool,
         personal_status: str = "all",
         limit: int = 150,
+        cedula: str | None = None,
     ) -> dict[str, Any]:
         safe_limit = max(1, min(int(limit), 500))
         if include_personal:
@@ -60,11 +66,13 @@ class AttendanceBusinessTool:
                 period.end,
                 limit=safe_limit,
                 personal_status=personal_status,
+                cedula=cedula,
             )
         return self.service.get_unjustified_table(
             period.start,
             period.end,
             limit=safe_limit,
+            cedula=cedula,
         )
 
     def get_recurrence_grouped(
@@ -150,16 +158,50 @@ class AttendanceBusinessTool:
         personal_status: str = "all",
         top_n: int = 10,
         chart_type: str = "bar",
+        cedula: str | None = None,
+    ) -> dict[str, Any]:
+        return self.get_attendance_aggregation(
+            period=period,
+            group_by=group_by,
+            personal_status=personal_status,
+            top_n=top_n,
+            chart_type=chart_type,
+            cedula=cedula,
+            focus="unjustified",
+        )
+
+    def get_attendance_aggregation(
+        self,
+        *,
+        period: AttendancePeriod,
+        group_by: str,
+        personal_status: str = "all",
+        top_n: int = 10,
+        chart_type: str = "bar",
+        cedula: str | None = None,
+        focus: str = "all",
     ) -> dict[str, Any]:
         safe_top_n = max(1, min(int(top_n), 50))
-        detail = self.get_unjustified_table(
-            period=period,
-            include_personal=True,
-            personal_status=personal_status,
-            limit=500,
-        )
+        safe_focus = str(focus or "all").strip().lower()
+        if safe_focus == "unjustified":
+            detail = self.get_unjustified_table(
+                period=period,
+                include_personal=True,
+                personal_status=personal_status,
+                limit=500,
+                cedula=cedula,
+            )
+        else:
+            detail = self.service.get_detail_with_personal(
+                period.start,
+                period.end,
+                limit=500,
+                personal_status=personal_status,
+                cedula=cedula,
+            )
         source_rows = list(detail.get("rows") or [])
         group_key, group_label = self._resolve_group_by(group_by)
+        metric_key = "total_injustificados" if safe_focus == "unjustified" else "total_ausentismos"
 
         grouped_counts: dict[str, int] = defaultdict(int)
         for row in source_rows:
@@ -170,23 +212,27 @@ class AttendanceBusinessTool:
         aggregated_rows = [
             {
                 group_key: key,
-                "total_injustificados": int(count),
+                metric_key: int(count),
                 "porcentaje": round((count / total_events) * 100.0, 2) if total_events > 0 else 0.0,
             }
             for key, count in grouped_counts.items()
         ]
         aggregated_rows.sort(
-            key=lambda item: (-int(item.get("total_injustificados") or 0), str(item.get(group_key) or ""))
+            key=lambda item: (-int(item.get(metric_key) or 0), str(item.get(group_key) or ""))
         )
         top_rows = aggregated_rows[:safe_top_n]
 
         labels = [str(row.get(group_key) or "N/D") for row in top_rows]
-        series = [int(row.get("total_injustificados") or 0) for row in top_rows]
-        title = f"Ausentismos injustificados por {group_label}"
+        series = [int(row.get(metric_key) or 0) for row in top_rows]
+        title = (
+            f"Ausentismos injustificados por {group_label}"
+            if safe_focus == "unjustified"
+            else f"Ausentismos por {group_label}"
+        )
         chart = self.build_chart_payload(
             rows=top_rows,
             x_key=group_key,
-            y_key="total_injustificados",
+            y_key=metric_key,
             title=title,
             chart_type=chart_type,
         )
@@ -196,11 +242,14 @@ class AttendanceBusinessTool:
             "periodo_fin": detail.get("periodo_fin") or period.end.isoformat(),
             "group_key": group_key,
             "group_label": group_label,
+            "metric_key": metric_key,
+            "focus": safe_focus,
             "top_n": safe_top_n,
             "rows": top_rows,
             "rowcount": len(top_rows),
             "total_groups": len(aggregated_rows),
-            "total_injustificados": total_events,
+            "total_injustificados": total_events if safe_focus == "unjustified" else 0,
+            "total_ausentismos": total_events if safe_focus != "unjustified" else 0,
             "labels": labels,
             "series": series,
             "chart": chart,
@@ -216,6 +265,7 @@ class AttendanceBusinessTool:
         granularity: str = "daily",
         personal_status: str = "all",
         chart_type: str | None = None,
+        cedula: str | None = None,
     ) -> dict[str, Any]:
         safe_granularity = "monthly" if str(granularity or "").strip().lower() == "monthly" else "daily"
         include_personal = str(personal_status or "all").strip().lower() != "all"
@@ -224,6 +274,7 @@ class AttendanceBusinessTool:
             include_personal=include_personal,
             personal_status=personal_status,
             limit=500,
+            cedula=cedula,
         )
         source_rows = list(detail.get("rows") or [])
 
@@ -331,6 +382,14 @@ class AttendanceBusinessTool:
             return "area", "Area"
         if value == "cargo":
             return "cargo", "Cargo"
+        if value == "carpeta":
+            return "carpeta", "Carpeta"
+        if value in {"justificacion", "causa", "motivo"}:
+            return "justificacion", "Justificacion"
+        if value in {"tipo", "estado", "estado_justificacion"}:
+            return "estado_justificacion", "Estado"
+        if value in {"cedula", "empleado"}:
+            return "cedula", "Empleado"
         return "supervisor", "Supervisor"
 
     @staticmethod

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import unicodedata
 from typing import Any, Callable
 
@@ -15,6 +16,11 @@ from apps.ia_dev.application.memory.chat_memory_runtime_service import (
 from apps.ia_dev.application.orchestration.response_assembler import (
     LegacyResponseAssembler,
 )
+from apps.ia_dev.application.contracts.query_intelligence_contracts import (
+    QueryExecutionPlan,
+    ResolvedQuerySpec,
+    StructuredQueryIntent,
+)
 from apps.ia_dev.application.policies.policy_guard import PolicyGuard
 from apps.ia_dev.application.routing.capability_catalog import CapabilityCatalog
 from apps.ia_dev.application.routing.capability_planner import CapabilityPlanner
@@ -22,6 +28,13 @@ from apps.ia_dev.application.routing.capability_router import CapabilityRouter
 from apps.ia_dev.application.routing.intent_to_capability_bridge import (
     IntentToCapabilityBridge,
 )
+from apps.ia_dev.application.semantic.query_execution_planner import QueryExecutionPlanner
+from apps.ia_dev.application.semantic.query_intent_resolver import QueryIntentResolver
+from apps.ia_dev.application.semantic.query_pattern_memory_service import QueryPatternMemoryService
+from apps.ia_dev.application.semantic.result_satisfaction_validator import (
+    ResultSatisfactionValidator,
+)
+from apps.ia_dev.application.semantic.semantic_business_resolver import SemanticBusinessResolver
 from apps.ia_dev.services.memory_service import SessionMemoryStore
 
 
@@ -40,6 +53,11 @@ class ChatApplicationService:
         response_assembler: LegacyResponseAssembler | None = None,
         memory_runtime: ChatMemoryRuntimeService | None = None,
         delegation_coordinator: DelegationCoordinator | None = None,
+        semantic_business_resolver: SemanticBusinessResolver | None = None,
+        query_intent_resolver: QueryIntentResolver | None = None,
+        query_execution_planner: QueryExecutionPlanner | None = None,
+        result_satisfaction_validator: ResultSatisfactionValidator | None = None,
+        query_pattern_memory_service: QueryPatternMemoryService | None = None,
     ):
         self.catalog = catalog or CapabilityCatalog()
         self.bridge = bridge or IntentToCapabilityBridge()
@@ -49,6 +67,11 @@ class ChatApplicationService:
         self.response_assembler = response_assembler or LegacyResponseAssembler()
         self.memory_runtime = memory_runtime or ChatMemoryRuntimeService()
         self.delegation_coordinator = delegation_coordinator or DelegationCoordinator()
+        self.semantic_business_resolver = semantic_business_resolver or SemanticBusinessResolver()
+        self.query_intent_resolver = query_intent_resolver or QueryIntentResolver()
+        self.query_execution_planner = query_execution_planner or QueryExecutionPlanner(catalog=self.catalog)
+        self.result_satisfaction_validator = result_satisfaction_validator or ResultSatisfactionValidator()
+        self.query_pattern_memory_service = query_pattern_memory_service or QueryPatternMemoryService()
 
     def run(
         self,
@@ -77,6 +100,19 @@ class ChatApplicationService:
             message=message,
             session_context=session_context,
         )
+        query_intelligence = self._resolve_query_intelligence(
+            message=message,
+            base_classification=pre_classification,
+            run_context=run_context,
+            observability=observability,
+        )
+        query_intelligence_mode = str(query_intelligence.get("mode") or "off")
+        classification_override = dict(query_intelligence.get("classification_override") or {})
+        if query_intelligence_mode == "active" and classification_override:
+            pre_classification = {
+                **pre_classification,
+                **classification_override,
+            }
         bootstrap_plan = self.planner.plan_from_legacy(
             message=message,
             classification=pre_classification,
@@ -130,6 +166,12 @@ class ChatApplicationService:
             )
             for plan in candidate_plans
         ]
+        candidate_plans = self._apply_query_intelligence_plan_overrides(
+            candidate_plans=candidate_plans,
+            fallback_plan=bootstrap_plan,
+            query_intelligence=query_intelligence,
+            classification=pre_classification,
+        )
         run_context.metadata["planned_candidates"] = [
             {
                 "capability_id": str(item.get("capability_id") or ""),
@@ -140,13 +182,26 @@ class ChatApplicationService:
             for item in candidate_plans
         ]
 
-        delegation_decision = self.delegation_coordinator.plan_and_maybe_execute(
-            message=message,
-            classification=pre_classification,
-            planned_candidates=candidate_plans,
-            run_context=run_context,
-            observability=observability,
-        )
+        precomputed_response = dict(query_intelligence.get("precomputed_response") or {})
+
+        delegation_decision = {
+            "mode": "off",
+            "should_delegate": False,
+            "plan_reason": "query_intelligence_precomputed_response",
+            "selected_domains": [],
+            "tasks": [],
+            "executed": False,
+            "response": None,
+            "warnings": [],
+        }
+        if not precomputed_response:
+            delegation_decision = self.delegation_coordinator.plan_and_maybe_execute(
+                message=message,
+                classification=pre_classification,
+                planned_candidates=candidate_plans,
+                run_context=run_context,
+                observability=observability,
+            )
         run_context.metadata["delegation"] = {
             "mode": str(delegation_decision.get("mode") or "off"),
             "should_delegate": bool(delegation_decision.get("should_delegate")),
@@ -174,7 +229,37 @@ class ChatApplicationService:
             if "data_sources" not in delegated_response or not isinstance(delegated_response.get("data_sources"), dict):
                 delegated_response["data_sources"] = {}
 
-        if delegated_response and bool(delegation_decision.get("executed")):
+        if precomputed_response:
+            planned_capability = dict(candidate_plans[0] if candidate_plans else bootstrap_plan)
+            policy_decision = self.policy_guard.evaluate(
+                run_context=run_context,
+                planned_capability=planned_capability,
+            )
+            route = {
+                "routing_mode": run_context.routing_mode,
+                "selected_capability_id": str(
+                    planned_capability.get("capability_id")
+                    or f"query_intelligence.{str(query_intelligence.get('execution_plan', {}).get('strategy') or 'precomputed')}.v1"
+                ),
+                "execute_capability": False,
+                "use_legacy": False,
+                "shadow_enabled": True,
+                "reason": f"query_intelligence_{query_intelligence_mode}_precomputed_response",
+                "policy_action": policy_decision.action.value,
+                "policy_allowed": policy_decision.allowed,
+                "capability_exists": bool(planned_capability.get("capability_exists")),
+                "rollout_enabled": bool(planned_capability.get("rollout_enabled", True)),
+            }
+            primary_response = precomputed_response
+            run_context.metadata["proactive_loop"] = {
+                "enabled": False,
+                "iterations_ran": 0,
+                "max_iterations": 0,
+                "selected_capability_id": planned_capability.get("capability_id"),
+                "used_legacy": False,
+                "iterations": [],
+            }
+        elif delegated_response and bool(delegation_decision.get("executed")):
             planned_capability = dict(candidate_plans[0] if candidate_plans else bootstrap_plan)
             policy_decision = self.policy_guard.evaluate(
                 run_context=run_context,
@@ -260,6 +345,13 @@ class ChatApplicationService:
             run_context=run_context,
             observability=observability,
         )
+        memory_effects = self._record_query_pattern_memory(
+            user_key=user_key,
+            run_context=run_context,
+            response=primary_response,
+            memory_effects=memory_effects,
+            observability=observability,
+        )
 
         self._record_shadow_observability(
             observability=observability,
@@ -279,6 +371,316 @@ class ChatApplicationService:
             divergence=divergence,
             memory_effects=memory_effects,
         )
+
+    def _resolve_query_intelligence(
+        self,
+        *,
+        message: str,
+        base_classification: dict[str, Any],
+        run_context: RunContext,
+        observability,
+    ) -> dict[str, Any]:
+        mode = self._query_intelligence_mode()
+        if mode == "off":
+            run_context.metadata["query_intelligence"] = {
+                "mode": mode,
+                "enabled": False,
+            }
+            return {"mode": mode, "enabled": False}
+
+        try:
+            domain_code = str(base_classification.get("domain") or "").strip().lower()
+            semantic_context = self.semantic_business_resolver.build_semantic_context(
+                domain_code=domain_code,
+                include_dictionary=True,
+            )
+            intent = self.query_intent_resolver.resolve(
+                message=message,
+                base_classification=base_classification,
+                semantic_context=semantic_context,
+            )
+            resolved_query = self.semantic_business_resolver.resolve_query(
+                message=message,
+                intent=intent,
+                base_classification=base_classification,
+            )
+            execution_plan = self.query_execution_planner.plan(
+                run_context=run_context,
+                resolved_query=resolved_query,
+            )
+
+            classification_override = self._build_query_intelligence_classification_override(
+                resolved_query=resolved_query,
+            )
+            precomputed_response: dict[str, Any] = {}
+            execution_result: dict[str, Any] | None = None
+            if mode == "active":
+                if execution_plan.strategy == "ask_context":
+                    precomputed_response = self.query_execution_planner.build_missing_context_response(
+                        run_context=run_context,
+                        resolved_query=resolved_query,
+                        execution_plan=execution_plan,
+                    )
+                elif execution_plan.strategy == "sql_assisted":
+                    execution_result = self.query_execution_planner.execute_sql_assisted(
+                        run_context=run_context,
+                        resolved_query=resolved_query,
+                        execution_plan=execution_plan,
+                        observability=observability,
+                    )
+                    if bool(execution_result.get("ok")) and isinstance(execution_result.get("response"), dict):
+                        candidate_response = dict(execution_result.get("response") or {})
+                        validation = self.result_satisfaction_validator.validate(
+                            message=message,
+                            response=candidate_response,
+                            resolved_query=resolved_query,
+                        )
+                        if validation.satisfied:
+                            precomputed_response = candidate_response
+                        else:
+                            execution_result["validation"] = validation.as_dict()
+
+            payload = {
+                "mode": mode,
+                "enabled": True,
+                "intent": intent.as_dict(),
+                "resolved_query": resolved_query.as_dict(),
+                "execution_plan": execution_plan.as_dict(),
+                "classification_override": classification_override,
+                "precomputed_response": precomputed_response,
+                "execution_result": dict(execution_result or {}),
+            }
+            run_context.metadata["query_intelligence"] = payload
+
+            self._record_event(
+                observability=observability,
+                event_type="query_intelligence_resolved",
+                source="ChatApplicationService",
+                meta={
+                    "run_id": run_context.run_id,
+                    "trace_id": run_context.trace_id,
+                    "mode": mode,
+                    "domain_code": resolved_query.intent.domain_code,
+                    "template_id": resolved_query.intent.template_id,
+                    "strategy": execution_plan.strategy,
+                    "capability_id": execution_plan.capability_id,
+                    "precomputed": bool(precomputed_response),
+                },
+                only_if=True,
+            )
+            return payload
+        except Exception as exc:
+            run_context.metadata["query_intelligence"] = {
+                "mode": mode,
+                "enabled": True,
+                "error": str(exc),
+            }
+            self._record_event(
+                observability=observability,
+                event_type="query_intelligence_error",
+                source="ChatApplicationService",
+                meta={
+                    "run_id": run_context.run_id,
+                    "trace_id": run_context.trace_id,
+                    "mode": mode,
+                    "error": str(exc),
+                },
+                only_if=True,
+            )
+            return {"mode": mode, "enabled": True, "error": str(exc)}
+
+    def _apply_query_intelligence_plan_overrides(
+        self,
+        *,
+        candidate_plans: list[dict[str, Any]],
+        fallback_plan: dict[str, Any],
+        query_intelligence: dict[str, Any],
+        classification: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        plans = [dict(item) for item in list(candidate_plans or []) if isinstance(item, dict)]
+        if str(query_intelligence.get("mode") or "off") != "active":
+            return plans
+        execution_plan = dict(query_intelligence.get("execution_plan") or {})
+        capability_id = str(execution_plan.get("capability_id") or "").strip()
+        if not capability_id:
+            return plans
+        if plans:
+            first = self._switch_capability(
+                current=plans[0],
+                capability_id=capability_id,
+                reason_suffix="query_intelligence_override",
+            )
+            first["candidate_rank"] = 1
+            first["candidate_score"] = max(int(first.get("candidate_score") or 0), 130)
+            plans[0] = first
+            return plans
+
+        plan = self._build_query_intelligence_fallback_plan(
+            capability_id=capability_id,
+            fallback_plan=fallback_plan,
+            classification=classification,
+        )
+        return [plan]
+
+    def _build_query_intelligence_fallback_plan(
+        self,
+        *,
+        capability_id: str,
+        fallback_plan: dict[str, Any],
+        classification: dict[str, Any],
+    ) -> dict[str, Any]:
+        definition = self.catalog.get(capability_id)
+        source = {
+            "intent": str(classification.get("intent") or ""),
+            "domain": str(classification.get("domain") or ""),
+            "output_mode": str(classification.get("output_mode") or "summary"),
+            "needs_database": bool(classification.get("needs_database", True)),
+        }
+        return {
+            "capability_id": capability_id,
+            "capability_exists": bool(definition),
+            "rollout_enabled": bool(definition),
+            "handler_key": definition.handler_key if definition else str(fallback_plan.get("handler_key") or "legacy.passthrough"),
+            "policy_tags": list(definition.policy_tags) if definition else [],
+            "legacy_intents": list(definition.legacy_intents) if definition else [],
+            "reason": "query_intelligence_fallback_plan",
+            "source": source,
+            "dictionary_hints": dict(fallback_plan.get("dictionary_hints") or {}),
+            "policy_planner_hint": {},
+            "semantic_signals": {},
+            "candidate_rank": 1,
+            "candidate_score": 130,
+            "workflow_hints": {},
+        }
+
+    @staticmethod
+    def _build_query_intelligence_classification_override(
+        *,
+        resolved_query: ResolvedQuerySpec,
+    ) -> dict[str, Any]:
+        domain = str(resolved_query.intent.domain_code or "").strip().lower()
+        routing_domain = domain
+        if domain == "ausentismo":
+            routing_domain = "attendance"
+        elif domain == "transporte":
+            routing_domain = "transport"
+        elif domain == "rrhh":
+            routing_domain = "empleados"
+        output_mode = "summary"
+        if resolved_query.intent.operation in {"detail", "aggregate", "trend"}:
+            output_mode = "table"
+        if resolved_query.intent.operation == "count":
+            output_mode = "summary"
+        agent = "analista_agent"
+        if routing_domain in {"ausentismo", "attendance"}:
+            agent = "attendance_agent"
+        elif routing_domain in {"empleados", "rrhh"}:
+            agent = "rrhh_agent"
+        elif routing_domain in {"transporte", "transport"}:
+            agent = "transport_agent"
+        return {
+            "intent": str(resolved_query.intent.operation or "query"),
+            "domain": routing_domain,
+            "selected_agent": agent,
+            "classifier_source": f"query_intelligence_{resolved_query.intent.source}",
+            "needs_database": routing_domain not in {"general", ""},
+            "output_mode": output_mode,
+            "needs_personal_join": bool("cedula" in dict(resolved_query.normalized_filters or {})),
+        }
+
+    @staticmethod
+    def _query_intelligence_mode() -> str:
+        enabled = str(os.getenv("IA_DEV_QUERY_INTELLIGENCE_ENABLED", "0") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if not enabled:
+            return "off"
+        mode = str(os.getenv("IA_DEV_QUERY_INTELLIGENCE_MODE", "shadow") or "shadow").strip().lower()
+        if mode not in {"off", "shadow", "active"}:
+            return "shadow"
+        return mode
+
+    def _record_query_pattern_memory(
+        self,
+        *,
+        user_key: str | None,
+        run_context: RunContext,
+        response: dict[str, Any],
+        memory_effects: dict[str, Any],
+        observability,
+    ) -> dict[str, Any]:
+        effects = dict(memory_effects or {})
+        metadata = dict(run_context.metadata.get("query_intelligence") or {})
+        resolved_query_payload = metadata.get("resolved_query")
+        execution_plan_payload = metadata.get("execution_plan")
+        if not isinstance(resolved_query_payload, dict) or not isinstance(execution_plan_payload, dict):
+            return effects
+
+        resolved_intent_payload = dict(resolved_query_payload.get("intent") or {})
+        intent = StructuredQueryIntent(
+            raw_query=str(resolved_intent_payload.get("raw_query") or ""),
+            domain_code=str(resolved_intent_payload.get("domain_code") or ""),
+            operation=str(resolved_intent_payload.get("operation") or ""),
+            template_id=str(resolved_intent_payload.get("template_id") or ""),
+            entity_type=str(resolved_intent_payload.get("entity_type") or ""),
+            entity_value=str(resolved_intent_payload.get("entity_value") or ""),
+            filters=dict(resolved_intent_payload.get("filters") or {}),
+            period=dict(resolved_intent_payload.get("period") or {}),
+            group_by=list(resolved_intent_payload.get("group_by") or []),
+            metrics=list(resolved_intent_payload.get("metrics") or []),
+            confidence=float(resolved_intent_payload.get("confidence") or 0.0),
+            source=str(resolved_intent_payload.get("source") or "rules"),
+            warnings=list(resolved_intent_payload.get("warnings") or []),
+        )
+        resolved_query = ResolvedQuerySpec(
+            intent=intent,
+            semantic_context=dict(resolved_query_payload.get("semantic_context") or {}),
+            normalized_filters=dict(resolved_query_payload.get("normalized_filters") or {}),
+            normalized_period=dict(resolved_query_payload.get("normalized_period") or {}),
+            mapped_columns=dict(resolved_query_payload.get("mapped_columns") or {}),
+            warnings=list(resolved_query_payload.get("warnings") or []),
+        )
+        execution_plan = QueryExecutionPlan(
+            strategy=str(execution_plan_payload.get("strategy") or ""),
+            reason=str(execution_plan_payload.get("reason") or ""),
+            domain_code=str(execution_plan_payload.get("domain_code") or ""),
+            capability_id=str(execution_plan_payload.get("capability_id") or "") or None,
+            sql_query=str(execution_plan_payload.get("sql_query") or "") or None,
+            requires_context=bool(execution_plan_payload.get("requires_context")),
+            missing_context=list(execution_plan_payload.get("missing_context") or []),
+            policy=dict(execution_plan_payload.get("policy") or {}),
+            metadata=dict(execution_plan_payload.get("metadata") or {}),
+        )
+        validation = self.result_satisfaction_validator.validate(
+            message=str(intent.raw_query or ""),
+            response=response,
+            resolved_query=resolved_query,
+        )
+        metadata["final_satisfaction"] = validation.as_dict()
+        run_context.metadata["query_intelligence"] = metadata
+
+        result = self.query_pattern_memory_service.record_success(
+            user_key=user_key,
+            resolved_query=resolved_query,
+            execution_plan=execution_plan,
+            validation=validation,
+            run_context=run_context,
+            response=response,
+            observability=observability,
+        )
+        metadata["pattern_memory"] = dict(result or {})
+        run_context.metadata["query_intelligence"] = metadata
+
+        if bool(result.get("saved")):
+            proposal = dict((result.get("result") or {}).get("proposal") or {})
+            if proposal:
+                pending = list(effects.get("pending_proposals") or [])
+                pending.append(proposal)
+                effects["pending_proposals"] = pending
+        return effects
 
     def _plan_candidates(
         self,
@@ -414,6 +816,13 @@ class ChatApplicationService:
                 memory_context=memory_context,
                 allow_legacy_fallback=not loop_enabled,
             )
+            satisfaction = self._evaluate_result_satisfaction(
+                message=message,
+                planned_capability=plan,
+                execution=execution,
+            )
+            execution["satisfied"] = bool(satisfaction.get("satisfied", True))
+            execution["satisfaction_reason"] = str(satisfaction.get("reason") or "")
 
             iteration_summary = {
                 "iteration": iterations_ran,
@@ -421,6 +830,8 @@ class ChatApplicationService:
                 "route_reason": str(route.get("reason") or ""),
                 "policy_action": policy_decision.action.value,
                 "ok": bool(execution.get("ok")),
+                "satisfied": bool(execution.get("satisfied", True)),
+                "satisfaction_reason": str(execution.get("satisfaction_reason") or ""),
                 "used_legacy": bool(execution.get("used_legacy")),
                 "fallback_reason": execution.get("fallback_reason"),
             }
@@ -431,7 +842,7 @@ class ChatApplicationService:
             selected_route = dict(route)
             selected_execution = dict(execution or {})
 
-            if bool(execution.get("ok")):
+            if bool(execution.get("ok")) and bool(execution.get("satisfied", True)):
                 self._record_event(
                     observability=observability,
                     event_type="proactive_loop_stop",
@@ -439,13 +850,27 @@ class ChatApplicationService:
                     meta={
                         "run_id": run_context.run_id,
                         "trace_id": run_context.trace_id,
-                        "stop_reason": "capability_executed",
+                        "stop_reason": "capability_executed_and_satisfied",
                         "iteration": iterations_ran,
                         "capability_id": plan.get("capability_id"),
                     },
                     only_if=loop_enabled,
                 )
                 break
+            if bool(execution.get("ok")) and not bool(execution.get("satisfied", True)):
+                self._record_event(
+                    observability=observability,
+                    event_type="proactive_loop_unsatisfied_result",
+                    source="ChatApplicationService",
+                    meta={
+                        "run_id": run_context.run_id,
+                        "trace_id": run_context.trace_id,
+                        "iteration": iterations_ran,
+                        "capability_id": plan.get("capability_id"),
+                        "reason": execution.get("satisfaction_reason"),
+                    },
+                    only_if=loop_enabled,
+                )
 
         if selected_execution is None:
             selected_execution = self._execute_primary_path(
@@ -494,6 +919,8 @@ class ChatApplicationService:
             "max_iterations": max_iterations,
             "selected_capability_id": selected_plan.get("capability_id"),
             "used_legacy": bool(selected_execution.get("used_legacy")),
+            "satisfied": bool(selected_execution.get("satisfied", True)),
+            "satisfaction_reason": str(selected_execution.get("satisfaction_reason") or ""),
             "iterations": iteration_summaries,
         }
 
@@ -521,7 +948,7 @@ class ChatApplicationService:
     ) -> dict[str, Any]:
         capability_id = str(planned_capability.get("capability_id") or "")
         capability_domain = capability_id.split(".", 1)[0] if "." in capability_id else ""
-        is_domain_capability = capability_domain in {"attendance", "transport"}
+        is_domain_capability = capability_domain in {"attendance", "transport", "empleados"}
         selected_event_type = f"{capability_domain}_capability_selected"
         executed_event_type = f"{capability_domain}_handler_executed"
         fallback_event_type = f"{capability_domain}_fallback_legacy"
@@ -819,12 +1246,32 @@ class ChatApplicationService:
                 "needs_database": True,
                 "output_mode": "summary",
                 "needs_personal_join": bool(context.get("last_output_mode") == "table"),
+                "contextual_reference": ChatApplicationService._is_contextual_reference_request(normalized_no_accents),
+                "last_group_dimension_key": str(context.get("last_group_dimension_key") or "").strip().lower(),
+                "last_group_dimension_label": str(context.get("last_group_dimension_label") or "").strip(),
+                "last_aggregation_focus": str(context.get("last_aggregation_focus") or "").strip().lower(),
+                "last_metric_key": str(context.get("last_metric_key") or "").strip().lower(),
                 "used_tools": [],
                 "dictionary_context": {},
             }
-        if any(token in normalized for token in ("ausent", "asistenc", "injustificad", "rrhh")):
+        if any(token in normalized for token in ("ausent", "asistenc", "injustificad")):
             intent = "attendance_recurrence" if "reincid" in normalized else "attendance_query"
-            output_mode = "summary" if "resumen" in normalized and "tabla" not in normalized else "table"
+            wants_table = any(token in normalized for token in ("tabla", "detalle", "lista", "mostrar"))
+            wants_count = any(token in normalized for token in ("cantidad", "cuantos", "cuantas", "total", "resumen"))
+            wants_group = any(
+                token in normalized
+                for token in (
+                    "por supervisor",
+                    "por area",
+                    "por cargo",
+                    "por carpeta",
+                    "por justificacion",
+                    "por causa",
+                    "por tipo",
+                    "por estado",
+                )
+            )
+            output_mode = "table" if wants_table and not (wants_count and wants_group) else "summary"
             needs_personal_join = any(
                 token in normalized
                 for token in ("empleado", "personal", "supervisor", "area", "cargo", "nombre", "apellido")
@@ -837,6 +1284,20 @@ class ChatApplicationService:
                 "needs_database": True,
                 "output_mode": output_mode,
                 "needs_personal_join": needs_personal_join,
+                "used_tools": [],
+                "dictionary_context": {},
+            }
+        if any(token in normalized for token in ("emplead", "cedula", "rrhh")):
+            return {
+                "intent": "empleados_query",
+                "domain": "empleados",
+                "selected_agent": "rrhh_agent",
+                "classifier_source": "bootstrap_rules",
+                "needs_database": True,
+                "output_mode": "summary" if any(
+                    token in normalized for token in ("cantidad", "cuantos", "cuantas", "total")
+                ) else "table",
+                "needs_personal_join": False,
                 "used_tools": [],
                 "dictionary_context": {},
             }
@@ -904,6 +1365,13 @@ class ChatApplicationService:
                 "esta consulta",
                 "ese reporte",
                 "ese resultado",
+                "informacion anterior",
+                "info anterior",
+                "lo anterior",
+                "mismo periodo",
+                "mismo rango",
+                "ese periodo",
+                "ese rango",
             )
         )
 
@@ -947,6 +1415,59 @@ class ChatApplicationService:
             "used_tools": list(orchestrator.get("used_tools") or []),
             "dictionary_context": dictionary_context,
         }
+
+    def _evaluate_result_satisfaction(
+        self,
+        *,
+        message: str,
+        planned_capability: dict[str, Any],
+        execution: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not bool(execution.get("ok")):
+            return {"satisfied": False, "reason": "execution_not_ok"}
+        response = dict(execution.get("response") or {})
+        validation = self.result_satisfaction_validator.validate(
+            message=message,
+            response=response,
+            resolved_query=None,
+        )
+        return validation.as_dict()
+
+    @staticmethod
+    def _extract_cedula_from_message(message: str) -> str | None:
+        match = re.search(r"\b\d{6,13}\b", str(message or ""))
+        if not match:
+            return None
+        return ChatApplicationService._normalize_digits(match.group(0)) or None
+
+    @staticmethod
+    def _normalize_digits(value: str) -> str:
+        return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+    @staticmethod
+    def _extract_period_from_response(*, response: dict[str, Any]) -> tuple[Any, Any] | None:
+        candidates = []
+        data = dict(response.get("data") or {})
+        table = dict(data.get("table") or {})
+        rows = list(table.get("rows") or [])
+        if rows and isinstance(rows[0], dict):
+            first = rows[0]
+            # Opcional futuro: periodo en filas.
+            if first.get("periodo_inicio") and first.get("periodo_fin"):
+                candidates.append((str(first.get("periodo_inicio")), str(first.get("periodo_fin"))))
+
+        reply = str(response.get("reply") or "")
+        m = re.search(r"periodo\s+(\d{4}-\d{2}-\d{2})\s+al\s+(\d{4}-\d{2}-\d{2})", reply.lower())
+        if m:
+            candidates.append((m.group(1), m.group(2)))
+
+        for start_text, end_text in candidates:
+            try:
+                from datetime import date
+                return date.fromisoformat(start_text), date.fromisoformat(end_text)
+            except Exception:
+                continue
+        return None
 
     def _record_policy_decision_event(
         self,

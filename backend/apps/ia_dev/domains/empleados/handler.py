@@ -1,15 +1,157 @@
 from __future__ import annotations
 
+import time
 import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from apps.empleados.services.empleado_service import EmpleadoService
+from apps.ia_dev.application.context.run_context import RunContext
 from apps.ia_dev.application.delegation.task_contracts import DelegationResult, DelegationTask
+from apps.ia_dev.services.memory_service import SessionMemoryStore
+
+
+@dataclass(slots=True)
+class EmpleadosHandleResult:
+    ok: bool
+    response: dict[str, Any] | None = None
+    error: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class EmpleadosHandler:
     def __init__(self, *, service: EmpleadoService | None = None):
         self.service = service or EmpleadoService()
+
+    def handle(
+        self,
+        *,
+        capability_id: str,
+        message: str,
+        session_id: str | None,
+        reset_memory: bool,
+        run_context: RunContext,
+        planned_capability: dict[str, Any],
+        memory_context: dict[str, Any] | None = None,
+        observability=None,
+    ) -> EmpleadosHandleResult:
+        sid, _ = SessionMemoryStore.get_or_create(session_id)
+        if reset_memory:
+            SessionMemoryStore.reset(sid)
+
+        started_at = time.perf_counter()
+        trace: list[dict[str, Any]] = []
+        used_tools: list[str] = []
+        payload = {
+            "kpis": {},
+            "series": [],
+            "labels": [],
+            "insights": [],
+            "table": {"columns": [], "rows": [], "rowcount": 0},
+        }
+
+        def _push_trace(phase: str, status: str, detail: Any, active_nodes: list[str] | None = None) -> None:
+            trace.append(
+                {
+                    "phase": phase,
+                    "status": status,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "detail": detail,
+                    "active_nodes": active_nodes or ["q", "gpt", "route", "empleados", "result"],
+                }
+            )
+
+        try:
+            if capability_id != "empleados.count.active.v1":
+                return EmpleadosHandleResult(
+                    ok=False,
+                    error=f"empleados capability no soportada: {capability_id}",
+                    metadata={"capability_id": capability_id},
+                )
+
+            total_activos, filtros_aplicados = self.obtener_cantidad_activos(consulta=message)
+            used_tools.append("get_empleados_count_active")
+            payload["kpis"] = {"total_empleados_activos": int(total_activos)}
+            payload["table"] = {
+                "columns": ["estado", "total_empleados"],
+                "rows": [{"estado": "ACTIVO", "total_empleados": int(total_activos)}],
+                "rowcount": 1,
+            }
+            payload["insights"] = [
+                f"Total de empleados activos calculado con filtros: {filtros_aplicados or {'estado': 'ACTIVO'}}."
+            ]
+            reply = f"Cantidad de empleados activos: {int(total_activos)}."
+            _push_trace(
+                "empleados_count_active",
+                "ok",
+                {
+                    "capability_id": capability_id,
+                    "total_activos": int(total_activos),
+                    "filtros_aplicados": filtros_aplicados,
+                },
+            )
+
+            SessionMemoryStore.update_context(
+                sid,
+                {
+                    "last_domain": "empleados",
+                    "last_intent": "empleados_query",
+                    "last_focus": "count_active",
+                    "last_output_mode": "summary",
+                    "last_needs_database": True,
+                    "last_selected_agent": "rrhh_agent",
+                },
+            )
+            SessionMemoryStore.append_turn(sid, message, reply)
+            memory_status = SessionMemoryStore.status(sid)
+
+            total_duration_ms = int((time.perf_counter() - started_at) * 1000)
+            response = {
+                "session_id": sid,
+                "reply": reply,
+                "orchestrator": {
+                    "intent": "empleados_query",
+                    "domain": "empleados",
+                    "selected_agent": "rrhh_agent",
+                    "classifier_source": "capability_handler",
+                    "needs_database": True,
+                    "output_mode": "summary",
+                    "used_tools": used_tools,
+                },
+                "data": payload,
+                "actions": [],
+                "data_sources": {
+                    "empleados": {"ok": True, "source": "capability_handler"},
+                    "ai_dictionary": {"ok": True, "source": "capability_handler"},
+                },
+                "trace": trace,
+                "memory": memory_status,
+                "observability": {
+                    "enabled": bool(getattr(observability, "enabled", True)),
+                    "duration_ms": total_duration_ms,
+                    "tool_latencies_ms": {},
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "estimated_cost_usd": 0.0,
+                },
+                "active_nodes": ["empleados", "q", "result", "route"],
+            }
+            return EmpleadosHandleResult(
+                ok=True,
+                response=response,
+                metadata={
+                    "capability_id": capability_id,
+                    "filtros_aplicados": filtros_aplicados,
+                    "policy_tags": list(planned_capability.get("policy_tags") or []),
+                },
+            )
+        except Exception as exc:
+            return EmpleadosHandleResult(
+                ok=False,
+                error=str(exc),
+                metadata={"capability_id": capability_id},
+            )
 
     def resolver_entidad_objetivo(self, *, consulta: str, limite: int = 120) -> dict[str, Any]:
         filtros = self._extraer_filtros_desde_texto(consulta=consulta)
@@ -24,6 +166,13 @@ class EmpleadosHandler:
             },
             "empleados": empleados,
         }
+
+    def obtener_cantidad_activos(self, *, consulta: str = "") -> tuple[int, dict[str, str]]:
+        filtros = self._extraer_filtros_count_activos(consulta=consulta)
+        query_params: dict[str, str] = {"estado": "ACTIVO"}
+        query_params.update({k: v for k, v in filtros.items() if v})
+        queryset = self.service.listar(query_params=query_params)
+        return int(queryset.count()), query_params
 
     def resolver_subtarea(self, *, task: DelegationTask, observability=None) -> DelegationResult:
         consulta = str(task.business_objective or "").strip() or str(
@@ -202,6 +351,15 @@ class EmpleadosHandler:
             if token in value:
                 value = value.split(token, 1)[0].strip()
         return value
+
+    def _extraer_filtros_count_activos(self, *, consulta: str) -> dict[str, str]:
+        lowered = str(consulta or "").strip().lower()
+        filtros: dict[str, str] = {}
+        for key in ("supervisor", "area", "cargo", "carpeta"):
+            value = self._extract_after_keyword(lowered, keyword=key)
+            if value:
+                filtros[key] = value
+        return filtros
 
     @staticmethod
     def _record_event(*, observability, event_type: str, meta: dict[str, Any]) -> None:

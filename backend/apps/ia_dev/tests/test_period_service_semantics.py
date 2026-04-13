@@ -25,3 +25,12 @@ class PeriodServiceSemanticsTests(SimpleTestCase):
         self.assertEqual(period.get("label"), "semana_anterior")
         self.assertEqual(period.get("start"), date(2026, 3, 30))
         self.assertEqual(period.get("end"), date(2026, 4, 5))
+
+    def test_resolves_last_year_as_rolling_12_months(self):
+        period = resolve_period_from_text(
+            "Ausentismos del ultimo ano del empleado 1055837370",
+            today=date(2026, 4, 13),
+        )
+        self.assertEqual(period.get("label"), "ultimo_ano_12_meses")
+        self.assertEqual(period.get("start"), date(2025, 4, 14))
+        self.assertEqual(period.get("end"), date(2026, 4, 13))

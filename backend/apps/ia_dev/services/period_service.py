@@ -110,6 +110,13 @@ def resolve_period_from_text(text: str, today: date | None = None) -> dict:
         start = end.replace(day=1)
         return {"label": "mes_anterior", "start": start, "end": end}
 
+    if re.search(r"\b(ultimo|ultimos|ultima|ultimas)\s+ano(s)?\b", norm):
+        return {
+            "label": "ultimo_ano_12_meses",
+            "start": now - timedelta(days=364),
+            "end": now,
+        }
+
     if re.search(r"\bultim[oa]s?\s+mes\b", norm):
         return {
             "label": "ultimo_mes_30_dias",

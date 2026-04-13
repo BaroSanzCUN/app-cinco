@@ -125,10 +125,15 @@ class AttendanceHandler:
 
         try:
             session_context = SessionMemoryStore.get_context(sid)
+            last_group_dimension_key = str(session_context.get("last_group_dimension_key") or "").strip().lower()
+            last_group_dimension_label = str(session_context.get("last_group_dimension_label") or "").strip()
+            last_aggregation_focus = str(session_context.get("last_aggregation_focus") or "").strip().lower()
+            last_metric_key = str(session_context.get("last_metric_key") or "").strip().lower()
             period = self._resolve_period_for_attendance(
                 message=message,
                 session_context=session_context,
             )
+            target_cedula = self._extract_cedula_from_message(message)
             memory_hints = self._extract_memory_hints(memory_context)
             memory_hints_used: list[dict[str, Any]] = []
             personal_status = self._resolve_personal_status(
@@ -146,6 +151,7 @@ class AttendanceHandler:
                     "start": period.start.isoformat(),
                     "end": period.end.isoformat(),
                     "personal_status": personal_status,
+                    "target_cedula": target_cedula,
                 },
                 ["q", "route", "rules", "aus"],
             )
@@ -161,6 +167,7 @@ class AttendanceHandler:
                     "attendance_get_summary",
                     self.tool.get_unjustified_summary,
                     period=period,
+                    cedula=target_cedula,
                 )
                 used_tools.append("get_attendance_summary")
                 response_output_mode = "summary"
@@ -203,6 +210,7 @@ class AttendanceHandler:
                     include_personal=needs_personal_join,
                     personal_status=personal_status,
                     limit=150,
+                    cedula=target_cedula,
                 )
                 used_tools.append(
                     "get_attendance_unjustified_with_personal"
@@ -331,6 +339,7 @@ class AttendanceHandler:
                 "attendance.summary.by_supervisor.v1",
                 "attendance.summary.by_area.v1",
                 "attendance.summary.by_cargo.v1",
+                "attendance.summary.by_attribute.v1",
             }:
                 response_output_mode = "summary"
                 needs_personal_join = True
@@ -345,34 +354,38 @@ class AttendanceHandler:
                         }
                     )
 
-                group_by = "supervisor"
-                if capability_id.endswith("by_area.v1"):
-                    group_by = "area"
-                elif capability_id.endswith("by_cargo.v1"):
-                    group_by = "cargo"
-
+                group_by, group_label = self._resolve_group_dimension(message=message, capability_id=capability_id)
+                aggregation_focus = self._resolve_aggregation_focus(message=message)
                 analytics = _measure_tool(
                     f"attendance_get_summary_by_{group_by}",
-                    self.tool.get_unjustified_aggregation,
+                    self.tool.get_attendance_aggregation,
                     period=period,
                     group_by=group_by,
                     personal_status=personal_status,
                     top_n=top_n,
                     chart_type=chart_type,
+                    cedula=target_cedula,
+                    focus=aggregation_focus,
                 )
-                used_tools.append("get_attendance_unjustified_with_personal")
+                used_tools.append(
+                    "get_attendance_unjustified_with_personal"
+                    if aggregation_focus == "unjustified"
+                    else "get_attendance_detail_with_personal"
+                )
                 used_tools.append(f"attendance_analytics_summary_by_{group_by}")
 
                 rows_for_response = list(analytics.get("rows") or [])
                 group_key = str(analytics.get("group_key") or group_by)
-                group_label = str(analytics.get("group_label") or group_by.capitalize())
+                group_label = str(analytics.get("group_label") or group_label)
+                metric_key = str(analytics.get("metric_key") or "total_injustificados")
+                total_metric = int(analytics.get(metric_key) or 0)
                 payload["table"] = {
-                    "columns": list(rows_for_response[0].keys()) if rows_for_response else [group_key, "total_injustificados", "porcentaje"],
+                    "columns": list(rows_for_response[0].keys()) if rows_for_response else [group_key, metric_key, "porcentaje"],
                     "rows": rows_for_response,
                     "rowcount": len(rows_for_response),
                 }
                 payload["kpis"] = {
-                    "total_injustificados": int(analytics.get("total_injustificados") or 0),
+                    metric_key: total_metric,
                     "total_grupos": int(analytics.get("total_groups") or 0),
                     "top_n": int(analytics.get("top_n") or top_n),
                 }
@@ -396,23 +409,28 @@ class AttendanceHandler:
 
                 if not rows_for_response:
                     reply = (
-                        "No se encontraron ausentismos injustificados para agrupar por "
+                        "No se encontraron ausentismos para agrupar por "
                         f"{group_label.lower()} entre {analytics.get('periodo_inicio')} y {analytics.get('periodo_fin')}."
                     )
                 else:
+                    focus_label = "injustificados" if aggregation_focus == "unjustified" else "totales"
                     reply = (
-                        f"Resumen de ausentismos injustificados por {group_label.lower()} "
+                        f"Resumen de ausentismos {focus_label} por {group_label.lower()} "
                         f"({analytics.get('periodo_inicio')} a {analytics.get('periodo_fin')}, top {payload['kpis']['top_n']}):\n\n"
                         f"{self._format_rows_table(rows_for_response)}"
                     )
 
                 payload["insights"].append(
-                    f"Se agruparon {payload['kpis']['total_injustificados']} registros en {payload['kpis']['total_grupos']} grupos."
+                    f"Se agruparon {total_metric} registros en {payload['kpis']['total_grupos']} grupos."
                 )
                 if bool(analytics.get("source_truncated")):
                     payload["insights"].append(
                         "La agregacion se calculo sobre una muestra truncada por limite de seguridad (max 500 registros)."
                     )
+                last_group_dimension_key = str(group_key or "").strip().lower()
+                last_group_dimension_label = str(group_label or "").strip()
+                last_aggregation_focus = str(aggregation_focus or "").strip().lower()
+                last_metric_key = str(metric_key or "").strip().lower()
             elif capability_id in {
                 "attendance.trend.daily.v1",
                 "attendance.trend.monthly.v1",
@@ -439,6 +457,7 @@ class AttendanceHandler:
                     granularity=granularity,
                     personal_status=personal_status,
                     chart_type=chart_type,
+                    cedula=target_cedula,
                 )
                 used_tools.append("get_attendance_unjustified_table")
                 used_tools.append(f"attendance_analytics_trend_{granularity}")
@@ -499,6 +518,8 @@ class AttendanceHandler:
             if period_alternative_hint:
                 payload["insights"].append(period_alternative_hint)
                 reply = f"{reply}\n\n{period_alternative_hint}" if reply else period_alternative_hint
+            if target_cedula:
+                payload["insights"].append(f"Filtro aplicado por cedula: {target_cedula}.")
 
             if capability_id.startswith("attendance.summary.by_") or capability_id.startswith("attendance.trend."):
                 self._record_analytics_event(
@@ -531,6 +552,10 @@ class AttendanceHandler:
                     "last_selected_agent": "attendance_agent",
                     "last_period_start": period.start.isoformat(),
                     "last_period_end": period.end.isoformat(),
+                    "last_group_dimension_key": last_group_dimension_key or None,
+                    "last_group_dimension_label": last_group_dimension_label or None,
+                    "last_aggregation_focus": last_aggregation_focus or None,
+                    "last_metric_key": last_metric_key or None,
                 },
             )
             SessionMemoryStore.append_turn(sid, message, reply)
@@ -761,6 +786,13 @@ class AttendanceHandler:
                 "esta consulta",
                 "ese reporte",
                 "ese resultado",
+                "informacion anterior",
+                "info anterior",
+                "lo anterior",
+                "mismo periodo",
+                "mismo rango",
+                "ese periodo",
+                "ese rango",
             )
         )
 
@@ -783,6 +815,46 @@ class AttendanceHandler:
         if hint_chart in {"bar", "line", "area"}:
             return hint_chart
         return fallback
+
+    def _resolve_group_dimension(self, *, message: str, capability_id: str) -> tuple[str, str]:
+        if capability_id.endswith("by_supervisor.v1"):
+            return "supervisor", "Supervisor"
+        if capability_id.endswith("by_area.v1"):
+            return "area", "Area"
+        if capability_id.endswith("by_cargo.v1"):
+            return "cargo", "Cargo"
+
+        normalized = self._normalize_text(message)
+        mappings = (
+            ("por supervisor", "supervisor", "Supervisor"),
+            ("supervisor", "supervisor", "Supervisor"),
+            ("por area", "area", "Area"),
+            ("area", "area", "Area"),
+            ("por cargo", "cargo", "Cargo"),
+            ("cargo", "cargo", "Cargo"),
+            ("por carpeta", "carpeta", "Carpeta"),
+            ("carpeta", "carpeta", "Carpeta"),
+            ("por justificacion", "justificacion", "Justificacion"),
+            ("justificacion", "justificacion", "Justificacion"),
+            ("por causa", "justificacion", "Justificacion"),
+            ("causa", "justificacion", "Justificacion"),
+            ("por motivo", "justificacion", "Justificacion"),
+            ("motivo", "justificacion", "Justificacion"),
+            ("por tipo", "estado_justificacion", "Estado"),
+            ("tipo", "estado_justificacion", "Estado"),
+            ("por estado", "estado_justificacion", "Estado"),
+            ("estado", "estado_justificacion", "Estado"),
+        )
+        for token, key, label in mappings:
+            if token in normalized:
+                return key, label
+        return "supervisor", "Supervisor"
+
+    def _resolve_aggregation_focus(self, *, message: str) -> str:
+        normalized = self._normalize_text(message)
+        if "injustific" in normalized or "sin justificar" in normalized:
+            return "unjustified"
+        return "all"
 
     def _extract_top_n(self, message: str, *, hints: dict[str, Any] | None = None, default: int = 10) -> int:
         normalized = self._normalize_text(message)
@@ -835,6 +907,18 @@ class AttendanceHandler:
             body.append(" | ".join(str(row.get(col, "")) for col in columns))
         suffix = f"\n... ({len(rows) - max_rows} filas adicionales)" if len(rows) > max_rows else ""
         return f"{header}\n{separator}\n" + "\n".join(body) + suffix
+
+    @staticmethod
+    def _extract_cedula_from_message(message: str) -> str | None:
+        match = re.search(r"\b\d{6,13}\b", str(message or ""))
+        if not match:
+            return None
+        value = AttendanceHandler._normalize_identifier(match.group(0))
+        return value or None
+
+    @staticmethod
+    def _normalize_identifier(value: Any) -> str:
+        return "".join(ch for ch in str(value or "") if ch.isdigit())
 
     def _build_period_alternative_hint(self, *, message: str, period: AttendancePeriod) -> str | None:
         normalized = self._normalize_text(message)

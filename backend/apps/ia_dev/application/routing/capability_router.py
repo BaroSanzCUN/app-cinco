@@ -5,6 +5,7 @@ from typing import Any
 from apps.ia_dev.application.context.run_context import RunContext
 from apps.ia_dev.application.policies.policy_guard import PolicyAction, PolicyDecision
 from apps.ia_dev.domains.attendance.handler import AttendanceHandler
+from apps.ia_dev.domains.empleados.handler import EmpleadosHandler
 from apps.ia_dev.domains.transport.handler import TransportHandler
 
 
@@ -20,9 +21,11 @@ class CapabilityRouter:
         self,
         *,
         attendance_handler: AttendanceHandler | None = None,
+        empleados_handler: EmpleadosHandler | None = None,
         transport_handler: TransportHandler | None = None,
     ):
         self._attendance_handler = attendance_handler
+        self._empleados_handler = empleados_handler
         self._transport_handler = transport_handler
 
     def route(
@@ -114,7 +117,7 @@ class CapabilityRouter:
                 "rollout_enabled": False,
             }
 
-        if capability_domain in {"attendance", "transport"}:
+        if capability_domain in {"attendance", "transport", "empleados"}:
             return {
                 "routing_mode": routing_mode,
                 "selected_capability_id": capability_id,
@@ -195,6 +198,23 @@ class CapabilityRouter:
                 "error": result.error,
                 "meta": dict(result.metadata or {}),
             }
+        if capability_id.startswith("empleados."):
+            result = self._get_empleados_handler().handle(
+                capability_id=capability_id,
+                message=message,
+                session_id=session_id,
+                reset_memory=reset_memory,
+                run_context=run_context,
+                planned_capability=planned_capability,
+                memory_context=memory_context,
+                observability=observability,
+            )
+            return {
+                "ok": bool(result.ok),
+                "response": result.response,
+                "error": result.error,
+                "meta": dict(result.metadata or {}),
+            }
 
         return {
             "ok": False,
@@ -211,3 +231,8 @@ class CapabilityRouter:
         if self._transport_handler is None:
             self._transport_handler = TransportHandler()
         return self._transport_handler
+
+    def _get_empleados_handler(self) -> EmpleadosHandler:
+        if self._empleados_handler is None:
+            self._empleados_handler = EmpleadosHandler()
+        return self._empleados_handler

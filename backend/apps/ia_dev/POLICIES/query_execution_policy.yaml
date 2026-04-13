@@ -1,0 +1,35 @@
+version: 1
+metadata:
+  owner: ia_dev
+  description: Runtime policy for query intelligence execution and SQL assisted safeguards.
+default_action: allow
+rules:
+  - id: query_intelligence.disabled
+    when:
+      all:
+        - flag_disabled: IA_DEV_QUERY_INTELLIGENCE_ENABLED
+    action: deny
+    reason: Query intelligence disabled by feature flag.
+
+  - id: query_sql_assisted.disabled
+    when:
+      all:
+        - execution_strategy_in: [sql_assisted]
+        - flag_disabled: IA_DEV_QUERY_SQL_ASSISTED_ENABLED
+    action: deny
+    reason: SQL assisted execution disabled by feature flag.
+
+  - id: query_sql_assisted.domain_status_not_allowed
+    when:
+      all:
+        - execution_strategy_in: [sql_assisted]
+        - domain_status_in: [active]
+    action: deny
+    reason: SQL assisted only allowed for planned/partial domains.
+
+  - id: query_missing_context
+    when:
+      all:
+        - requires_context: true
+    action: require_approval
+    reason: Query needs more context before safe execution.

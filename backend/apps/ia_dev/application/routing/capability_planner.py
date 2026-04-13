@@ -180,12 +180,17 @@ class CapabilityPlanner:
                 "IA_DEV_CAP_ATTENDANCE_TREND_MONTHLY_V1",
             ),
             "IA_DEV_CAP_TRANSPORT_SUMMARY_ENABLED": ("IA_DEV_CAP_TRANSPORT_SUMMARY_V1",),
+            "IA_DEV_CAP_EMPLEADOS_COUNT_ENABLED": ("IA_DEV_CAP_EMPLEADOS_COUNT_V1",),
         }
         candidates = (name, *aliases.get(name, ()))
         for key in candidates:
             if key in os.environ:
                 return str(os.getenv(key, "")).strip().lower()
-        default = "0" if (name.startswith("IA_DEV_CAP_ATTENDANCE") or name.startswith("IA_DEV_CAP_TRANSPORT")) else "1"
+        default = "0" if (
+            name.startswith("IA_DEV_CAP_ATTENDANCE")
+            or name.startswith("IA_DEV_CAP_TRANSPORT")
+            or name.startswith("IA_DEV_CAP_EMPLEADOS")
+        ) else "1"
         return str(os.getenv(name, default)).strip().lower()
 
     @staticmethod
@@ -230,6 +235,7 @@ class CapabilityPlanner:
             "attendance.summary.by_supervisor.v1",
             "attendance.summary.by_area.v1",
             "attendance.summary.by_cargo.v1",
+            "attendance.summary.by_attribute.v1",
         }
         memory_hints = dict((planning_context or {}).get("memory_hints") or {})
         uses_memory_hints = bool(memory_hints)
@@ -317,5 +323,11 @@ class CapabilityPlanner:
             score += 5
         if "por cargo" in normalized_message and capability_id == "attendance.summary.by_cargo.v1":
             score += 5
+        if "por carpeta" in normalized_message and capability_id == "attendance.summary.by_attribute.v1":
+            score += 6
+        if ("por justificacion" in normalized_message or "por causa" in normalized_message) and capability_id == "attendance.summary.by_attribute.v1":
+            score += 6
+        if ("por tipo" in normalized_message or "por estado" in normalized_message) and capability_id == "attendance.summary.by_attribute.v1":
+            score += 6
 
         return int(score)
