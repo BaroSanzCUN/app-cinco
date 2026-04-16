@@ -46,11 +46,34 @@ class ObservabilityService:
             logger.exception("No se pudo persistir evento de observabilidad")
 
     def summary(self, *, window_seconds: int = 3600, limit: int = 2000) -> dict:
+        return self.summary_filtered(
+            window_seconds=window_seconds,
+            limit=limit,
+            domain_code=None,
+            generator=None,
+            fallback_reason=None,
+        )
+
+    def summary_filtered(
+        self,
+        *,
+        window_seconds: int = 3600,
+        limit: int = 2000,
+        domain_code: str | None = None,
+        generator: str | None = None,
+        fallback_reason: str | None = None,
+    ) -> dict:
+        normalized_filters = {
+            "domain_code": str(domain_code or "").strip().lower() or None,
+            "generator": str(generator or "").strip().lower() or None,
+            "fallback_reason": str(fallback_reason or "").strip().lower() or None,
+        }
         if not self.enabled:
             return {
                 "enabled": False,
                 "window_seconds": int(window_seconds),
                 "sample_size": 0,
+                "applied_filters": normalized_filters,
                 "event_types": {},
                 "totals": {
                     "events": 0,
@@ -64,7 +87,11 @@ class ObservabilityService:
         data = self.store.get_observability_summary(
             window_seconds=window_seconds,
             limit=limit,
+            domain_code=normalized_filters["domain_code"],
+            generator=normalized_filters["generator"],
+            fallback_reason=normalized_filters["fallback_reason"],
         )
+        data["applied_filters"] = normalized_filters
         data["enabled"] = True
         return data
 

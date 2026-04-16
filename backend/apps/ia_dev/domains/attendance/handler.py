@@ -13,6 +13,11 @@ from apps.ia_dev.TOOLS.business.attendance_business_tool import (
     AttendancePeriod,
 )
 from apps.ia_dev.application.context.run_context import RunContext
+from apps.ia_dev.application.contracts.query_intelligence_contracts import (
+    QueryExecutionPlan,
+    ResolvedQuerySpec,
+)
+from apps.ia_dev.application.semantic.cause_diagnostics_service import CauseDiagnosticsService
 from apps.ia_dev.services.memory_service import SessionMemoryStore
 from apps.ia_dev.services.period_service import resolve_period_from_text
 
@@ -65,8 +70,14 @@ class AttendanceHandler:
         "barras",
     )
 
-    def __init__(self, *, tool: AttendanceBusinessTool | None = None):
+    def __init__(
+        self,
+        *,
+        tool: AttendanceBusinessTool | None = None,
+        cause_diagnostics_service: CauseDiagnosticsService | None = None,
+    ):
         self.tool = tool or AttendanceBusinessTool()
+        self.cause_diagnostics_service = cause_diagnostics_service or CauseDiagnosticsService()
 
     def handle(
         self,
@@ -78,6 +89,8 @@ class AttendanceHandler:
         run_context: RunContext,
         planned_capability: dict[str, Any],
         memory_context: dict[str, Any] | None = None,
+        resolved_query: ResolvedQuerySpec | None = None,
+        execution_plan: QueryExecutionPlan | None = None,
         observability=None,
     ) -> AttendanceHandleResult:
         sid, _ = SessionMemoryStore.get_or_create(session_id)
@@ -96,6 +109,7 @@ class AttendanceHandler:
             "table": {"columns": [], "rows": [], "rowcount": 0},
         }
         actions: list[dict[str, Any]] = []
+        cause_generation_meta: dict[str, Any] = {}
 
         def _push_trace(phase: str, status: str, detail: Any, active_nodes: list[str] | None = None) -> None:
             trace.append(
@@ -125,6 +139,7 @@ class AttendanceHandler:
 
         try:
             session_context = SessionMemoryStore.get_context(sid)
+            constraints = dict((execution_plan.constraints if execution_plan else {}) or {})
             last_group_dimension_key = str(session_context.get("last_group_dimension_key") or "").strip().lower()
             last_group_dimension_label = str(session_context.get("last_group_dimension_label") or "").strip()
             last_aggregation_focus = str(session_context.get("last_aggregation_focus") or "").strip().lower()
@@ -133,7 +148,12 @@ class AttendanceHandler:
                 message=message,
                 session_context=session_context,
             )
-            target_cedula = self._extract_cedula_from_message(message)
+            period = self._apply_constraints_to_period(period=period, constraints=constraints)
+            target_cedula = self._resolve_target_cedula(
+                message=message,
+                constraints=constraints,
+                resolved_query=resolved_query,
+            )
             memory_hints = self._extract_memory_hints(memory_context)
             memory_hints_used: list[dict[str, Any]] = []
             personal_status = self._resolve_personal_status(
@@ -355,6 +375,14 @@ class AttendanceHandler:
                     )
 
                 group_by, group_label = self._resolve_group_dimension(message=message, capability_id=capability_id)
+                if constraints:
+                    constrained_group_by, constrained_group_label = self._resolve_group_dimension(
+                        message=message,
+                        capability_id=capability_id,
+                        constrained_group_by=list(constraints.get("group_by") or []),
+                    )
+                    if constrained_group_by:
+                        group_by, group_label = constrained_group_by, constrained_group_label
                 aggregation_focus = self._resolve_aggregation_focus(message=message)
                 analytics = _measure_tool(
                     f"attendance_get_summary_by_{group_by}",
@@ -426,6 +454,31 @@ class AttendanceHandler:
                 if bool(analytics.get("source_truncated")):
                     payload["insights"].append(
                         "La agregacion se calculo sobre una muestra truncada por limite de seguridad (max 500 registros)."
+                    )
+                if self._message_requests_probable_causes(message):
+                    cause_result = self.cause_diagnostics_service.generate(
+                        message=message,
+                        rows=rows_for_response,
+                        group_label=group_label,
+                        metric_key=metric_key,
+                        observability=observability,
+                        run_id=run_context.run_id,
+                        trace_id=run_context.trace_id,
+                        domain_code="attendance",
+                        capability_id=capability_id,
+                    )
+                    probable_causes = list(cause_result.get("insights") or [])
+                    if probable_causes:
+                        payload["insights"].extend(probable_causes)
+                    cause_generation_meta = dict(cause_result.get("meta") or {})
+                    _push_trace(
+                        "cause_diagnostics",
+                        "ok" if str(cause_generation_meta.get("generator") or "") == "openai" else "warning",
+                        self._build_cause_diagnostics_trace_detail(
+                            meta=cause_generation_meta,
+                            capability_id=capability_id,
+                        ),
+                        ["q", "gpt", "route", "rules", "result"],
                     )
                 last_group_dimension_key = str(group_key or "").strip().lower()
                 last_group_dimension_label = str(group_label or "").strip()
@@ -574,7 +627,14 @@ class AttendanceHandler:
                     "ok": True,
                     "source": "capability_handler",
                 },
+                "cause_diagnostics": {
+                    "ok": bool(cause_generation_meta),
+                    "generator": str(cause_generation_meta.get("generator") or ""),
+                    "confidence": float(cause_generation_meta.get("confidence") or 0.0),
+                },
             }
+            if cause_generation_meta:
+                payload["cause_generation_meta"] = cause_generation_meta
             response = {
                 "session_id": sid,
                 "reply": reply,
@@ -773,6 +833,96 @@ class AttendanceHandler:
         normalized = self._normalize_text(message)
         return any(token in normalized for token in self._CHART_TOKENS)
 
+    def _message_requests_probable_causes(self, message: str) -> bool:
+        normalized = self._normalize_text(message)
+        return any(
+            token in normalized
+            for token in (
+                "causa",
+                "causas",
+                "probable",
+                "probables",
+                "sugiere",
+                "sugerir",
+                "sugerencia",
+                "porque",
+                "por que",
+            )
+        )
+
+    @staticmethod
+    def _build_probable_causes_insights(*, rows: list[dict[str, Any]], group_label: str) -> list[str]:
+        if not rows:
+            return [
+                "No hay datos suficientes en el periodo para sugerir causas probables.",
+            ]
+        top_row = dict(rows[0] or {})
+        top_group = str(
+            top_row.get("grupo")
+            or top_row.get("group")
+            or top_row.get("area")
+            or top_row.get("supervisor")
+            or top_row.get("cargo")
+            or ""
+        ).strip()
+        top_pct_raw = top_row.get("porcentaje")
+        top_pct = ""
+        try:
+            if top_pct_raw is not None and str(top_pct_raw).strip() != "":
+                top_pct = f"{float(top_pct_raw):.1f}%"
+        except Exception:
+            top_pct = str(top_pct_raw or "").strip()
+
+        hints: list[str] = []
+        if top_group and top_pct:
+            hints.append(
+                f"Concentracion principal en {group_label}: {top_group} ({top_pct}). Prioriza analisis operativo en ese frente."
+            )
+        elif top_group:
+            hints.append(
+                f"Concentracion principal en {group_label}: {top_group}. Prioriza analisis operativo en ese frente."
+            )
+        hints.extend(
+            [
+                "Posibles causas a validar: sobrecarga operativa, picos de incapacidades y cobertura insuficiente de reemplazos.",
+                "Recomendacion: cruzar ausentismo con turnos, novedades medicas y dotacion por equipo para confirmar causa raiz.",
+            ]
+        )
+        return hints
+
+    @staticmethod
+    def _build_cause_diagnostics_trace_detail(*, meta: dict[str, Any], capability_id: str) -> dict[str, Any]:
+        payload = dict(meta or {})
+        policy_decision = dict(payload.get("policy_decision") or {})
+        fallback_reason = str(payload.get("fallback_reason") or "").strip()
+        validation_errors = [
+            str(item or "").strip()
+            for item in list(payload.get("validation_errors") or [])
+            if str(item or "").strip()
+        ]
+        try:
+            confidence = float(payload.get("confidence") or 0.0)
+        except Exception:
+            confidence = 0.0
+        try:
+            top_pct = float(payload.get("top_pct") or 0.0)
+        except Exception:
+            top_pct = 0.0
+        return {
+            "capability_id": str(capability_id or ""),
+            "generator": str(payload.get("generator") or ""),
+            "confidence": confidence,
+            "validated": bool(payload.get("validated")),
+            "top_group": str(payload.get("top_group") or ""),
+            "top_pct": top_pct,
+            "fallback_reason": fallback_reason,
+            "validation_errors": validation_errors,
+            "prompt_hash": str(payload.get("prompt_hash") or ""),
+            "policy_reason": str(policy_decision.get("reason") or ""),
+            "policy_selected_generator": str(policy_decision.get("selected_generator") or ""),
+            "policy_allowed": bool(policy_decision.get("allowed")),
+        }
+
     @staticmethod
     def _is_contextual_reference_request(normalized: str) -> bool:
         return any(
@@ -816,7 +966,27 @@ class AttendanceHandler:
             return hint_chart
         return fallback
 
-    def _resolve_group_dimension(self, *, message: str, capability_id: str) -> tuple[str, str]:
+    def _resolve_group_dimension(
+        self,
+        *,
+        message: str,
+        capability_id: str,
+        constrained_group_by: list[str] | None = None,
+    ) -> tuple[str, str]:
+        requested = [str(item or "").strip().lower() for item in list(constrained_group_by or []) if str(item or "").strip()]
+        if requested:
+            first = requested[0]
+            if first == "supervisor":
+                return "supervisor", "Supervisor"
+            if first == "area":
+                return "area", "Area"
+            if first == "cargo":
+                return "cargo", "Cargo"
+            if first in {"carpeta", "justificacion", "causa", "motivo"}:
+                return "carpeta" if first == "carpeta" else "justificacion", "Carpeta" if first == "carpeta" else "Justificacion"
+            if first in {"tipo", "estado", "estado_justificacion"}:
+                return "estado_justificacion", "Estado"
+
         if capability_id.endswith("by_supervisor.v1"):
             return "supervisor", "Supervisor"
         if capability_id.endswith("by_area.v1"):
@@ -907,6 +1077,51 @@ class AttendanceHandler:
             body.append(" | ".join(str(row.get(col, "")) for col in columns))
         suffix = f"\n... ({len(rows) - max_rows} filas adicionales)" if len(rows) > max_rows else ""
         return f"{header}\n{separator}\n" + "\n".join(body) + suffix
+
+    @staticmethod
+    def _resolve_target_cedula(
+        *,
+        message: str,
+        constraints: dict[str, Any],
+        resolved_query: ResolvedQuerySpec | None,
+    ) -> str | None:
+        filters = dict(constraints.get("filters") or {})
+        cedula = str(filters.get("cedula") or "").strip()
+        if cedula:
+            normalized = AttendanceHandler._normalize_identifier(cedula)
+            return normalized or None
+        if resolved_query is not None:
+            normalized = AttendanceHandler._normalize_identifier(
+                str((resolved_query.normalized_filters or {}).get("cedula") or "")
+            )
+            if normalized:
+                return normalized
+        return AttendanceHandler._extract_cedula_from_message(message)
+
+    @staticmethod
+    def _apply_constraints_to_period(
+        *,
+        period: AttendancePeriod,
+        constraints: dict[str, Any],
+    ) -> AttendancePeriod:
+        period_scope = dict(constraints.get("period_scope") or {})
+        start_text = str(period_scope.get("start_date") or "").strip()
+        end_text = str(period_scope.get("end_date") or "").strip()
+        if not start_text or not end_text:
+            return period
+        try:
+            start = date.fromisoformat(start_text)
+            end = date.fromisoformat(end_text)
+        except Exception:
+            return period
+        if end < start:
+            start, end = end, start
+        return AttendancePeriod(
+            start=start,
+            end=end,
+            label=str(period_scope.get("label") or period.label or "constraints_period"),
+            source="query_constraints",
+        )
 
     @staticmethod
     def _extract_cedula_from_message(message: str) -> str | None:

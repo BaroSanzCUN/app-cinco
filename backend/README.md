@@ -70,10 +70,9 @@ Se agrego un nucleo de gobierno/autoevolucion para propuestas de reglas de negoc
 - Delegacion por dominios (PR11 inicial):
   - `IA_DEV_DELEGATION_ENABLED=1|0`
   - `IA_DEV_DELEGATION_MODE=off|shadow|active`
-  - `IA_DEV_SYSTEM_SCHEMA=<schema_opcional>`: enruta tablas `ia_dev_*` a un schema especifico sin cambiar el `db_alias`.
-    - Regla operativa recomendada: usar `IA_DEV_SYSTEM_SCHEMA=ai_dictionary` para toda tabla del sistema multiagente IA (`ia_dev_*`).
-    - Separacion de responsabilidades: `ai_dictionary` para metadata/semantica; bases operativas de dominio para datos de negocio.
-    - Compatibilidad: si no se define, mantiene el comportamiento actual (schema por defecto de `IA_DEV_DB_ALIAS`).
+  - `IA_DEV_SYSTEM_SCHEMA=ai_dictionary` (obligatorio): toda tabla `ia_dev_*` debe vivir y operar en el schema `ai_dictionary`.
+    - Regla del proyecto: no crear ni mantener tablas `ia_dev_*` en `db_cincosas`.
+    - Separacion de responsabilidades: `ai_dictionary` para metadata/semantica IA; bases operativas de dominio para datos de negocio.
   - `shadow`: planifica subtareas y registra observabilidad sin alterar la respuesta visible.
   - `active`: habilita ejecucion delegada para dominios soportados.
   - `IA_DEV_DOMAIN_REGISTRY_SYNC_ENABLED=1|0`: sincroniza catalogo desde `ai_dictionary` en runtime.

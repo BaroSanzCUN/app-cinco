@@ -34,3 +34,12 @@ class PeriodServiceSemanticsTests(SimpleTestCase):
         self.assertEqual(period.get("label"), "ultimo_ano_12_meses")
         self.assertEqual(period.get("start"), date(2025, 4, 14))
         self.assertEqual(period.get("end"), date(2026, 4, 13))
+
+    def test_resolves_rolling_90_days_window(self):
+        period = resolve_period_from_text(
+            "Que areas concentran mas ausentismos en rolling 90 dias",
+            today=date(2026, 4, 16),
+        )
+        self.assertEqual(period.get("label"), "rolling_90_dias")
+        self.assertEqual(period.get("start"), date(2026, 1, 17))
+        self.assertEqual(period.get("end"), date(2026, 4, 16))

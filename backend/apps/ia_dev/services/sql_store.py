@@ -13,13 +13,19 @@ class IADevSqlStore:
     _init_lock = threading.Lock()
     _initialized_by_alias: set[str] = set()
     _ia_dev_table_pattern = re.compile(r"(?<![A-Za-z0-9_`\.])(ia_dev_[A-Za-z0-9_]+)\b")
+    _required_system_schema = "ai_dictionary"
 
     def __init__(self):
         self.db_alias = (os.getenv("IA_DEV_DB_ALIAS", "default") or "default").strip()
-        raw_system_schema = str(os.getenv("IA_DEV_SYSTEM_SCHEMA", "") or "").strip()
-        if raw_system_schema and not self._is_safe_identifier(raw_system_schema):
+        raw_system_schema = str(
+            os.getenv("IA_DEV_SYSTEM_SCHEMA", self._required_system_schema)
+            or self._required_system_schema
+        ).strip()
+        if not self._is_safe_identifier(raw_system_schema):
             raise ValueError("Invalid IA_DEV_SYSTEM_SCHEMA value")
-        self.system_schema = raw_system_schema or None
+        if raw_system_schema.lower() != self._required_system_schema:
+            raise ValueError("IA_DEV_SYSTEM_SCHEMA must be 'ai_dictionary'")
+        self.system_schema = self._required_system_schema
 
     def _execute(self, sql: str, params: list | tuple | None = None):
         prepared_sql = self._prepare_sql(sql)
@@ -1343,6 +1349,485 @@ class IADevSqlStore:
             "synced_tables": synced_tables,
         }
 
+    def _resolve_dictionary_schema(self) -> str | None:
+        dictionary_table = str(os.getenv("IA_DEV_DICTIONARY_TABLE", "ai_dictionary.dd_dominios") or "").strip()
+        dictionary_schema = dictionary_table.split(".", 1)[0] if "." in dictionary_table else "ai_dictionary"
+        if not self._is_safe_identifier(dictionary_schema):
+            return None
+        return dictionary_schema
+
+    def _dictionary_column_type(self, *, schema: str, table_name: str, column_name: str) -> str | None:
+        if not self._is_safe_identifier(schema):
+            return None
+        if not self._is_safe_identifier(table_name):
+            return None
+        if not self._is_safe_identifier(column_name):
+            return None
+        row = self._fetchone(
+            """
+            SELECT COLUMN_TYPE
+            FROM information_schema.columns
+            WHERE table_schema = %s
+              AND table_name = %s
+              AND column_name = %s
+            LIMIT 1
+            """,
+            [schema, table_name, column_name],
+        )
+        if not row or not row[0]:
+            return None
+        column_type = str(row[0] or "").strip().lower()
+        if not re.match(r"^[a-z0-9(),\s]+$", column_type):
+            return None
+        return column_type
+
+    def ensure_ia_dev_capacidades_columna_table(self) -> dict:
+        """
+        Crea la tabla canonica de capacidades funcionales por columna
+        y su relacion (FK) con dd_campos.
+        """
+        dictionary_schema = self._resolve_dictionary_schema()
+        if not dictionary_schema:
+            return {"ok": False, "error": "invalid_dictionary_schema"}
+        campo_id_type = self._dictionary_column_type(
+            schema=dictionary_schema,
+            table_name="dd_campos",
+            column_name="id",
+        ) or "bigint"
+
+        self._execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {dictionary_schema}.ia_dev_capacidades_columna (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                campo_id {campo_id_type} NOT NULL,
+                supports_filter TINYINT(1) NOT NULL DEFAULT 0,
+                supports_group_by TINYINT(1) NOT NULL DEFAULT 0,
+                supports_metric TINYINT(1) NOT NULL DEFAULT 0,
+                supports_dimension TINYINT(1) NOT NULL DEFAULT 0,
+                is_date TINYINT(1) NOT NULL DEFAULT 0,
+                is_identifier TINYINT(1) NOT NULL DEFAULT 0,
+                is_chart_dimension TINYINT(1) NOT NULL DEFAULT 0,
+                is_chart_measure TINYINT(1) NOT NULL DEFAULT 0,
+                allowed_operators_json LONGTEXT NULL,
+                allowed_aggregations_json LONGTEXT NULL,
+                normalization_strategy VARCHAR(120) NULL,
+                priority INT NOT NULL DEFAULT 0,
+                active TINYINT(1) NOT NULL DEFAULT 1,
+                created_at BIGINT NOT NULL,
+                updated_at BIGINT NOT NULL,
+                UNIQUE KEY uq_ia_dev_capacidades_columna_campo (campo_id),
+                KEY idx_ia_dev_capacidades_columna_active (active),
+                CONSTRAINT fk_ia_dev_capacidades_columna_dd_campos
+                    FOREIGN KEY (campo_id) REFERENCES {dictionary_schema}.dd_campos (id)
+                    ON UPDATE CASCADE
+                    ON DELETE CASCADE
+            )
+            """
+        )
+        view_created = False
+        try:
+            # Alias compatible solicitado por negocio.
+            self._execute(
+                f"""
+                CREATE OR REPLACE VIEW {dictionary_schema}.dd_capacidades_campo AS
+                SELECT
+                    id,
+                    campo_id,
+                    supports_filter,
+                    supports_group_by,
+                    supports_metric,
+                    supports_dimension,
+                    is_date,
+                    is_identifier,
+                    is_chart_dimension,
+                    is_chart_measure,
+                    allowed_operators_json,
+                    allowed_aggregations_json,
+                    normalization_strategy,
+                    priority,
+                    active,
+                    created_at,
+                    updated_at
+                FROM {dictionary_schema}.ia_dev_capacidades_columna
+                """
+            )
+            view_created = True
+        except Exception:
+            view_created = False
+        return {
+            "ok": True,
+            "dictionary_schema": dictionary_schema,
+            "table_name": "ia_dev_capacidades_columna",
+            "compat_view_created": bool(view_created),
+        }
+
+    def consolidate_column_capability_tables(
+        self,
+        *,
+        drop_legacy_table: bool = True,
+    ) -> dict:
+        """
+        Consolida metadata funcional de columnas en la tabla canónica:
+        - destino: ia_dev_capacidades_columna
+        - legacy: dd_campos_semantic_profile (si existe)
+        """
+        ensure = self.ensure_ia_dev_capacidades_columna_table()
+        if not ensure.get("ok"):
+            return ensure
+
+        dictionary_schema = str(ensure.get("dictionary_schema") or "ai_dictionary")
+        legacy_table = "dd_campos_semantic_profile"
+        target_table = "ia_dev_capacidades_columna"
+
+        legacy_meta = self._fetchone(
+            """
+            SELECT table_type
+            FROM information_schema.tables
+            WHERE table_schema = %s
+              AND table_name = %s
+            LIMIT 1
+            """,
+            [dictionary_schema, legacy_table],
+        )
+        if not legacy_meta:
+            return {
+                "ok": True,
+                "dictionary_schema": dictionary_schema,
+                "target_table": target_table,
+                "legacy_table": legacy_table,
+                "legacy_exists": False,
+                "migrated_rows": 0,
+                "dropped_legacy_table": False,
+            }
+        if str(legacy_meta[0] or "").upper() != "BASE TABLE":
+            return {
+                "ok": True,
+                "dictionary_schema": dictionary_schema,
+                "target_table": target_table,
+                "legacy_table": legacy_table,
+                "legacy_exists": True,
+                "legacy_type": str(legacy_meta[0] or ""),
+                "migrated_rows": 0,
+                "dropped_legacy_table": False,
+                "reason": "legacy_not_base_table",
+            }
+
+        rows = self._fetchall(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = %s
+              AND table_name = %s
+            """,
+            [dictionary_schema, legacy_table],
+        )
+        legacy_columns = {
+            str(item[0] or "").strip().lower()
+            for item in rows
+            if item and item[0]
+        }
+
+        def expr(*names: str, default: str = "NULL") -> str:
+            for name in names:
+                clean = str(name or "").strip().lower()
+                if clean and clean in legacy_columns:
+                    return f"l.{clean}"
+            return default
+
+        target_before = self._fetchone(
+            f"SELECT COUNT(*) FROM {dictionary_schema}.{target_table}",
+            [],
+        )
+        target_before_count = int((target_before or [0])[0] or 0)
+        legacy_count_row = self._fetchone(
+            f"SELECT COUNT(*) FROM {dictionary_schema}.{legacy_table}",
+            [],
+        )
+        legacy_count = int((legacy_count_row or [0])[0] or 0)
+
+        insert_sql = f"""
+            INSERT INTO {dictionary_schema}.{target_table} (
+                campo_id, supports_filter, supports_group_by, supports_metric, supports_dimension,
+                is_date, is_identifier, is_chart_dimension, is_chart_measure,
+                allowed_operators_json, allowed_aggregations_json, normalization_strategy,
+                priority, active, created_at, updated_at
+            )
+            SELECT
+                {expr("campo_id", "id_campo", default="NULL")} AS campo_id,
+                COALESCE({expr("supports_filter", "soporta_filtro", "es_filtro", default="NULL")}, 0),
+                COALESCE({expr("supports_group_by", "soporta_group_by", "es_group_by", default="NULL")}, 0),
+                COALESCE({expr("supports_metric", "soporta_metrica", "es_metrica", default="NULL")}, 0),
+                COALESCE({expr("supports_dimension", "soporta_dimension", default="NULL")}, 0),
+                COALESCE({expr("is_date", "es_fecha", default="NULL")}, 0),
+                COALESCE({expr("is_identifier", "es_identificador", default="NULL")}, 0),
+                COALESCE({expr("is_chart_dimension", "es_chart_dimension", default="NULL")}, 0),
+                COALESCE({expr("is_chart_measure", "es_chart_measure", default="NULL")}, 0),
+                {expr("allowed_operators_json", "operadores_permitidos_json", default="NULL")},
+                {expr("allowed_aggregations_json", "agregaciones_permitidas_json", default="NULL")},
+                {expr("normalization_strategy", "estrategia_normalizacion", default="NULL")},
+                COALESCE({expr("priority", "prioridad", default="NULL")}, 0),
+                COALESCE({expr("active", "activo", default="NULL")}, 1),
+                COALESCE({expr("created_at", "creado_en", default="NULL")}, {self._now()}),
+                COALESCE({expr("updated_at", "actualizado_en", default="NULL")}, {self._now()})
+            FROM {dictionary_schema}.{legacy_table} AS l
+            WHERE {expr("campo_id", "id_campo", default="NULL")} IS NOT NULL
+            ON DUPLICATE KEY UPDATE
+                supports_filter = VALUES(supports_filter),
+                supports_group_by = VALUES(supports_group_by),
+                supports_metric = VALUES(supports_metric),
+                supports_dimension = VALUES(supports_dimension),
+                is_date = VALUES(is_date),
+                is_identifier = VALUES(is_identifier),
+                is_chart_dimension = VALUES(is_chart_dimension),
+                is_chart_measure = VALUES(is_chart_measure),
+                allowed_operators_json = VALUES(allowed_operators_json),
+                allowed_aggregations_json = VALUES(allowed_aggregations_json),
+                normalization_strategy = VALUES(normalization_strategy),
+                priority = VALUES(priority),
+                active = VALUES(active),
+                updated_at = VALUES(updated_at)
+        """
+        self._execute(insert_sql)
+
+        target_after = self._fetchone(
+            f"SELECT COUNT(*) FROM {dictionary_schema}.{target_table}",
+            [],
+        )
+        target_after_count = int((target_after or [0])[0] or 0)
+
+        dropped_legacy = False
+        if drop_legacy_table:
+            self._execute(f"DROP TABLE IF EXISTS {dictionary_schema}.{legacy_table}")
+            dropped_legacy = True
+
+        # Reafirma vista de compatibilidad en caso de drop/create.
+        self.ensure_ia_dev_capacidades_columna_table()
+
+        return {
+            "ok": True,
+            "dictionary_schema": dictionary_schema,
+            "target_table": target_table,
+            "legacy_table": legacy_table,
+            "legacy_exists": True,
+            "legacy_rows": legacy_count,
+            "target_rows_before": target_before_count,
+            "target_rows_after": target_after_count,
+            "migrated_rows": max(target_after_count - target_before_count, 0),
+            "dropped_legacy_table": dropped_legacy,
+        }
+
+    def backfill_ia_dev_capacidades_columna_from_dd_campos(self) -> dict:
+        """
+        Pobla capacidades por columna tomando metadata base de dd_campos
+        cuando no exista aún fila en la tabla canónica.
+        """
+        ensure = self.ensure_ia_dev_capacidades_columna_table()
+        if not ensure.get("ok"):
+            return ensure
+
+        dictionary_schema = str(ensure.get("dictionary_schema") or "ai_dictionary")
+        rows = self._fetchall(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = %s
+              AND table_name = 'dd_campos'
+            """,
+            [dictionary_schema],
+        )
+        dd_cols = {
+            str(item[0] or "").strip().lower()
+            for item in rows
+            if item and item[0]
+        }
+        if "id" not in dd_cols:
+            return {
+                "ok": False,
+                "dictionary_schema": dictionary_schema,
+                "error": "dd_campos_missing_id",
+            }
+
+        def cexpr(name: str, default: str = "NULL") -> str:
+            clean = str(name or "").strip().lower()
+            if clean in dd_cols:
+                return f"c.{clean}"
+            return default
+
+        count_before = int((self._fetchone(
+            f"SELECT COUNT(*) FROM {dictionary_schema}.ia_dev_capacidades_columna",
+            [],
+        ) or [0])[0] or 0)
+
+        now = self._now()
+        insert_sql = f"""
+            INSERT INTO {dictionary_schema}.ia_dev_capacidades_columna (
+                campo_id, supports_filter, supports_group_by, supports_metric, supports_dimension,
+                is_date, is_identifier, is_chart_dimension, is_chart_measure,
+                allowed_operators_json, allowed_aggregations_json, normalization_strategy,
+                priority, active, created_at, updated_at
+            )
+            SELECT
+                c.id,
+                COALESCE({cexpr("es_filtro", default="0")}, 0),
+                COALESCE({cexpr("es_group_by", default="0")}, 0),
+                COALESCE({cexpr("es_metrica", default="0")}, 0),
+                COALESCE({cexpr("es_group_by", default="0")}, 0),
+                CASE
+                    WHEN LOWER(COALESCE({cexpr("tipo_dato_tecnico", default="''")}, '')) REGEXP 'date|time'
+                      OR LOWER(COALESCE({cexpr("column_name", default="''")}, '')) LIKE 'fecha%%'
+                      OR LOWER(COALESCE({cexpr("campo_logico", default="''")}, '')) LIKE 'fecha%%'
+                    THEN 1 ELSE 0
+                END,
+                CASE
+                    WHEN LOWER(COALESCE({cexpr("column_name", default="''")}, '')) REGEXP 'cedula|ident|documento|id_empleado'
+                      OR LOWER(COALESCE({cexpr("campo_logico", default="''")}, '')) REGEXP 'cedula|ident|documento|id_empleado'
+                    THEN 1 ELSE 0
+                END,
+                COALESCE({cexpr("es_group_by", default="0")}, 0),
+                COALESCE({cexpr("es_metrica", default="0")}, 0),
+                NULL,
+                NULL,
+                'dd_campos_bootstrap',
+                0,
+                COALESCE({cexpr("activo", default="1")}, 1),
+                COALESCE(UNIX_TIMESTAMP({cexpr("creado_en", default="NULL")}), {now}),
+                {now}
+            FROM {dictionary_schema}.dd_campos AS c
+            WHERE c.id IS NOT NULL
+            ON DUPLICATE KEY UPDATE
+                campo_id = ia_dev_capacidades_columna.campo_id
+        """
+        self._execute(insert_sql)
+
+        count_after = int((self._fetchone(
+            f"SELECT COUNT(*) FROM {dictionary_schema}.ia_dev_capacidades_columna",
+            [],
+        ) or [0])[0] or 0)
+
+        return {
+            "ok": True,
+            "dictionary_schema": dictionary_schema,
+            "table_name": "ia_dev_capacidades_columna",
+            "rows_before": count_before,
+            "rows_after": count_after,
+            "rows_inserted": max(count_after - count_before, 0),
+        }
+
+    def ensure_dd_campos_semantic_profile_table(self) -> dict:
+        """
+        Alias legacy: mantiene compatibilidad llamando a la tabla canonica.
+        """
+        return self.ensure_ia_dev_capacidades_columna_table()
+
+    def upsert_ia_dev_capacidades_columna(
+        self,
+        *,
+        campo_id: int,
+        supports_filter: bool = False,
+        supports_group_by: bool = False,
+        supports_metric: bool = False,
+        supports_dimension: bool = False,
+        is_date: bool = False,
+        is_identifier: bool = False,
+        is_chart_dimension: bool = False,
+        is_chart_measure: bool = False,
+        allowed_operators: list[str] | None = None,
+        allowed_aggregations: list[str] | None = None,
+        normalization_strategy: str | None = None,
+        priority: int = 0,
+        active: bool = True,
+    ) -> dict:
+        ensure = self.ensure_ia_dev_capacidades_columna_table()
+        if not ensure.get("ok"):
+            return ensure
+        dictionary_schema = str(ensure.get("dictionary_schema") or "ai_dictionary")
+        now = self._now()
+        self._execute(
+            f"""
+            INSERT INTO {dictionary_schema}.ia_dev_capacidades_columna (
+                campo_id, supports_filter, supports_group_by, supports_metric, supports_dimension,
+                is_date, is_identifier, is_chart_dimension, is_chart_measure,
+                allowed_operators_json, allowed_aggregations_json, normalization_strategy,
+                priority, active, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                supports_filter = VALUES(supports_filter),
+                supports_group_by = VALUES(supports_group_by),
+                supports_metric = VALUES(supports_metric),
+                supports_dimension = VALUES(supports_dimension),
+                is_date = VALUES(is_date),
+                is_identifier = VALUES(is_identifier),
+                is_chart_dimension = VALUES(is_chart_dimension),
+                is_chart_measure = VALUES(is_chart_measure),
+                allowed_operators_json = VALUES(allowed_operators_json),
+                allowed_aggregations_json = VALUES(allowed_aggregations_json),
+                normalization_strategy = VALUES(normalization_strategy),
+                priority = VALUES(priority),
+                active = VALUES(active),
+                updated_at = VALUES(updated_at)
+            """,
+            [
+                int(campo_id),
+                1 if supports_filter else 0,
+                1 if supports_group_by else 0,
+                1 if supports_metric else 0,
+                1 if supports_dimension else 0,
+                1 if is_date else 0,
+                1 if is_identifier else 0,
+                1 if is_chart_dimension else 0,
+                1 if is_chart_measure else 0,
+                self._to_json(list(allowed_operators or [])),
+                self._to_json(list(allowed_aggregations or [])),
+                str(normalization_strategy or "") or None,
+                int(priority),
+                1 if active else 0,
+                now,
+                now,
+            ],
+        )
+        return {
+            "ok": True,
+            "campo_id": int(campo_id),
+            "dictionary_schema": dictionary_schema,
+            "table_name": "ia_dev_capacidades_columna",
+        }
+
+    def upsert_dd_campos_semantic_profile(
+        self,
+        *,
+        campo_id: int,
+        supports_filter: bool = False,
+        supports_group_by: bool = False,
+        supports_metric: bool = False,
+        supports_dimension: bool = False,
+        is_date: bool = False,
+        is_identifier: bool = False,
+        is_chart_dimension: bool = False,
+        is_chart_measure: bool = False,
+        allowed_operators: list[str] | None = None,
+        allowed_aggregations: list[str] | None = None,
+        normalization_strategy: str | None = None,
+        priority: int = 0,
+        active: bool = True,
+    ) -> dict:
+        # Alias legacy: ahora escribe en la tabla canonica.
+        return self.upsert_ia_dev_capacidades_columna(
+            campo_id=campo_id,
+            supports_filter=supports_filter,
+            supports_group_by=supports_group_by,
+            supports_metric=supports_metric,
+            supports_dimension=supports_dimension,
+            is_date=is_date,
+            is_identifier=is_identifier,
+            is_chart_dimension=is_chart_dimension,
+            is_chart_measure=is_chart_measure,
+            allowed_operators=allowed_operators,
+            allowed_aggregations=allowed_aggregations,
+            normalization_strategy=normalization_strategy,
+            priority=priority,
+            active=active,
+        )
+
     @staticmethod
     def _is_safe_identifier(value: str) -> bool:
         return bool(re.match(r"^[A-Za-z0-9_]+$", str(value or "")))
@@ -2523,14 +3008,26 @@ class IADevSqlStore:
             ],
         )
 
-    def get_observability_summary(self, *, window_seconds: int = 3600, limit: int = 2000) -> dict:
+    def get_observability_summary(
+        self,
+        *,
+        window_seconds: int = 3600,
+        limit: int = 2000,
+        domain_code: str | None = None,
+        generator: str | None = None,
+        fallback_reason: str | None = None,
+    ) -> dict:
         self.ensure_tables()
         safe_window = max(60, min(int(window_seconds), 604800))
         safe_limit = max(10, min(int(limit), 5000))
         since = self._now() - safe_window
+        normalized_domain = str(domain_code or "").strip().lower()
+        normalized_generator = str(generator or "").strip().lower()
+        normalized_fallback_reason = str(fallback_reason or "").strip().lower()
+        has_cause_filters = bool(normalized_domain or normalized_generator or normalized_fallback_reason)
         rows = self._fetchall(
             """
-            SELECT event_type, source, duration_ms, tokens_in, tokens_out, cost_usd, created_at
+            SELECT event_type, source, duration_ms, tokens_in, tokens_out, cost_usd, created_at, meta_json
             FROM ia_dev_observability_events
             WHERE created_at >= %s
             ORDER BY id DESC
@@ -2555,6 +3052,13 @@ class IADevSqlStore:
         total_tokens_out = 0
         total_cost_usd = 0.0
         all_durations: list[int] = []
+        cause_events = 0
+        cause_by_generator: dict[str, int] = defaultdict(int)
+        cause_by_domain: dict[str, int] = defaultdict(int)
+        cause_by_fallback_reason: dict[str, int] = defaultdict(int)
+        cause_by_policy_reason: dict[str, int] = defaultdict(int)
+        cause_confidences: list[float] = []
+        cause_confidence_by_domain: dict[str, list[float]] = defaultdict(list)
 
         for row in rows:
             event_type = str(row[0] or "event")
@@ -2563,6 +3067,21 @@ class IADevSqlStore:
             tokens_in = int(row[3] or 0)
             tokens_out = int(row[4] or 0)
             cost_usd = float(row[5] or 0.0)
+            meta = self._from_json(row[7], {}) if len(row) > 7 else {}
+            is_cause_event = event_type == "cause_diagnostics_result"
+
+            if has_cause_filters:
+                if not is_cause_event:
+                    continue
+                meta_domain = str((meta or {}).get("domain_code") or "").strip().lower()
+                meta_generator = str((meta or {}).get("generator") or "").strip().lower()
+                meta_fallback_reason = str((meta or {}).get("fallback_reason") or "").strip().lower()
+                if normalized_domain and meta_domain != normalized_domain:
+                    continue
+                if normalized_generator and meta_generator != normalized_generator:
+                    continue
+                if normalized_fallback_reason and meta_fallback_reason != normalized_fallback_reason:
+                    continue
 
             total_events += 1
             total_tokens_in += tokens_in
@@ -2579,6 +3098,28 @@ class IADevSqlStore:
                 bucket["durations_ms"].append(duration_ms)
                 all_durations.append(duration_ms)
 
+            if is_cause_event:
+                cause_events += 1
+                generator_bucket = str((meta or {}).get("generator") or "unknown").strip().lower() or "unknown"
+                domain_bucket = str((meta or {}).get("domain_code") or "unknown").strip().lower() or "unknown"
+                fallback_bucket = str((meta or {}).get("fallback_reason") or "").strip()
+                policy_bucket = str((meta or {}).get("policy_reason") or "").strip()
+                confidence = None
+                try:
+                    confidence = float((meta or {}).get("confidence") or 0.0)
+                except Exception:
+                    confidence = None
+
+                cause_by_generator[generator_bucket] += 1
+                cause_by_domain[domain_bucket] += 1
+                if fallback_bucket:
+                    cause_by_fallback_reason[fallback_bucket] += 1
+                if policy_bucket:
+                    cause_by_policy_reason[policy_bucket] += 1
+                if confidence is not None:
+                    cause_confidences.append(confidence)
+                    cause_confidence_by_domain[domain_bucket].append(confidence)
+
         def _duration_stats(values: list[int]) -> dict:
             if not values:
                 return {"count": 0, "avg_ms": 0, "p95_ms": 0, "max_ms": 0}
@@ -2589,6 +3130,19 @@ class IADevSqlStore:
                 "avg_ms": int(sum(ordered) / len(ordered)),
                 "p95_ms": int(ordered[p95_idx]),
                 "max_ms": int(ordered[-1]),
+            }
+
+        def _float_stats(values: list[float]) -> dict[str, Any]:
+            if not values:
+                return {"count": 0, "avg": 0.0, "p95": 0.0, "min": 0.0, "max": 0.0}
+            ordered = sorted(float(item) for item in values)
+            p95_idx = min(len(ordered) - 1, int(len(ordered) * 0.95))
+            return {
+                "count": len(ordered),
+                "avg": round(float(sum(ordered) / len(ordered)), 5),
+                "p95": round(float(ordered[p95_idx]), 5),
+                "min": round(float(ordered[0]), 5),
+                "max": round(float(ordered[-1]), 5),
             }
 
         sources: dict[str, dict] = {}
@@ -2610,6 +3164,18 @@ class IADevSqlStore:
                 "tokens_out": total_tokens_out,
                 "cost_usd": round(total_cost_usd, 8),
                 "latency": _duration_stats(all_durations),
+            },
+            "cause_diagnostics": {
+                "events": cause_events,
+                "by_generator": dict(cause_by_generator),
+                "by_domain": dict(cause_by_domain),
+                "by_fallback_reason": dict(cause_by_fallback_reason),
+                "by_policy_reason": dict(cause_by_policy_reason),
+                "confidence": _float_stats(cause_confidences),
+                "confidence_by_domain": {
+                    str(domain or ""): _float_stats(values)
+                    for domain, values in cause_confidence_by_domain.items()
+                },
             },
             "sources": sources,
         }

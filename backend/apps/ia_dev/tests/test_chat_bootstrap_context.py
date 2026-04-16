@@ -30,6 +30,15 @@ class ChatBootstrapContextTests(SimpleTestCase):
         self.assertEqual(classification.get("intent"), "empleados_query")
         self.assertEqual(classification.get("selected_agent"), "rrhh_agent")
 
+    def test_bootstrap_classifies_colaboradores_habilitados_query_into_empleados_domain(self):
+        classification = ChatApplicationService._bootstrap_classification(
+            message="¿Cuántos colaboradores habilitados tenemos hoy?",
+            session_context={},
+        )
+        self.assertEqual(classification.get("domain"), "empleados")
+        self.assertEqual(classification.get("intent"), "empleados_query")
+        self.assertEqual(classification.get("output_mode"), "summary")
+
     def test_bootstrap_sets_summary_for_grouped_count_attendance(self):
         classification = ChatApplicationService._bootstrap_classification(
             message="Cantidad de ausentismos por supervisor los ultimos 15 dias",

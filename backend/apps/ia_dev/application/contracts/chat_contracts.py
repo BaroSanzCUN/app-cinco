@@ -24,6 +24,7 @@ CHAT_RESPONSE_SNAPSHOT_V1: dict[str, Any] = {
         "series": [],
         "labels": [],
         "insights": [],
+        "cause_generation_meta": {},
         "table": {
             "columns": [],
             "rows": [],
@@ -90,6 +91,8 @@ def ensure_chat_response_contract(payload: dict[str, Any] | None) -> dict[str, A
         data["labels"] = []
     if not isinstance(data.get("insights"), list):
         data["insights"] = []
+    if not isinstance(data.get("cause_generation_meta"), dict):
+        data["cause_generation_meta"] = {}
     table = data.get("table")
     if not isinstance(table, dict):
         table = {}

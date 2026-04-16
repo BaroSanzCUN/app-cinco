@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from datetime import date
 from typing import Any
 
@@ -18,16 +19,19 @@ class QueryIntentResolver:
 
     def __init__(self):
         self.model = str(os.getenv("IA_DEV_QUERY_INTENT_MODEL", os.getenv("IA_DEV_MODEL", "gpt-5-nano")) or "gpt-5-nano")
-        self.use_openai = str(os.getenv("IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED", "1") or "").strip().lower() in {
+
+    @staticmethod
+    def _get_openai_api_key() -> str:
+        return str(os.getenv("OPENAI_API_KEY") or os.getenv("IA_DEV_OPENAI_API_KEY") or "").strip()
+
+    @staticmethod
+    def _openai_enabled() -> bool:
+        return str(os.getenv("IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED", "1") or "").strip().lower() in {
             "1",
             "true",
             "yes",
             "on",
         }
-
-    @staticmethod
-    def _get_openai_api_key() -> str:
-        return str(os.getenv("OPENAI_API_KEY") or os.getenv("IA_DEV_OPENAI_API_KEY") or "").strip()
 
     def resolve(
         self,
@@ -40,7 +44,7 @@ class QueryIntentResolver:
             message=message,
             base_classification=base_classification,
         )
-        if not self.use_openai:
+        if not self._openai_enabled():
             return rules
 
         api_key = self._get_openai_api_key()
@@ -60,20 +64,18 @@ class QueryIntentResolver:
 
     def _resolve_rules(self, *, message: str, base_classification: dict[str, Any]) -> StructuredQueryIntent:
         normalized = self._normalize_text(message)
-        domain = str(base_classification.get("domain") or "").strip().lower()
-        if not domain:
-            if any(token in normalized for token in ("ausent", "asistencia", "injustific")):
-                domain = "ausentismo"
-            elif any(token in normalized for token in ("emplead", "cedula", "rrhh", "activo")):
-                domain = "empleados"
-            else:
-                domain = "general"
+        domain = self._resolve_domain(
+            normalized=normalized,
+            base_domain=str(base_classification.get("domain") or "").strip().lower(),
+        )
 
         operation = "summary"
         if any(token in normalized for token in ("cantidad", "cuantos", "cuantas", "total", "numero")):
             operation = "count"
         elif any(token in normalized for token in ("compar", "vs", "versus")):
             operation = "compare"
+        elif self._has_aggregate_signal(normalized):
+            operation = "aggregate"
         elif any(token in normalized for token in ("tendencia", "historico", "evolucion", "trend")):
             operation = "trend"
         elif any(token in normalized for token in ("detalle", "tabla", "mostrar", "lista")):
@@ -88,8 +90,6 @@ class QueryIntentResolver:
         filters = self._extract_filters(normalized=normalized)
         if entity_type == "cedula" and entity_value:
             filters.setdefault("cedula", entity_value)
-        if domain in {"empleados", "rrhh"} and "activo" in normalized:
-            filters["estado"] = "ACTIVO"
 
         period = self._resolve_period_payload(message=message)
         group_by = self._extract_group_by(normalized=normalized)
@@ -168,16 +168,52 @@ class QueryIntentResolver:
 
     @staticmethod
     def _merge_intents(*, fallback: StructuredQueryIntent, llm: StructuredQueryIntent) -> StructuredQueryIntent:
+        llm_filters = dict(llm.filters or {})
+        fallback_filters = dict(fallback.filters or {})
+        llm_period = dict(llm.period or {})
+        fallback_period = dict(fallback.period or {})
+        llm_group_by = [str(item).strip().lower() for item in list(llm.group_by or []) if str(item).strip()]
+        fallback_group_by = [str(item).strip().lower() for item in list(fallback.group_by or []) if str(item).strip()]
+        merged_group_by = list(dict.fromkeys([*llm_group_by, *fallback_group_by]))
+
+        operation = str(llm.operation or fallback.operation or "summary").strip().lower()
+        template_id = str(llm.template_id or fallback.template_id or "").strip().lower()
+        has_entity = bool(str(llm.entity_value or fallback.entity_value or "").strip()) or bool(
+            str(llm_filters.get("cedula") or fallback_filters.get("cedula") or "").strip()
+        )
+        if operation == "detail" and not has_entity and str(fallback.operation or "").strip().lower() != "detail":
+            operation = str(fallback.operation or "summary").strip().lower()
+        if template_id == "detail_by_entity_and_period" and not has_entity and str(fallback.template_id or "").strip():
+            template_id = str(fallback.template_id or "").strip().lower()
+
+        llm_start = str(llm_period.get("start_date") or "").strip()
+        llm_end = str(llm_period.get("end_date") or "").strip()
+        fallback_start = str(fallback_period.get("start_date") or "").strip()
+        fallback_end = str(fallback_period.get("end_date") or "").strip()
+        llm_label = str(llm_period.get("label") or "").strip().lower()
+        fallback_label = str(fallback_period.get("label") or "").strip().lower()
+        if (
+            fallback_start
+            and fallback_end
+            and fallback_label not in {"", "hoy"}
+            and (
+                not llm_start
+                or not llm_end
+                or (llm_label == "hoy" and llm_start == llm_end)
+            )
+        ):
+            llm_period = fallback_period
+
         return StructuredQueryIntent(
             raw_query=fallback.raw_query,
             domain_code=str(llm.domain_code or fallback.domain_code or "").strip().lower(),
-            operation=str(llm.operation or fallback.operation or "summary").strip().lower(),
-            template_id=str(llm.template_id or fallback.template_id or "").strip().lower(),
+            operation=operation,
+            template_id=template_id,
             entity_type=str(llm.entity_type or fallback.entity_type or "").strip().lower(),
             entity_value=str(llm.entity_value or fallback.entity_value or "").strip(),
-            filters=dict(llm.filters or fallback.filters or {}),
-            period=dict(llm.period or fallback.period or {}),
-            group_by=list(llm.group_by or fallback.group_by or []),
+            filters=llm_filters or fallback_filters,
+            period=llm_period or fallback_period,
+            group_by=merged_group_by,
             metrics=list(llm.metrics or fallback.metrics or []),
             confidence=float(llm.confidence or fallback.confidence or 0.0),
             source=str(llm.source or "openai"),
@@ -192,9 +228,7 @@ class QueryIntentResolver:
             return "trend_by_period"
         if operation == "detail" and re.search(r"\b\d{6,13}\b", normalized):
             return "detail_by_entity_and_period"
-        if operation in {"aggregate", "compare", "summary"} and any(
-            token in normalized for token in ("por supervisor", "por area", "por cargo")
-        ):
+        if operation in {"aggregate", "compare", "summary"} and QueryIntentResolver._has_group_dimension_signal(normalized):
             return "aggregate_by_group_and_period"
         if operation == "count":
             return "count_records_by_period"
@@ -212,19 +246,30 @@ class QueryIntentResolver:
     @staticmethod
     def _extract_filters(*, normalized: str) -> dict[str, Any]:
         filters: dict[str, Any] = {}
-        if "activo" in normalized:
-            filters["estado"] = "ACTIVO"
-        if "inactivo" in normalized:
-            filters["estado"] = "INACTIVO"
+        estado_match = re.search(
+            r"\bestado(?:\s+del?\s+\w+)?\s+(?:es\s+)?([a-z_]+)\b",
+            str(normalized or ""),
+        )
+        if estado_match:
+            filters["estado"] = str(estado_match.group(1) or "").strip().upper()
         return filters
 
     @staticmethod
     def _extract_group_by(*, normalized: str) -> list[str]:
         values: list[str] = []
-        for item in ("supervisor", "area", "cargo", "carpeta"):
-            if f"por {item}" in normalized or f"{item} " in normalized:
-                values.append(item)
-        return values
+        variants = {
+            "supervisor": ("supervisor", "supervisores", "jefe", "jefes", "lider", "lideres"),
+            "area": ("area", "areas"),
+            "cargo": ("cargo", "cargos"),
+            "carpeta": ("carpeta", "carpetas"),
+        }
+        for canonical, tokens in variants.items():
+            if any(f"por {token}" in normalized for token in tokens):
+                values.append(canonical)
+                continue
+            if any(re.search(rf"\b{re.escape(token)}\b", normalized) for token in tokens):
+                values.append(canonical)
+        return list(dict.fromkeys(values))
 
     @staticmethod
     def _extract_metrics(*, normalized: str, operation: str) -> list[str]:
@@ -320,4 +365,51 @@ class QueryIntentResolver:
 
     @staticmethod
     def _normalize_text(value: str) -> str:
-        return str(value or "").strip().lower()
+        lowered = str(value or "").strip().lower()
+        normalized = unicodedata.normalize("NFKD", lowered)
+        return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+    @staticmethod
+    def _resolve_domain(*, normalized: str, base_domain: str) -> str:
+        domain = str(base_domain or "").strip().lower()
+        if domain in {"ausentismo", "attendance", "empleados", "rrhh", "transporte", "transport"}:
+            return domain
+
+        rrhh_match = bool(
+            re.search(
+                r"\b(colaborador(?:es)?|usuario(?:s)?|emplead\w*|cedula|rrhh)\b",
+                str(normalized or ""),
+            )
+        )
+        if rrhh_match and domain in {"", "general"}:
+            return "empleados"
+
+        if any(token in normalized for token in ("ausent", "asistencia", "injustific")):
+            return "ausentismo"
+        if rrhh_match:
+            return "empleados"
+        if any(token in normalized for token in ("transporte", "ruta", "movilidad", "vehicul")):
+            return "transport"
+        return domain or "general"
+
+    @staticmethod
+    def _has_group_dimension_signal(normalized: str) -> bool:
+        return bool(
+            re.search(
+                r"\b(supervisor(?:es)?|jefe(?:s)?|lider(?:es)?|area|areas|cargo|cargos|carpeta|carpetas)\b",
+                str(normalized or ""),
+            )
+        )
+
+    @staticmethod
+    def _has_aggregate_signal(normalized: str) -> bool:
+        text = str(normalized or "")
+        if "concentra" in text or "concentran" in text:
+            return True
+        if "distribucion" in text or "participacion" in text:
+            return True
+        if QueryIntentResolver._has_group_dimension_signal(text) and any(
+            token in text for token in ("mas", "top", "compar", "versus", "vs")
+        ):
+            return True
+        return False

@@ -104,6 +104,23 @@ def resolve_period_from_text(text: str, today: date | None = None) -> dict:
         n = max(1, int(m_days.group(1)))
         return {"label": f"ultimos_{n}_dias", "start": now - timedelta(days=n - 1), "end": now}
 
+    m_rolling_days = re.search(r"\brolling(?:\s+de)?\s+(\d+)\s+dias?\b", norm)
+    if m_rolling_days:
+        n = max(1, int(m_rolling_days.group(1)))
+        return {"label": f"rolling_{n}_dias", "start": now - timedelta(days=n - 1), "end": now}
+
+    m_rolling_weeks = re.search(r"\brolling(?:\s+de)?\s+(\d+)\s+semanas?\b", norm)
+    if m_rolling_weeks:
+        n = max(1, int(m_rolling_weeks.group(1)))
+        start = _week_start(now) - timedelta(days=7 * (n - 1))
+        return {"label": f"rolling_{n}_semanas", "start": start, "end": now}
+
+    m_rolling_months = re.search(r"\brolling(?:\s+de)?\s+(\d+)\s+meses?\b", norm)
+    if m_rolling_months:
+        n = max(1, int(m_rolling_months.group(1)))
+        start = _shift_months(now.replace(day=1), -(n - 1))
+        return {"label": f"rolling_{n}_meses", "start": start, "end": now}
+
     if "mes pasado" in norm or "mes anterior" in norm:
         first_current = now.replace(day=1)
         end = first_current - timedelta(days=1)

@@ -63,14 +63,24 @@ class CapabilityPlanner:
         planning_context = dict(planning_context or {})
         max_candidates = max(1, min(int(max_candidates), 8))
 
+        mapped_candidates: list[dict[str, Any]] = []
+        semantic_candidates = self._resolve_semantic_candidates(
+            planning_context=planning_context,
+            max_candidates=max_candidates,
+        )
+        if semantic_candidates:
+            mapped_candidates.extend(semantic_candidates)
+
         if hasattr(self.bridge, "resolve_candidates"):
-            mapped_candidates = self.bridge.resolve_candidates(
-                message=message,
-                classification=classification,
-                max_candidates=max_candidates,
+            mapped_candidates.extend(
+                self.bridge.resolve_candidates(
+                    message=message,
+                    classification=classification,
+                    max_candidates=max_candidates,
+                )
             )
         else:
-            mapped_candidates = [self.bridge.resolve(message=message, classification=classification)]
+            mapped_candidates.append(self.bridge.resolve(message=message, classification=classification))
 
         scored: list[tuple[int, int, dict[str, Any]]] = []
         for idx, mapped in enumerate(mapped_candidates):
@@ -94,6 +104,35 @@ class CapabilityPlanner:
         for idx, plan in enumerate(plans, start=1):
             plan["candidate_rank"] = idx
         return plans
+
+    def _resolve_semantic_candidates(
+        self,
+        *,
+        planning_context: dict[str, Any],
+        max_candidates: int,
+    ) -> list[dict[str, Any]]:
+        if os.getenv("IA_DEV_SEMANTIC_BRIDGE_ENABLED", "1").strip().lower() not in {"1", "true", "yes", "on"}:
+            return []
+        query_intelligence = dict(planning_context.get("query_intelligence") or {})
+        if not query_intelligence:
+            return []
+        resolved_query = dict(query_intelligence.get("resolved_query") or {})
+        if not resolved_query:
+            return []
+        execution_plan = dict(query_intelligence.get("execution_plan") or {})
+        if hasattr(self.bridge, "resolve_semantic_candidates"):
+            try:
+                return list(
+                    self.bridge.resolve_semantic_candidates(
+                        resolved_query=resolved_query,
+                        execution_plan=execution_plan,
+                        max_candidates=max_candidates,
+                    )
+                    or []
+                )
+            except Exception:
+                return []
+        return []
 
     def _build_plan(
         self,
@@ -134,6 +173,7 @@ class CapabilityPlanner:
             "dictionary_hints": dictionary_hints,
             "policy_planner_hint": policy_planner_hint,
             "semantic_signals": dict(mapped.get("semantic_signals") or {}),
+            "query_constraints": dict(mapped.get("query_constraints") or {}),
             "candidate_rank": int(candidate_rank),
             "candidate_score": int(candidate_score),
             "workflow_hints": dict(planning_context.get("workflow_hints") or {}),
@@ -280,6 +320,8 @@ class CapabilityPlanner:
         score = max(0, 100 - (max(1, int(rank_hint)) - 1) * 10)
         if "fallback" in reason:
             score -= 5
+        if semantic.get("semantic_resolved"):
+            score += 30
 
         if semantic.get("wants_trend") and capability_id.startswith("attendance.trend."):
             score += 12

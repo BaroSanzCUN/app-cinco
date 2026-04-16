@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from apps.ia_dev.application.context.run_context import RunContext
+from apps.ia_dev.application.contracts.query_intelligence_contracts import (
+    QueryExecutionPlan,
+    ResolvedQuerySpec,
+)
 from apps.ia_dev.application.policies.policy_guard import PolicyAction, PolicyDecision
 from apps.ia_dev.domains.attendance.handler import AttendanceHandler
 from apps.ia_dev.domains.empleados.handler import EmpleadosHandler
@@ -154,6 +158,8 @@ class CapabilityRouter:
         session_id: str | None,
         reset_memory: bool,
         memory_context: dict[str, Any] | None = None,
+        resolved_query: ResolvedQuerySpec | None = None,
+        execution_plan: QueryExecutionPlan | None = None,
         observability=None,
     ) -> dict[str, Any]:
         if not bool(route.get("execute_capability")):
@@ -164,6 +170,7 @@ class CapabilityRouter:
             }
 
         capability_id = str(planned_capability.get("capability_id") or route.get("selected_capability_id") or "")
+        execution_constraints = dict((execution_plan.constraints if execution_plan else {}) or {})
         if capability_id.startswith("attendance."):
             result = self._get_attendance_handler().handle(
                 capability_id=capability_id,
@@ -173,13 +180,19 @@ class CapabilityRouter:
                 run_context=run_context,
                 planned_capability=planned_capability,
                 memory_context=memory_context,
+                resolved_query=resolved_query,
+                execution_plan=execution_plan,
                 observability=observability,
             )
             return {
                 "ok": bool(result.ok),
                 "response": result.response,
                 "error": result.error,
-                "meta": dict(result.metadata or {}),
+                "meta": {
+                    **dict(result.metadata or {}),
+                    "constraints_applied": bool(execution_constraints),
+                    "constraint_keys": sorted(list(execution_constraints.keys())),
+                },
             }
         if capability_id.startswith("transport."):
             result = self._get_transport_handler().handle(
@@ -190,13 +203,19 @@ class CapabilityRouter:
                 run_context=run_context,
                 planned_capability=planned_capability,
                 memory_context=memory_context,
+                resolved_query=resolved_query,
+                execution_plan=execution_plan,
                 observability=observability,
             )
             return {
                 "ok": bool(result.ok),
                 "response": result.response,
                 "error": result.error,
-                "meta": dict(result.metadata or {}),
+                "meta": {
+                    **dict(result.metadata or {}),
+                    "constraints_applied": bool(execution_constraints),
+                    "constraint_keys": sorted(list(execution_constraints.keys())),
+                },
             }
         if capability_id.startswith("empleados."):
             result = self._get_empleados_handler().handle(
@@ -207,13 +226,19 @@ class CapabilityRouter:
                 run_context=run_context,
                 planned_capability=planned_capability,
                 memory_context=memory_context,
+                resolved_query=resolved_query,
+                execution_plan=execution_plan,
                 observability=observability,
             )
             return {
                 "ok": bool(result.ok),
                 "response": result.response,
                 "error": result.error,
-                "meta": dict(result.metadata or {}),
+                "meta": {
+                    **dict(result.metadata or {}),
+                    "constraints_applied": bool(execution_constraints),
+                    "constraint_keys": sorted(list(execution_constraints.keys())),
+                },
             }
 
         return {

@@ -75,3 +75,17 @@ class SemanticBridgeCandidateTests(SimpleTestCase):
         )
         capability_ids = [str(item.get("capability_id") or "") for item in candidates]
         self.assertIn("attendance.summary.by_attribute.v1", capability_ids)
+
+    def test_resolve_prefers_area_summary_for_concentration_question_without_por_area(self):
+        planned = self.bridge.resolve(
+            message="Que areas concentran mas ausentismos en rolling 90 dias y que causas probables sugieres",
+            classification={
+                "intent": "attendance_query",
+                "domain": "attendance",
+                "output_mode": "summary",
+                "needs_database": True,
+                "used_tools": [],
+                "needs_personal_join": False,
+            },
+        )
+        self.assertEqual(str(planned.get("capability_id") or ""), "attendance.summary.by_area.v1")

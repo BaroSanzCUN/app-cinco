@@ -153,6 +153,7 @@ class ChatApplicationService:
                 "memory_hints": memory_hints,
                 "workflow_hints": workflow_hints,
                 "routing_mode": run_context.routing_mode,
+                "query_intelligence": query_intelligence,
             },
             fallback_plan=bootstrap_plan,
         )
@@ -389,22 +390,51 @@ class ChatApplicationService:
             return {"mode": mode, "enabled": False}
 
         try:
-            domain_code = str(base_classification.get("domain") or "").strip().lower()
+            classification_for_qi = dict(base_classification or {})
+            domain_code = str(classification_for_qi.get("domain") or "").strip().lower()
+            rescued_domain = self._rescue_query_domain(
+                message=message,
+                domain_code=domain_code,
+            )
+            if rescued_domain and rescued_domain != domain_code:
+                classification_for_qi["domain"] = rescued_domain
+                classification_for_qi["intent"] = "empleados_query"
+                classification_for_qi["selected_agent"] = "rrhh_agent"
+                classification_for_qi["needs_database"] = True
+                domain_code = rescued_domain
+                self._record_event(
+                    observability=observability,
+                    event_type="query_domain_rescued",
+                    source="ChatApplicationService",
+                    meta={
+                        "run_id": run_context.run_id,
+                        "trace_id": run_context.trace_id,
+                        "from_domain": str(base_classification.get("domain") or ""),
+                        "to_domain": rescued_domain,
+                        "reason": "rrhh_signals_detected",
+                    },
+                    only_if=True,
+                )
             semantic_context = self.semantic_business_resolver.build_semantic_context(
                 domain_code=domain_code,
                 include_dictionary=True,
             )
             intent = self.query_intent_resolver.resolve(
                 message=message,
-                base_classification=base_classification,
+                base_classification=classification_for_qi,
                 semantic_context=semantic_context,
             )
             resolved_query = self.semantic_business_resolver.resolve_query(
                 message=message,
                 intent=intent,
-                base_classification=base_classification,
+                base_classification=classification_for_qi,
             )
             execution_plan = self.query_execution_planner.plan(
+                run_context=run_context,
+                resolved_query=resolved_query,
+            )
+            self._record_query_intelligence_semantic_events(
+                observability=observability,
                 run_context=run_context,
                 resolved_query=resolved_query,
             )
@@ -434,6 +464,7 @@ class ChatApplicationService:
                             message=message,
                             response=candidate_response,
                             resolved_query=resolved_query,
+                            execution_plan=execution_plan,
                         )
                         if validation.satisfied:
                             precomputed_response = candidate_response
@@ -502,16 +533,53 @@ class ChatApplicationService:
             return plans
         execution_plan = dict(query_intelligence.get("execution_plan") or {})
         capability_id = str(execution_plan.get("capability_id") or "").strip()
+        plan_constraints = dict(execution_plan.get("constraints") or {})
         if not capability_id:
             return plans
+        override_mode = self._query_intelligence_plan_override_mode()
+        plans = self._apply_query_constraints_to_matching_plan(
+            plans=plans,
+            capability_id=capability_id,
+            plan_constraints=plan_constraints,
+        )
         if plans:
+            if override_mode == "off":
+                return plans
+            first_capability = str(plans[0].get("capability_id") or "").strip()
+            if first_capability == capability_id:
+                return plans
+            if override_mode == "soft":
+                if first_capability.startswith("legacy.") or first_capability.startswith("general."):
+                    first = self._switch_capability(
+                        current=plans[0],
+                        capability_id=capability_id,
+                        reason_suffix="query_intelligence_soft_override",
+                    )
+                    first["candidate_rank"] = 1
+                    first["candidate_score"] = max(int(first.get("candidate_score") or 0), 130)
+                    first["query_constraints"] = plan_constraints
+                    plans[0] = first
+                    return plans
+                if not any(str(item.get("capability_id") or "").strip() == capability_id for item in plans):
+                    injected = self._build_query_intelligence_fallback_plan(
+                        capability_id=capability_id,
+                        fallback_plan=fallback_plan,
+                        classification=classification,
+                    )
+                    injected["query_constraints"] = plan_constraints
+                    injected["candidate_rank"] = len(plans) + 1
+                    plans.append(injected)
+                return plans
+
+            # hard override
             first = self._switch_capability(
                 current=plans[0],
                 capability_id=capability_id,
-                reason_suffix="query_intelligence_override",
+                reason_suffix="query_intelligence_hard_override",
             )
             first["candidate_rank"] = 1
             first["candidate_score"] = max(int(first.get("candidate_score") or 0), 130)
+            first["query_constraints"] = plan_constraints
             plans[0] = first
             return plans
 
@@ -520,7 +588,37 @@ class ChatApplicationService:
             fallback_plan=fallback_plan,
             classification=classification,
         )
+        plan["query_constraints"] = plan_constraints
         return [plan]
+
+    @staticmethod
+    def _query_intelligence_plan_override_mode() -> str:
+        raw = str(os.getenv("IA_DEV_QUERY_INTELLIGENCE_PLAN_OVERRIDE_MODE", "soft") or "").strip().lower()
+        if raw in {"0", "false", "off", "disabled", "none"}:
+            return "off"
+        if raw in {"hard", "force", "strict"}:
+            return "hard"
+        return "soft"
+
+    @staticmethod
+    def _apply_query_constraints_to_matching_plan(
+        *,
+        plans: list[dict[str, Any]],
+        capability_id: str,
+        plan_constraints: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        if not capability_id:
+            return [dict(item) for item in list(plans or [])]
+        updated: list[dict[str, Any]] = []
+        for plan in list(plans or []):
+            payload = dict(plan or {})
+            if str(payload.get("capability_id") or "").strip() == capability_id and plan_constraints:
+                merged = dict(payload.get("query_constraints") or {})
+                merged.update(plan_constraints)
+                payload["query_constraints"] = merged
+                payload["candidate_score"] = max(int(payload.get("candidate_score") or 0), 125)
+            updated.append(payload)
+        return updated
 
     def _build_query_intelligence_fallback_plan(
         self,
@@ -603,6 +701,78 @@ class ChatApplicationService:
             return "shadow"
         return mode
 
+    @staticmethod
+    def _rescue_query_domain(*, message: str, domain_code: str) -> str:
+        normalized_domain = str(domain_code or "").strip().lower()
+        if normalized_domain not in {"", "general"}:
+            return normalized_domain
+        normalized_message = ChatApplicationService._normalize_text(message)
+        if ChatApplicationService._has_rrhh_domain_signals(normalized_message):
+            return "empleados"
+        return normalized_domain or "general"
+
+    @staticmethod
+    def _has_rrhh_domain_signals(normalized_message: str) -> bool:
+        clean = str(normalized_message or "").strip().lower()
+        if not clean:
+            return False
+        return bool(
+            re.search(
+                r"\b(colaborador(?:es)?|usuario(?:s)?|emplead\w*|cedula|rrhh)\b",
+                clean,
+            )
+        )
+
+    def _record_query_intelligence_semantic_events(
+        self,
+        *,
+        observability,
+        run_context: RunContext,
+        resolved_query: ResolvedQuerySpec,
+    ) -> None:
+        semantic_context = dict(resolved_query.semantic_context or {})
+        seed_payload = dict(semantic_context.get("dictionary_seed") or {})
+        if seed_payload.get("enabled"):
+            status = str(seed_payload.get("status") or "skipped").strip().lower()
+            event_type = "dictionary_rrhh_synonym_seed_skipped"
+            if status == "applied":
+                event_type = "dictionary_rrhh_synonym_seed_applied"
+            elif status == "error":
+                event_type = "dictionary_rrhh_synonym_seed_error"
+            self._record_event(
+                observability=observability,
+                event_type=event_type,
+                source="ChatApplicationService",
+                meta={
+                    "run_id": run_context.run_id,
+                    "trace_id": run_context.trace_id,
+                    "status": status,
+                    "inserted": int(seed_payload.get("inserted") or 0),
+                    "skipped": int(seed_payload.get("skipped") or 0),
+                    "errors": list(seed_payload.get("errors") or []),
+                },
+                only_if=True,
+            )
+
+        for event in list(semantic_context.get("semantic_events") or []):
+            if not isinstance(event, dict):
+                continue
+            event_type = str(event.get("event_type") or "").strip()
+            if not event_type:
+                continue
+            self._record_event(
+                observability=observability,
+                event_type=event_type,
+                source="ChatApplicationService",
+                meta={
+                    "run_id": run_context.run_id,
+                    "trace_id": run_context.trace_id,
+                    "domain_code": str(resolved_query.intent.domain_code or ""),
+                    **dict(event),
+                },
+                only_if=True,
+            )
+
     def _record_query_pattern_memory(
         self,
         *,
@@ -614,10 +784,59 @@ class ChatApplicationService:
     ) -> dict[str, Any]:
         effects = dict(memory_effects or {})
         metadata = dict(run_context.metadata.get("query_intelligence") or {})
+        hydrated = self._hydrate_query_intelligence_contracts(metadata=metadata)
+        resolved_query = hydrated.get("resolved_query")
+        execution_plan = hydrated.get("execution_plan")
+        if resolved_query is None or execution_plan is None:
+            return effects
+        validation = self.result_satisfaction_validator.validate(
+            message=str(resolved_query.intent.raw_query or ""),
+            response=response,
+            resolved_query=resolved_query,
+            execution_plan=execution_plan,
+        )
+        metadata["final_satisfaction"] = validation.as_dict()
+        run_context.metadata["query_intelligence"] = metadata
+
+        try:
+            result = self.query_pattern_memory_service.record_success(
+                user_key=user_key,
+                resolved_query=resolved_query,
+                execution_plan=execution_plan,
+                validation=validation,
+                run_context=run_context,
+                response=response,
+                observability=observability,
+            )
+        except Exception as exc:
+            result = {"saved": False, "reason": f"pattern_memory_error:{type(exc).__name__}"}
+            self._record_event(
+                observability=observability,
+                event_type="query_pattern_memory_failed",
+                source="ChatApplicationService",
+                meta={
+                    "run_id": run_context.run_id,
+                    "trace_id": run_context.trace_id,
+                    "error_type": type(exc).__name__,
+                },
+                only_if=True,
+            )
+        metadata["pattern_memory"] = dict(result or {})
+        run_context.metadata["query_intelligence"] = metadata
+
+        if bool(result.get("saved")):
+            proposal = dict((result.get("result") or {}).get("proposal") or {})
+            if proposal:
+                pending = list(effects.get("pending_proposals") or [])
+                pending.append(proposal)
+                effects["pending_proposals"] = pending
+        return effects
+
+    def _hydrate_query_intelligence_contracts(self, *, metadata: dict[str, Any]) -> dict[str, Any]:
         resolved_query_payload = metadata.get("resolved_query")
         execution_plan_payload = metadata.get("execution_plan")
         if not isinstance(resolved_query_payload, dict) or not isinstance(execution_plan_payload, dict):
-            return effects
+            return {"resolved_query": None, "execution_plan": None}
 
         resolved_intent_payload = dict(resolved_query_payload.get("intent") or {})
         intent = StructuredQueryIntent(
@@ -651,36 +870,14 @@ class ChatApplicationService:
             sql_query=str(execution_plan_payload.get("sql_query") or "") or None,
             requires_context=bool(execution_plan_payload.get("requires_context")),
             missing_context=list(execution_plan_payload.get("missing_context") or []),
+            constraints=dict(execution_plan_payload.get("constraints") or {}),
             policy=dict(execution_plan_payload.get("policy") or {}),
             metadata=dict(execution_plan_payload.get("metadata") or {}),
         )
-        validation = self.result_satisfaction_validator.validate(
-            message=str(intent.raw_query or ""),
-            response=response,
-            resolved_query=resolved_query,
-        )
-        metadata["final_satisfaction"] = validation.as_dict()
-        run_context.metadata["query_intelligence"] = metadata
-
-        result = self.query_pattern_memory_service.record_success(
-            user_key=user_key,
-            resolved_query=resolved_query,
-            execution_plan=execution_plan,
-            validation=validation,
-            run_context=run_context,
-            response=response,
-            observability=observability,
-        )
-        metadata["pattern_memory"] = dict(result or {})
-        run_context.metadata["query_intelligence"] = metadata
-
-        if bool(result.get("saved")):
-            proposal = dict((result.get("result") or {}).get("proposal") or {})
-            if proposal:
-                pending = list(effects.get("pending_proposals") or [])
-                pending.append(proposal)
-                effects["pending_proposals"] = pending
-        return effects
+        return {
+            "resolved_query": resolved_query,
+            "execution_plan": execution_plan,
+        }
 
     def _plan_candidates(
         self,
@@ -737,6 +934,10 @@ class ChatApplicationService:
         candidates = [dict(item) for item in planned_candidates if isinstance(item, dict)]
         if not candidates:
             candidates = [self.planner.plan_from_legacy(message=message, classification=self._bootstrap_classification(message=message))]
+        query_intelligence_meta = dict(run_context.metadata.get("query_intelligence") or {})
+        hydrated = self._hydrate_query_intelligence_contracts(metadata=query_intelligence_meta)
+        resolved_query = hydrated.get("resolved_query")
+        execution_plan = hydrated.get("execution_plan")
 
         loop_enabled = self._proactive_loop_enabled(run_context=run_context)
         max_iterations = self._proactive_loop_max_iterations()
@@ -814,12 +1015,16 @@ class ChatApplicationService:
                 legacy_runner=legacy_runner,
                 observability=observability,
                 memory_context=memory_context,
+                resolved_query=resolved_query,
+                execution_plan=execution_plan,
                 allow_legacy_fallback=not loop_enabled,
             )
             satisfaction = self._evaluate_result_satisfaction(
                 message=message,
                 planned_capability=plan,
                 execution=execution,
+                resolved_query=resolved_query,
+                execution_plan=execution_plan,
             )
             execution["satisfied"] = bool(satisfaction.get("satisfied", True))
             execution["satisfaction_reason"] = str(satisfaction.get("reason") or "")
@@ -883,23 +1088,32 @@ class ChatApplicationService:
                 legacy_runner=legacy_runner,
                 observability=observability,
                 memory_context=memory_context,
+                resolved_query=resolved_query,
+                execution_plan=execution_plan,
                 allow_legacy_fallback=True,
             )
 
         if loop_enabled and not bool(selected_execution.get("ok")):
             # Safe fallback to legacy with first candidate context.
+            legacy_route = dict(selected_route or {})
+            legacy_route["execute_capability"] = False
+            legacy_route["use_legacy"] = True
+            legacy_route["reason"] = "proactive_loop_exhausted_all_candidates"
             selected_execution = self._execute_primary_path(
                 message=message,
                 session_id=session_id,
                 reset_memory=reset_memory,
                 run_context=run_context,
                 planned_capability=selected_plan,
-                route=selected_route,
+                route=legacy_route,
                 legacy_runner=legacy_runner,
                 observability=observability,
                 memory_context=memory_context,
+                resolved_query=resolved_query,
+                execution_plan=execution_plan,
                 allow_legacy_fallback=True,
             )
+            selected_route = legacy_route
             self._record_event(
                 observability=observability,
                 event_type="proactive_loop_fallback_legacy",
@@ -944,9 +1158,23 @@ class ChatApplicationService:
         legacy_runner: Callable[..., dict[str, Any]],
         observability,
         memory_context: dict[str, Any] | None,
+        resolved_query: ResolvedQuerySpec | None = None,
+        execution_plan: QueryExecutionPlan | None = None,
         allow_legacy_fallback: bool = True,
     ) -> dict[str, Any]:
         capability_id = str(planned_capability.get("capability_id") or "")
+        plan_constraints = dict(planned_capability.get("query_constraints") or {})
+        runtime_execution_plan = execution_plan
+        if runtime_execution_plan is None and plan_constraints:
+            runtime_execution_plan = QueryExecutionPlan(
+                strategy="capability",
+                reason="planned_capability_query_constraints",
+                domain_code=self._domain_code_from_capability(planned_capability) or "",
+                capability_id=capability_id or None,
+                constraints=plan_constraints,
+            )
+        elif runtime_execution_plan is not None and plan_constraints and not dict(runtime_execution_plan.constraints or {}):
+            runtime_execution_plan.constraints = plan_constraints
         capability_domain = capability_id.split(".", 1)[0] if "." in capability_id else ""
         is_domain_capability = capability_domain in {"attendance", "transport", "empleados"}
         selected_event_type = f"{capability_domain}_capability_selected"
@@ -976,6 +1204,8 @@ class ChatApplicationService:
                 session_id=session_id,
                 reset_memory=reset_memory,
                 memory_context=memory_context,
+                resolved_query=resolved_query,
+                execution_plan=runtime_execution_plan,
                 observability=observability,
             )
             if capability_result.get("ok") and isinstance(capability_result.get("response"), dict):
@@ -1228,15 +1458,14 @@ class ChatApplicationService:
         message: str,
         session_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        normalized = str(message or "").strip().lower()
-        normalized_no_accents = ChatApplicationService._normalize_text(normalized)
+        normalized = ChatApplicationService._normalize_text(message)
         context = dict(session_context or {})
         last_domain = str(context.get("last_domain") or "").strip().lower()
         last_needs_db = bool(context.get("last_needs_database"))
         if (
             last_domain == "attendance"
             and last_needs_db
-            and ChatApplicationService._is_chart_request(normalized_no_accents)
+            and ChatApplicationService._is_chart_request(normalized)
         ):
             return {
                 "intent": "attendance_query",
@@ -1246,7 +1475,7 @@ class ChatApplicationService:
                 "needs_database": True,
                 "output_mode": "summary",
                 "needs_personal_join": bool(context.get("last_output_mode") == "table"),
-                "contextual_reference": ChatApplicationService._is_contextual_reference_request(normalized_no_accents),
+                "contextual_reference": ChatApplicationService._is_contextual_reference_request(normalized),
                 "last_group_dimension_key": str(context.get("last_group_dimension_key") or "").strip().lower(),
                 "last_group_dimension_label": str(context.get("last_group_dimension_label") or "").strip(),
                 "last_aggregation_focus": str(context.get("last_aggregation_focus") or "").strip().lower(),
@@ -1287,7 +1516,7 @@ class ChatApplicationService:
                 "used_tools": [],
                 "dictionary_context": {},
             }
-        if any(token in normalized for token in ("emplead", "cedula", "rrhh")):
+        if ChatApplicationService._has_rrhh_domain_signals(normalized):
             return {
                 "intent": "empleados_query",
                 "domain": "empleados",
@@ -1295,7 +1524,7 @@ class ChatApplicationService:
                 "classifier_source": "bootstrap_rules",
                 "needs_database": True,
                 "output_mode": "summary" if any(
-                    token in normalized for token in ("cantidad", "cuantos", "cuantas", "total")
+                    token in normalized for token in ("cantidad", "cuantos", "cuantas", "total", "numero")
                 ) else "table",
                 "needs_personal_join": False,
                 "used_tools": [],
@@ -1422,14 +1651,22 @@ class ChatApplicationService:
         message: str,
         planned_capability: dict[str, Any],
         execution: dict[str, Any],
+        resolved_query: ResolvedQuerySpec | None = None,
+        execution_plan: QueryExecutionPlan | None = None,
     ) -> dict[str, Any]:
         if not bool(execution.get("ok")):
             return {"satisfied": False, "reason": "execution_not_ok"}
+        validation_enabled = str(
+            os.getenv("IA_DEV_QUERY_SATISFACTION_VALIDATION_ENABLED", "1") or "1"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if not validation_enabled:
+            return {"satisfied": True, "reason": "validation_disabled_by_flag", "checks": {}}
         response = dict(execution.get("response") or {})
         validation = self.result_satisfaction_validator.validate(
             message=message,
             response=response,
-            resolved_query=None,
+            resolved_query=resolved_query,
+            execution_plan=execution_plan,
         )
         return validation.as_dict()
 
