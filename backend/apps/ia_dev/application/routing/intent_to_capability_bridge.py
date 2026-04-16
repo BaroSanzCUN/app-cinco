@@ -101,14 +101,23 @@ class IntentToCapabilityBridge:
         "cantidad",
         "total",
         "resumen",
+        "concentra",
+        "concentran",
+        "concentracion",
     )
     _BY_SUPERVISOR_TOKENS = (
         "por supervisor",
         "supervisor",
+        "supervisores",
+        "jefe",
+        "jefes",
+        "lider",
+        "lideres",
     )
     _BY_AREA_TOKENS = (
         "por area",
         "area",
+        "areas",
     )
     _BY_CARGO_TOKENS = (
         "por cargo",
@@ -509,3 +518,108 @@ class IntentToCapabilityBridge:
             "mentions_empleados": any(token in msg for token in self._EMPLOYEES_TOKENS),
             "mentions_transport": any(token in msg for token in self._TRANSPORT_TOKENS),
         }
+
+    def resolve_semantic_candidates(
+        self,
+        *,
+        resolved_query: dict[str, Any] | None,
+        execution_plan: dict[str, Any] | None = None,
+        max_candidates: int = 4,
+    ) -> list[dict[str, Any]]:
+        payload = dict(resolved_query or {})
+        intent = dict(payload.get("intent") or {})
+        normalized_filters = dict(payload.get("normalized_filters") or {})
+        normalized_period = dict(payload.get("normalized_period") or {})
+        domain = str(intent.get("domain_code") or "").strip().lower()
+        template_id = str(intent.get("template_id") or "").strip().lower()
+        operation = str(intent.get("operation") or "").strip().lower()
+        group_by = [str(item).strip().lower() for item in list(intent.get("group_by") or []) if str(item).strip()]
+        metrics = [str(item).strip().lower() for item in list(intent.get("metrics") or []) if str(item).strip()]
+
+        if domain == "ausentismo":
+            domain = "attendance"
+        elif domain == "rrhh":
+            domain = "empleados"
+        elif domain == "transporte":
+            domain = "transport"
+
+        strategy = str((execution_plan or {}).get("strategy") or "").strip().lower()
+        selected_capability = str((execution_plan or {}).get("capability_id") or "").strip()
+        constraints = dict((execution_plan or {}).get("constraints") or {})
+        needs_database = domain not in {"general", ""}
+        output_mode = "summary" if operation in {"count", "summary"} else "table"
+
+        candidates: list[dict[str, Any]] = []
+
+        def add(capability_id: str, reason: str) -> None:
+            if not capability_id:
+                return
+            candidates.append(
+                {
+                    "capability_id": capability_id,
+                    "reason": reason,
+                    "source_intent": operation or "query",
+                    "source_domain": domain or "general",
+                    "output_mode": output_mode,
+                    "needs_database": needs_database,
+                    "semantic_signals": {
+                        "semantic_resolved": True,
+                        "template_id": template_id,
+                        "strategy": strategy,
+                        "group_by": list(group_by),
+                        "metrics": list(metrics),
+                    },
+                    "query_constraints": constraints,
+                }
+            )
+
+        if selected_capability:
+            add(selected_capability, "semantic_execution_plan_capability")
+
+        if domain == "empleados":
+            estado = str(normalized_filters.get("estado") or "").strip().upper()
+            if template_id == "count_entities_by_status" and estado in {"ACTIVO", "INACTIVO"}:
+                add("empleados.count.active.v1", "semantic_empleados_count_by_status")
+            elif operation == "count":
+                add("empleados.count.active.v1", "semantic_empleados_count_fallback")
+
+        elif domain == "attendance":
+            if template_id == "detail_by_entity_and_period":
+                add("attendance.unjustified.table_with_personal.v1", "semantic_attendance_detail_by_entity")
+            elif template_id == "count_records_by_period":
+                add("attendance.unjustified.summary.v1", "semantic_attendance_count_by_period")
+            elif template_id == "aggregate_by_group_and_period":
+                if "supervisor" in group_by:
+                    add("attendance.summary.by_supervisor.v1", "semantic_attendance_group_supervisor")
+                elif "area" in group_by:
+                    add("attendance.summary.by_area.v1", "semantic_attendance_group_area")
+                elif "cargo" in group_by:
+                    add("attendance.summary.by_cargo.v1", "semantic_attendance_group_cargo")
+                else:
+                    add("attendance.summary.by_attribute.v1", "semantic_attendance_group_attribute")
+            elif template_id == "trend_by_period":
+                period_label = str(normalized_period.get("label") or "").strip().lower()
+                if any(token in period_label for token in ("mes", "monthly")):
+                    add("attendance.trend.monthly.v1", "semantic_attendance_trend_monthly")
+                else:
+                    add("attendance.trend.daily.v1", "semantic_attendance_trend_daily")
+            else:
+                add("attendance.unjustified.summary.v1", "semantic_attendance_default")
+
+        elif domain == "transport":
+            add("transport.departures.summary.v1", "semantic_transport_default")
+
+        if not candidates:
+            add("legacy.passthrough.v1", "semantic_fallback_legacy")
+
+        deduped: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for item in candidates:
+            capability_id = str(item.get("capability_id") or "").strip()
+            if not capability_id or capability_id in seen_ids:
+                continue
+            seen_ids.add(capability_id)
+            deduped.append(item)
+            if len(deduped) >= max(1, int(max_candidates)):
+                break
+        return deduped

@@ -59,6 +59,64 @@ class ResolvedQuerySpec:
 
 
 @dataclass(slots=True)
+class ColumnSemanticResolution:
+    requested_term: str
+    canonical_term: str
+    table_name: str = ""
+    column_name: str = ""
+    supports_filter: bool = False
+    supports_group_by: bool = False
+    supports_metric: bool = False
+    supports_dimension: bool = False
+    is_date: bool = False
+    is_identifier: bool = False
+    is_chart_dimension: bool = False
+    is_chart_measure: bool = False
+    allowed_values: list[str] = field(default_factory=list)
+    confidence: float = 0.0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "requested_term": str(self.requested_term or ""),
+            "canonical_term": str(self.canonical_term or ""),
+            "table_name": str(self.table_name or ""),
+            "column_name": str(self.column_name or ""),
+            "supports_filter": bool(self.supports_filter),
+            "supports_group_by": bool(self.supports_group_by),
+            "supports_metric": bool(self.supports_metric),
+            "supports_dimension": bool(self.supports_dimension),
+            "is_date": bool(self.is_date),
+            "is_identifier": bool(self.is_identifier),
+            "is_chart_dimension": bool(self.is_chart_dimension),
+            "is_chart_measure": bool(self.is_chart_measure),
+            "allowed_values": list(self.allowed_values or []),
+            "confidence": float(self.confidence or 0.0),
+        }
+
+
+@dataclass(slots=True)
+class RelationSemanticResolution:
+    from_entity: str
+    to_entity: str
+    relation_name: str = ""
+    join_sql: str = ""
+    cardinality: str = ""
+    valid: bool = False
+    confidence: float = 0.0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "from_entity": str(self.from_entity or ""),
+            "to_entity": str(self.to_entity or ""),
+            "relation_name": str(self.relation_name or ""),
+            "join_sql": str(self.join_sql or ""),
+            "cardinality": str(self.cardinality or ""),
+            "valid": bool(self.valid),
+            "confidence": float(self.confidence or 0.0),
+        }
+
+
+@dataclass(slots=True)
 class QueryExecutionPlan:
     strategy: str
     reason: str
@@ -67,6 +125,7 @@ class QueryExecutionPlan:
     sql_query: str | None = None
     requires_context: bool = False
     missing_context: list[str] = field(default_factory=list)
+    constraints: dict[str, Any] = field(default_factory=dict)
     policy: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -79,6 +138,7 @@ class QueryExecutionPlan:
             "sql_query": self.sql_query,
             "requires_context": bool(self.requires_context),
             "missing_context": list(self.missing_context or []),
+            "constraints": dict(self.constraints or {}),
             "policy": dict(self.policy or {}),
             "metadata": dict(self.metadata or {}),
         }
@@ -118,3 +178,55 @@ class QueryPatternMemory:
             "domain_code": str(self.domain_code or ""),
             "capability_id": str(self.capability_id or ""),
         }
+
+
+@dataclass(slots=True)
+class CauseDiagnosticItem:
+    finding: str
+    suggestion: str
+    evidence_groups: list[str] = field(default_factory=list)
+    confidence: float = 0.0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "finding": str(self.finding or ""),
+            "suggestion": str(self.suggestion or ""),
+            "evidence_groups": [str(item or "") for item in list(self.evidence_groups or []) if str(item or "").strip()],
+            "confidence": float(self.confidence or 0.0),
+        }
+
+
+@dataclass(slots=True)
+class CauseGenerationMeta:
+    generator: str
+    evidence_rows: list[dict[str, Any]] = field(default_factory=list)
+    top_group: str = ""
+    top_pct: float = 0.0
+    confidence: float = 0.0
+    validated: bool = False
+    fallback_reason: str = ""
+    model: str = ""
+    prompt_hash: str = ""
+    validation_errors: list[str] = field(default_factory=list)
+    policy_decision: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "generator": str(self.generator or ""),
+            "evidence_rows": [dict(item or {}) for item in list(self.evidence_rows or []) if isinstance(item, dict)],
+            "top_group": str(self.top_group or ""),
+            "top_pct": float(self.top_pct or 0.0),
+            "confidence": float(self.confidence or 0.0),
+            "validated": bool(self.validated),
+            "fallback_reason": str(self.fallback_reason or ""),
+            "model": str(self.model or ""),
+            "prompt_hash": str(self.prompt_hash or ""),
+            "validation_errors": [str(item or "") for item in list(self.validation_errors or []) if str(item or "").strip()],
+            "policy_decision": dict(self.policy_decision or {}),
+        }
+
+
+# Backward-compatible aliases for expanded contract naming.
+ResolvedBusinessQuery = ResolvedQuerySpec
+ResultSatisfactionReport = SatisfactionValidation
+QueryPatternMemoryRecord = QueryPatternMemory

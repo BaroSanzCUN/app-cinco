@@ -15,6 +15,7 @@
     "series": [],
     "labels": [],
     "insights": [],
+    "cause_generation_meta": {},
     "table": {
       "columns": [],
       "rows": [],

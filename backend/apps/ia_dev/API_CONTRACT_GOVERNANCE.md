@@ -167,6 +167,56 @@ Exito:
 
 - `200 OK`
 
+## 7) Resumen de observabilidad (dashboard)
+
+Endpoint: `GET /observability/summary/`
+
+Query params soportados:
+
+- `window_seconds` (opcional, default `3600`)
+- `limit` (opcional, default `2000`)
+- `domain_code` (opcional, filtro para eventos `cause_diagnostics_result`)
+- `generator` (opcional, `openai|heuristic`)
+- `fallback_reason` (opcional, filtro para eventos `cause_diagnostics_result`)
+
+Ejemplo:
+
+`GET /observability/summary/?window_seconds=86400&domain_code=attendance&generator=heuristic&fallback_reason=openai_disabled_by_flag`
+
+Exito:
+
+- `200 OK`
+
+Forma de respuesta:
+
+```json
+{
+  "status": "ok",
+  "observability": {
+    "enabled": true,
+    "window_seconds": 86400,
+    "sample_size": 0,
+    "applied_filters": {
+      "domain_code": "attendance",
+      "generator": "heuristic",
+      "fallback_reason": "openai_disabled_by_flag"
+    },
+    "event_types": {},
+    "totals": {},
+    "cause_diagnostics": {
+      "events": 0,
+      "by_generator": {},
+      "by_domain": {},
+      "by_fallback_reason": {},
+      "by_policy_reason": {},
+      "confidence": {},
+      "confidence_by_domain": {}
+    },
+    "sources": {}
+  }
+}
+```
+
 ## Idempotencia y concurrencia
 
 - Aprobaciones soportan `idempotency_key` en body o `X-Idempotency-Key`.

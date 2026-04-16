@@ -1,0 +1,343 @@
+from __future__ import annotations
+
+import re
+import unicodedata
+from typing import Any
+
+from apps.ia_dev.application.contracts.query_intelligence_contracts import (
+    ColumnSemanticResolution,
+)
+
+
+class ColumnSemanticResolver:
+    """
+    Resolver de metadata funcional de columnas usando dd_campos y perfil semantico.
+    """
+
+    _COUNT_METRIC_TOKENS = ("cantidad", "cuantos", "cuantas", "total", "numero")
+    _DATE_HINTS = ("fecha", "periodo", "dia", "mes", "year", "ano")
+    _IDENTIFIER_HINTS = ("cedula", "identificacion", "documento", "id_empleado")
+
+    @staticmethod
+    def _normalize_text(value: str | None) -> str:
+        lowered = str(value or "").strip().lower()
+        normalized = unicodedata.normalize("NFKD", lowered)
+        return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+    @staticmethod
+    def _to_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        text = str(value or "").strip().lower()
+        return text in {"1", "true", "yes", "on", "si"}
+
+    @staticmethod
+    def _parse_allowed_values(value: Any) -> list[str]:
+        if isinstance(value, list):
+            parsed = [str(item or "").strip().upper() for item in value if str(item or "").strip()]
+            return sorted(dict.fromkeys(parsed))
+        text = str(value or "").strip()
+        if not text:
+            return []
+        for separator in ("|", ";"):
+            text = text.replace(separator, ",")
+        parsed = [item.strip().upper() for item in text.split(",") if item.strip()]
+        return sorted(dict.fromkeys(parsed))
+
+    def build_column_profiles(
+        self,
+        *,
+        runtime_columns: list[dict[str, Any]] | None = None,
+        dictionary_fields: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        profiles: list[dict[str, Any]] = []
+
+        for row in list(runtime_columns or []):
+            if not isinstance(row, dict):
+                continue
+            logical = self._normalize_text(row.get("nombre_columna_logico"))
+            column_name = self._normalize_text(row.get("column_name"))
+            if not logical and not column_name:
+                continue
+            profiles.append(
+                {
+                    "logical_name": logical or column_name,
+                    "column_name": column_name,
+                    "table_name": self._normalize_text(row.get("table_name")),
+                    "supports_filter": self._to_bool(row.get("es_filtro")),
+                    "supports_group_by": self._to_bool(row.get("es_group_by")),
+                    "supports_metric": self._to_bool(row.get("es_metrica")),
+                    "supports_dimension": self._to_bool(row.get("es_group_by")),
+                    "is_date": any(token in logical for token in self._DATE_HINTS),
+                    "is_identifier": any(token in logical for token in self._IDENTIFIER_HINTS),
+                    "is_chart_dimension": self._to_bool(row.get("es_group_by")),
+                    "is_chart_measure": self._to_bool(row.get("es_metrica")),
+                    "allowed_values": [],
+                    "confidence": 0.75,
+                }
+            )
+
+        for row in list(dictionary_fields or []):
+            if not isinstance(row, dict):
+                continue
+            logical = self._normalize_text(row.get("campo_logico"))
+            column_name = self._normalize_text(row.get("column_name"))
+            if not logical and not column_name:
+                continue
+            allowed_values = self._parse_allowed_values(row.get("valores_permitidos"))
+            supports_filter = self._to_bool(row.get("es_filtro")) or bool(allowed_values)
+            supports_group_by = self._to_bool(row.get("es_group_by"))
+            supports_metric = self._to_bool(row.get("es_metrica"))
+            supports_dimension = self._to_bool(row.get("es_dimension")) or supports_group_by
+            is_date = self._to_bool(row.get("is_date")) or any(
+                token in logical for token in self._DATE_HINTS
+            )
+            is_identifier = self._to_bool(row.get("is_identifier")) or (
+                any(token in logical for token in self._IDENTIFIER_HINTS)
+                or column_name in {"cedula", "identificacion"}
+            )
+            profile = {
+                "logical_name": logical or column_name,
+                "column_name": column_name,
+                "table_name": self._normalize_text(row.get("table_name")),
+                "supports_filter": supports_filter,
+                "supports_group_by": supports_group_by,
+                "supports_metric": supports_metric,
+                "supports_dimension": supports_dimension,
+                "is_date": is_date,
+                "is_identifier": is_identifier,
+                "is_chart_dimension": self._to_bool(row.get("is_chart_dimension")) or supports_group_by,
+                "is_chart_measure": self._to_bool(row.get("is_chart_measure")) or supports_metric,
+                "allowed_values": allowed_values,
+                "confidence": 0.92,
+            }
+            profiles.append(profile)
+
+        deduped: dict[tuple[str, str], dict[str, Any]] = {}
+        for profile in profiles:
+            key = (
+                str(profile.get("logical_name") or ""),
+                str(profile.get("column_name") or ""),
+            )
+            current = deduped.get(key)
+            if current is None or float(profile.get("confidence") or 0.0) > float(current.get("confidence") or 0.0):
+                deduped[key] = profile
+
+        return list(deduped.values())
+
+    @staticmethod
+    def _match_profile(
+        *,
+        term: str,
+        profiles: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        clean = str(term or "").strip().lower()
+        if not clean:
+            return None
+        for row in profiles:
+            logical = str(row.get("logical_name") or "").strip().lower()
+            column = str(row.get("column_name") or "").strip().lower()
+            if clean in {logical, column}:
+                return row
+        return None
+
+    def resolve_identifier_filter(
+        self,
+        *,
+        message: str,
+        semantic_context: dict[str, Any],
+    ) -> tuple[str, str] | None:
+        match = re.search(r"\b\d{6,13}\b", self._normalize_text(message))
+        if not match:
+            return None
+        value = "".join(ch for ch in match.group(0) if ch.isdigit())
+        profiles = list(semantic_context.get("column_profiles") or [])
+        for row in profiles:
+            if not isinstance(row, dict):
+                continue
+            if not self._to_bool(row.get("is_identifier")):
+                continue
+            logical = str(row.get("logical_name") or "").strip().lower() or str(row.get("column_name") or "").strip().lower()
+            if logical:
+                return logical, value
+        return "cedula", value
+
+    def resolve_filters(
+        self,
+        *,
+        filters: dict[str, Any],
+        semantic_context: dict[str, Any],
+        canonicalize_term,
+        normalize_status_value,
+    ) -> tuple[dict[str, Any], list[ColumnSemanticResolution]]:
+        profiles = list(semantic_context.get("column_profiles") or [])
+        resolved: dict[str, Any] = {}
+        resolutions: list[ColumnSemanticResolution] = []
+
+        for raw_key, raw_value in dict(filters or {}).items():
+            requested = str(raw_key or "").strip()
+            canonical_term = str(canonicalize_term(requested) or requested).strip().lower()
+            profile = self._match_profile(term=canonical_term, profiles=profiles)
+            if profile is None:
+                resolved[canonical_term] = raw_value
+                continue
+
+            logical_name = str(profile.get("logical_name") or canonical_term).strip().lower()
+            allowed_values = self._parse_allowed_values(profile.get("allowed_values"))
+            value = raw_value
+            if logical_name in {"estado", "estado_usuario", "estado_empleado"}:
+                try:
+                    value = normalize_status_value(
+                        raw_value=raw_value,
+                        allowed_values=allowed_values,
+                    )
+                except TypeError:
+                    value = normalize_status_value(raw_value, allowed_values)
+            resolved[logical_name] = value
+            resolutions.append(
+                ColumnSemanticResolution(
+                    requested_term=requested,
+                    canonical_term=logical_name,
+                    table_name=str(profile.get("table_name") or ""),
+                    column_name=str(profile.get("column_name") or ""),
+                    supports_filter=self._to_bool(profile.get("supports_filter")),
+                    supports_group_by=self._to_bool(profile.get("supports_group_by")),
+                    supports_metric=self._to_bool(profile.get("supports_metric")),
+                    supports_dimension=self._to_bool(profile.get("supports_dimension")),
+                    is_date=self._to_bool(profile.get("is_date")),
+                    is_identifier=self._to_bool(profile.get("is_identifier")),
+                    is_chart_dimension=self._to_bool(profile.get("is_chart_dimension")),
+                    is_chart_measure=self._to_bool(profile.get("is_chart_measure")),
+                    allowed_values=allowed_values,
+                    confidence=float(profile.get("confidence") or 0.0),
+                )
+            )
+        return resolved, resolutions
+
+    def resolve_group_by(
+        self,
+        *,
+        requested_group_by: list[str],
+        message: str,
+        semantic_context: dict[str, Any],
+        canonicalize_term,
+    ) -> tuple[list[str], list[ColumnSemanticResolution]]:
+        profiles = list(semantic_context.get("column_profiles") or [])
+        values = [str(item or "").strip() for item in list(requested_group_by or []) if str(item or "").strip()]
+        normalized_message = self._normalize_text(message)
+        if not values:
+            message_tokens = re.findall(r"\b(?:por)\s+([a-z0-9_]+)\b", normalized_message)
+            values.extend(message_tokens)
+            for profile in profiles:
+                if not isinstance(profile, dict):
+                    continue
+                if not (
+                    self._to_bool(profile.get("supports_group_by"))
+                    or self._to_bool(profile.get("supports_dimension"))
+                ):
+                    continue
+                candidates = [
+                    str(profile.get("logical_name") or "").strip().lower(),
+                    str(profile.get("column_name") or "").strip().lower(),
+                ]
+                for candidate in candidates:
+                    if not candidate:
+                        continue
+                    if re.search(rf"\b{re.escape(candidate)}\b", normalized_message):
+                        values.append(candidate)
+                        continue
+                    # Soporte de plural simple: area->areas, cargo->cargos, supervisor->supervisores.
+                    if re.search(rf"\b{re.escape(candidate)}(?:s|es)\b", normalized_message):
+                        values.append(candidate)
+
+        values = list(dict.fromkeys(values))
+
+        resolved: list[str] = []
+        resolutions: list[ColumnSemanticResolution] = []
+        for token in values:
+            canonical_term = str(canonicalize_term(token) or token).strip().lower()
+            profile = self._match_profile(term=canonical_term, profiles=profiles)
+            if profile is None:
+                continue
+            if not (self._to_bool(profile.get("supports_group_by")) or self._to_bool(profile.get("supports_dimension"))):
+                continue
+            logical_name = str(profile.get("logical_name") or canonical_term).strip().lower()
+            if logical_name in resolved:
+                continue
+            resolved.append(logical_name)
+            resolutions.append(
+                ColumnSemanticResolution(
+                    requested_term=token,
+                    canonical_term=logical_name,
+                    table_name=str(profile.get("table_name") or ""),
+                    column_name=str(profile.get("column_name") or ""),
+                    supports_filter=self._to_bool(profile.get("supports_filter")),
+                    supports_group_by=self._to_bool(profile.get("supports_group_by")),
+                    supports_metric=self._to_bool(profile.get("supports_metric")),
+                    supports_dimension=self._to_bool(profile.get("supports_dimension")),
+                    is_date=self._to_bool(profile.get("is_date")),
+                    is_identifier=self._to_bool(profile.get("is_identifier")),
+                    is_chart_dimension=self._to_bool(profile.get("is_chart_dimension")),
+                    is_chart_measure=self._to_bool(profile.get("is_chart_measure")),
+                    allowed_values=self._parse_allowed_values(profile.get("allowed_values")),
+                    confidence=float(profile.get("confidence") or 0.0),
+                )
+            )
+        return resolved, resolutions
+
+    def resolve_metrics(
+        self,
+        *,
+        requested_metrics: list[str],
+        operation: str,
+        message: str,
+        semantic_context: dict[str, Any],
+        canonicalize_term,
+    ) -> tuple[list[str], list[ColumnSemanticResolution]]:
+        profiles = list(semantic_context.get("column_profiles") or [])
+        normalized_message = self._normalize_text(message)
+        requested = [str(item or "").strip() for item in list(requested_metrics or []) if str(item or "").strip()]
+        if not requested and (
+            str(operation or "").strip().lower() == "count"
+            or any(token in normalized_message for token in self._COUNT_METRIC_TOKENS)
+        ):
+            requested = ["count"]
+
+        resolved: list[str] = []
+        resolutions: list[ColumnSemanticResolution] = []
+        for token in requested:
+            canonical_term = str(canonicalize_term(token) or token).strip().lower()
+            if canonical_term in {"count", "conteo"}:
+                if "count" not in resolved:
+                    resolved.append("count")
+                continue
+            profile = self._match_profile(term=canonical_term, profiles=profiles)
+            if profile is None:
+                continue
+            if not self._to_bool(profile.get("supports_metric")):
+                continue
+            logical_name = str(profile.get("logical_name") or canonical_term).strip().lower()
+            if logical_name in resolved:
+                continue
+            resolved.append(logical_name)
+            resolutions.append(
+                ColumnSemanticResolution(
+                    requested_term=token,
+                    canonical_term=logical_name,
+                    table_name=str(profile.get("table_name") or ""),
+                    column_name=str(profile.get("column_name") or ""),
+                    supports_filter=self._to_bool(profile.get("supports_filter")),
+                    supports_group_by=self._to_bool(profile.get("supports_group_by")),
+                    supports_metric=self._to_bool(profile.get("supports_metric")),
+                    supports_dimension=self._to_bool(profile.get("supports_dimension")),
+                    is_date=self._to_bool(profile.get("is_date")),
+                    is_identifier=self._to_bool(profile.get("is_identifier")),
+                    is_chart_dimension=self._to_bool(profile.get("is_chart_dimension")),
+                    is_chart_measure=self._to_bool(profile.get("is_chart_measure")),
+                    allowed_values=self._parse_allowed_values(profile.get("allowed_values")),
+                    confidence=float(profile.get("confidence") or 0.0),
+                )
+            )
+        return resolved or ["count"], resolutions

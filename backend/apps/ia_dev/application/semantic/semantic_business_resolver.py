@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+import unicodedata
 from datetime import date
 from typing import Any
 
@@ -9,6 +11,10 @@ from apps.ia_dev.application.contracts.query_intelligence_contracts import (
     StructuredQueryIntent,
 )
 from apps.ia_dev.application.delegation.domain_registry import DomainRegistry
+from apps.ia_dev.application.semantic.column_semantic_resolver import ColumnSemanticResolver
+from apps.ia_dev.application.semantic.relation_semantic_resolver import RelationSemanticResolver
+from apps.ia_dev.application.semantic.rule_semantic_resolver import RuleSemanticResolver
+from apps.ia_dev.application.semantic.synonym_semantic_resolver import SynonymSemanticResolver
 from apps.ia_dev.services.dictionary_tool_service import DictionaryToolService
 from apps.ia_dev.services.period_service import resolve_period_from_text
 
@@ -33,9 +39,17 @@ class SemanticBusinessResolver:
         *,
         registry: DomainRegistry | None = None,
         dictionary_tool: DictionaryToolService | None = None,
+        column_resolver: ColumnSemanticResolver | None = None,
+        relation_resolver: RelationSemanticResolver | None = None,
+        rule_resolver: RuleSemanticResolver | None = None,
+        synonym_resolver: SynonymSemanticResolver | None = None,
     ):
         self.registry = registry or DomainRegistry()
         self.dictionary_tool = dictionary_tool or DictionaryToolService()
+        self.column_resolver = column_resolver or ColumnSemanticResolver()
+        self.relation_resolver = relation_resolver or RelationSemanticResolver()
+        self.rule_resolver = rule_resolver or RuleSemanticResolver()
+        self.synonym_resolver = synonym_resolver or SynonymSemanticResolver()
 
     def build_semantic_context(self, *, domain_code: str, include_dictionary: bool = True) -> dict[str, Any]:
         normalized_domain = self.registry.normalize_domain_code(domain_code)
@@ -49,8 +63,17 @@ class SemanticBusinessResolver:
         flags = dict(raw.get("flags") or {})
 
         dictionary_context: dict[str, Any] = {}
+        dictionary_seed: dict[str, Any] = {
+            "enabled": False,
+            "status": "skipped",
+            "inserted": 0,
+            "skipped": 0,
+            "errors": [],
+        }
         if include_dictionary:
             dictionary_domain = self.DOMAIN_TO_DICTIONARY_CODE.get(normalized_domain, normalized_domain or "general")
+            if dictionary_domain == "rrhh":
+                dictionary_seed = self._maybe_seed_rrhh_status_synonyms()
             try:
                 dictionary_context = self.dictionary_tool.get_domain_context(dictionary_domain, limit=20)
             except Exception:
@@ -60,10 +83,34 @@ class SemanticBusinessResolver:
         dictionary_relations = list(dictionary_context.get("relations") or [])
         dictionary_synonyms = list(dictionary_context.get("synonyms") or [])
         dictionary_rules = list(dictionary_context.get("rules") or [])
+        dictionary_field_profiles = list(dictionary_context.get("field_profiles") or [])
+
+        column_profiles = self.column_resolver.build_column_profiles(
+            runtime_columns=columns,
+            dictionary_fields=dictionary_fields,
+        )
+        if dictionary_field_profiles:
+            # Prefer perfiles persistidos cuando existan.
+            column_profiles = self.column_resolver.build_column_profiles(
+                runtime_columns=columns,
+                dictionary_fields=dictionary_field_profiles + dictionary_fields,
+            )
+
+        relation_profiles = self.relation_resolver.build_relation_profiles(
+            runtime_relationships=relationships,
+            dictionary_relations=dictionary_relations,
+        )
+
+        synonym_index = self.synonym_resolver.build_index(
+            dictionary_synonyms=dictionary_synonyms,
+            dictionary_fields=dictionary_fields,
+            runtime_columns=columns,
+        )
 
         allowed_tables = self._collect_allowed_tables(tables=tables, dictionary_context=dictionary_context)
         allowed_columns = self._collect_allowed_columns(columns=columns, dictionary_fields=dictionary_fields)
         aliases = self._collect_aliases(columns=columns, dictionary_fields=dictionary_fields, dictionary_synonyms=dictionary_synonyms)
+        aliases = {**synonym_index, **aliases}
 
         return {
             "domain_code": normalized_domain,
@@ -82,11 +129,22 @@ class SemanticBusinessResolver:
                 "relations": dictionary_relations,
                 "rules": dictionary_rules,
                 "synonyms": dictionary_synonyms,
+                "field_profiles": dictionary_field_profiles,
             },
+            "dictionary_meta": {
+                "schema": str(dictionary_context.get("schema") or ""),
+                "dictionary_table": str(dictionary_context.get("dictionary_table") or ""),
+                "profile_table_name": str(dictionary_context.get("profile_table_name") or ""),
+                "domain": dict(dictionary_context.get("domain") or {}),
+            },
+            "column_profiles": column_profiles,
+            "relation_profiles": relation_profiles,
+            "synonym_index": synonym_index,
             "allowed_tables": allowed_tables,
             "allowed_columns": allowed_columns,
             "aliases": aliases,
             "supports_sql_assisted": bool(flags.get("sql_asistido_permitido")),
+            "dictionary_seed": dictionary_seed,
         }
 
     def resolve_query(
@@ -98,11 +156,62 @@ class SemanticBusinessResolver:
     ) -> ResolvedQuerySpec:
         domain_code = self.registry.normalize_domain_code(intent.domain_code or base_classification.get("domain"))
         semantic_context = self.build_semantic_context(domain_code=domain_code, include_dictionary=True)
-        normalized_filters = self._normalize_filters(
+        synonym_index = dict(semantic_context.get("synonym_index") or {})
+
+        def canonicalize_term(value: str | None) -> str:
+            return self.synonym_resolver.canonicalize(
+                term=value,
+                synonym_index=synonym_index,
+            )
+
+        dictionary_rules = list((semantic_context.get("dictionary") or {}).get("rules") or [])
+        rule_filters = self.rule_resolver.apply_rule_overrides(
             message=message,
             domain_code=domain_code,
-            intent=intent,
+            filters=dict(intent.filters or {}),
+            dictionary_rules=dictionary_rules,
+        )
+        identifier_filter = self.column_resolver.resolve_identifier_filter(
+            message=message,
             semantic_context=semantic_context,
+        )
+        if identifier_filter:
+            identifier_key, identifier_value = identifier_filter
+            rule_filters.setdefault(identifier_key, identifier_value)
+
+        normalized_filters, filter_resolutions = self.column_resolver.resolve_filters(
+            filters=rule_filters,
+            semantic_context=semantic_context,
+            canonicalize_term=canonicalize_term,
+            normalize_status_value=self.rule_resolver.normalize_status_value,
+        )
+        status_resolution = self._resolve_status_from_dictionary(
+            message=message,
+            semantic_context=semantic_context,
+            normalized_filters=normalized_filters,
+            canonicalize_term=canonicalize_term,
+        )
+        if status_resolution:
+            status_key = str(status_resolution.get("status_key") or "estado").strip().lower() or "estado"
+            status_value = str(status_resolution.get("status_value") or "").strip().upper()
+            if status_value:
+                normalized_filters[status_key] = status_value
+                normalized_filters.setdefault("estado", status_value)
+        status_value_after_normalization = self._extract_status_value(normalized_filters)
+        if status_value_after_normalization and "estado" not in normalized_filters:
+            normalized_filters["estado"] = status_value_after_normalization
+        resolved_group_by, group_resolutions = self.column_resolver.resolve_group_by(
+            requested_group_by=list(intent.group_by or []),
+            message=message,
+            semantic_context=semantic_context,
+            canonicalize_term=canonicalize_term,
+        )
+        resolved_metrics, metric_resolutions = self.column_resolver.resolve_metrics(
+            requested_metrics=list(intent.metrics or []),
+            operation=intent.operation,
+            message=message,
+            semantic_context=semantic_context,
+            canonicalize_term=canonicalize_term,
         )
         normalized_period = self._normalize_period(
             message=message,
@@ -112,6 +221,38 @@ class SemanticBusinessResolver:
             filters=normalized_filters,
             semantic_context=semantic_context,
         )
+        relation_resolutions = self.relation_resolver.resolve_required_relations(
+            semantic_context=semantic_context,
+            requested_terms=[
+                *list(normalized_filters.keys()),
+                *list(resolved_group_by),
+            ],
+        )
+        status_value = self._extract_status_value(normalized_filters)
+        resolved_template_id = str(intent.template_id or "").strip().lower()
+        if domain_code in {"empleados", "rrhh"} and str(intent.operation or "").strip().lower() == "count" and status_value:
+            resolved_template_id = "count_entities_by_status"
+
+        resolution_payload = {
+            "filters": [item.as_dict() for item in filter_resolutions],
+            "group_by": [item.as_dict() for item in group_resolutions],
+            "metrics": [item.as_dict() for item in metric_resolutions],
+            "relations": [item.as_dict() for item in relation_resolutions],
+        }
+        semantic_context["resolved_semantic"] = resolution_payload
+        if status_resolution:
+            semantic_events = list(semantic_context.get("semantic_events") or [])
+            semantic_events.append(
+                {
+                    "event_type": "semantic_status_resolved_from_dictionary",
+                    "status_value": str(status_resolution.get("status_value") or ""),
+                    "status_key": str(status_resolution.get("status_key") or "estado"),
+                    "matched_token": str(status_resolution.get("matched_token") or ""),
+                    "allowed_values": list(status_resolution.get("allowed_values") or []),
+                }
+            )
+            semantic_context["semantic_events"] = semantic_events
+
         warnings = self._build_warnings(
             domain_code=domain_code,
             intent=intent,
@@ -124,13 +265,13 @@ class SemanticBusinessResolver:
                 raw_query=intent.raw_query,
                 domain_code=domain_code,
                 operation=intent.operation,
-                template_id=intent.template_id,
+                template_id=resolved_template_id or str(intent.template_id or ""),
                 entity_type=intent.entity_type,
                 entity_value=intent.entity_value,
-                filters=dict(intent.filters or {}),
+                filters=dict(normalized_filters or {}),
                 period=dict(intent.period or {}),
-                group_by=list(intent.group_by or []),
-                metrics=list(intent.metrics or []),
+                group_by=list(resolved_group_by or []),
+                metrics=list(resolved_metrics or []),
                 confidence=float(intent.confidence or 0.0),
                 source=intent.source,
                 warnings=list(intent.warnings or []),
@@ -299,39 +440,23 @@ class SemanticBusinessResolver:
         intent: StructuredQueryIntent,
         semantic_context: dict[str, Any],
     ) -> dict[str, Any]:
-        filters = dict(intent.filters or {})
-        normalized_message = self._normalize_text(message)
-        entity_value = self._normalize_identifier(intent.entity_value)
-        if not entity_value:
-            entity_value = self._extract_identifier_from_message(normalized_message)
-
-        if entity_value and (intent.entity_type in {"empleado", "cedula", ""} or "empleado" in normalized_message):
-            filters.setdefault("cedula", entity_value)
-
-        if domain_code == "empleados":
-            asks_active = (
-                "activo" in normalized_message
-                or "activos" in normalized_message
-                or str(filters.get("estado") or "").strip().upper() == "ACTIVO"
-            )
-            asks_count = any(token in normalized_message for token in ("cantidad", "cuantos", "cuantas", "total", "numero"))
-            if asks_active or asks_count:
-                filters["estado"] = "ACTIVO"
-
-        for key in ("supervisor", "area", "cargo", "carpeta"):
-            value = self._extract_after_keyword(normalized_message, key)
-            if value and key not in filters:
-                filters[key] = value
-
-        canonical_filters: dict[str, Any] = {}
-        aliases = dict(semantic_context.get("aliases") or {})
-        for key, value in filters.items():
-            clean_key = str(key or "").strip().lower()
-            if not clean_key:
-                continue
-            mapped = aliases.get(clean_key, clean_key)
-            canonical_filters[mapped] = value
-        return canonical_filters
+        synonym_index = dict(semantic_context.get("synonym_index") or {})
+        filters = self.rule_resolver.apply_rule_overrides(
+            message=message,
+            domain_code=domain_code,
+            filters=dict(intent.filters or {}),
+            dictionary_rules=list((semantic_context.get("dictionary") or {}).get("rules") or []),
+        )
+        resolved, _ = self.column_resolver.resolve_filters(
+            filters=filters,
+            semantic_context=semantic_context,
+            canonicalize_term=lambda term: self.synonym_resolver.canonicalize(
+                term=term,
+                synonym_index=synonym_index,
+            ),
+            normalize_status_value=self.rule_resolver.normalize_status_value,
+        )
+        return resolved
 
     @staticmethod
     def _normalize_period(*, message: str, intent: StructuredQueryIntent) -> dict[str, Any]:
@@ -392,7 +517,9 @@ class SemanticBusinessResolver:
 
     @staticmethod
     def _normalize_text(value: str) -> str:
-        return str(value or "").strip().lower()
+        lowered = str(value or "").strip().lower()
+        normalized = unicodedata.normalize("NFKD", lowered)
+        return "".join(ch for ch in normalized if not unicodedata.combining(ch))
 
     @staticmethod
     def _normalize_identifier(value: str | None) -> str:
@@ -425,3 +552,95 @@ class SemanticBusinessResolver:
             return date.fromisoformat(raw)
         except Exception:
             return None
+
+    @staticmethod
+    def _extract_status_value(filters: dict[str, Any]) -> str:
+        for key in ("estado", "estado_usuario", "estado_empleado"):
+            value = str((filters or {}).get(key) or "").strip().upper()
+            if value in {"ACTIVO", "INACTIVO"}:
+                return value
+        return ""
+
+    def _resolve_status_from_dictionary(
+        self,
+        *,
+        message: str,
+        semantic_context: dict[str, Any],
+        normalized_filters: dict[str, Any],
+        canonicalize_term,
+    ) -> dict[str, Any]:
+        if self._extract_status_value(normalized_filters):
+            return {}
+        status_profile = self._find_status_profile(semantic_context=semantic_context)
+        if not status_profile:
+            return {}
+
+        status_key = str(status_profile.get("logical_name") or status_profile.get("column_name") or "estado").strip().lower()
+        allowed_values = list(status_profile.get("allowed_values") or [])
+        if not allowed_values:
+            return {}
+        allowed_set = {str(item or "").strip().upper() for item in allowed_values if str(item or "").strip()}
+        if not allowed_set:
+            return {}
+
+        synonym_index = dict(semantic_context.get("synonym_index") or {})
+        canonical_tokens = self.synonym_resolver.canonicalize_tokens_from_message(
+            message=message,
+            synonym_index=synonym_index,
+        )
+        raw_tokens = re.findall(r"[a-z0-9_]{2,}", self._normalize_text(message))
+        tokens = list(dict.fromkeys([*canonical_tokens, *raw_tokens]))
+        for token in tokens:
+            mapped = str(canonicalize_term(token) or token).strip()
+            normalized_value = self.rule_resolver.normalize_status_value(
+                raw_value=mapped,
+                allowed_values=allowed_values,
+            )
+            if normalized_value in allowed_set:
+                return {
+                    "status_key": status_key,
+                    "status_value": normalized_value,
+                    "matched_token": token,
+                    "allowed_values": sorted(allowed_set),
+                }
+        return {}
+
+    def _find_status_profile(self, *, semantic_context: dict[str, Any]) -> dict[str, Any]:
+        profiles = list(semantic_context.get("column_profiles") or [])
+        for profile in profiles:
+            if not isinstance(profile, dict):
+                continue
+            logical_name = str(profile.get("logical_name") or "").strip().lower()
+            column_name = str(profile.get("column_name") or "").strip().lower()
+            allowed_values = [str(item or "").strip().upper() for item in list(profile.get("allowed_values") or []) if str(item or "").strip()]
+            supports_filter = bool(profile.get("supports_filter"))
+            if not supports_filter or not allowed_values:
+                continue
+            if logical_name in {"estado", "estado_usuario", "estado_empleado"} or column_name == "estado":
+                return {
+                    **profile,
+                    "allowed_values": allowed_values,
+                    "logical_name": logical_name or column_name or "estado",
+                }
+        return {}
+
+    def _maybe_seed_rrhh_status_synonyms(self) -> dict[str, Any]:
+        enabled = str(
+            os.getenv("IA_DEV_QUERY_INTELLIGENCE_RRHH_SYNONYM_SEED_ENABLED", "0") or "0"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            return {
+                "enabled": False,
+                "status": "skipped",
+                "inserted": 0,
+                "skipped": 0,
+                "errors": [],
+            }
+        result = self.dictionary_tool.ensure_rrhh_status_synonyms_seed()
+        payload = dict(result or {})
+        payload["enabled"] = True
+        payload.setdefault("status", "skipped")
+        payload.setdefault("inserted", 0)
+        payload.setdefault("skipped", 0)
+        payload.setdefault("errors", [])
+        return payload

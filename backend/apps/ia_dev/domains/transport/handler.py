@@ -13,6 +13,10 @@ from apps.ia_dev.TOOLS.business.transport_business_tool import (
     TransportPeriod,
 )
 from apps.ia_dev.application.context.run_context import RunContext
+from apps.ia_dev.application.contracts.query_intelligence_contracts import (
+    QueryExecutionPlan,
+    ResolvedQuerySpec,
+)
 from apps.ia_dev.services.memory_service import SessionMemoryStore
 from apps.ia_dev.services.period_service import resolve_period_from_text
 
@@ -47,6 +51,8 @@ class TransportHandler:
         run_context: RunContext,
         planned_capability: dict[str, Any],
         memory_context: dict[str, Any] | None = None,
+        resolved_query: ResolvedQuerySpec | None = None,
+        execution_plan: QueryExecutionPlan | None = None,
         observability=None,
     ) -> TransportHandleResult:
         sid, _ = SessionMemoryStore.get_or_create(session_id)
@@ -112,6 +118,10 @@ class TransportHandler:
                 session_context=session_context,
                 hints=memory_hints,
                 used=memory_hints_used,
+            )
+            period = self._apply_constraints_to_period(
+                period=period,
+                constraints=dict((execution_plan.constraints if execution_plan else {}) or {}),
             )
             _push_trace(
                 "period_resolver",
@@ -295,6 +305,26 @@ class TransportHandler:
                 error=str(exc),
                 metadata={"capability_id": capability_id},
             )
+
+    @staticmethod
+    def _apply_constraints_to_period(
+        *,
+        period: TransportPeriod,
+        constraints: dict[str, Any],
+    ) -> TransportPeriod:
+        period_scope = dict(constraints.get("period_scope") or {})
+        target_day = str(period_scope.get("end_date") or period_scope.get("start_date") or "").strip()
+        if not target_day:
+            return period
+        try:
+            day = date.fromisoformat(target_day)
+        except Exception:
+            return period
+        return TransportPeriod(
+            day=day,
+            label=str(period_scope.get("label") or period.label or "constraints_period"),
+            source="query_constraints",
+        )
 
     def _resolve_target_day(
         self,

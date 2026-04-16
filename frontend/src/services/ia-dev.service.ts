@@ -32,6 +32,12 @@ export type IADevChartPayload = {
   meta?: Record<string, unknown>;
 };
 
+export type IADevTablePayload = {
+  columns?: string[];
+  rows?: Array<Record<string, unknown>>;
+  rowcount?: number;
+};
+
 export type IADevAction = {
   id: string;
   type: "create_ticket" | "render_chart" | string;
@@ -77,8 +83,11 @@ export type IADevChatResponse = {
     series?: unknown[];
     labels?: unknown[];
     insights?: string[];
+    table?: IADevTablePayload;
     chart?: IADevChartPayload;
     charts?: IADevChartPayload[];
+    meta?: Record<string, unknown>;
+    cause_generation_meta?: Record<string, unknown>;
   };
   data_sources?: {
     ai_dictionary?: {
@@ -299,9 +308,10 @@ export const createIADevKnowledgeProposal = async (
   return response.data;
 };
 
-export const listIADevKnowledgeProposals = async (
-  params?: { status?: string; limit?: number },
-): Promise<IADevKnowledgeProposalListResponse> => {
+export const listIADevKnowledgeProposals = async (params?: {
+  status?: string;
+  limit?: number;
+}): Promise<IADevKnowledgeProposalListResponse> => {
   const response = await api.get<IADevKnowledgeProposalListResponse>(
     "/ia-dev/knowledge/proposals/",
     { params },
@@ -392,9 +402,10 @@ export type IADevObservabilitySummaryResponse = {
   };
 };
 
-export const getIADevObservabilitySummary = async (
-  params?: { window_seconds?: number; limit?: number },
-): Promise<IADevObservabilitySummaryResponse> => {
+export const getIADevObservabilitySummary = async (params?: {
+  window_seconds?: number;
+  limit?: number;
+}): Promise<IADevObservabilitySummaryResponse> => {
   const response = await api.get<IADevObservabilitySummaryResponse>(
     "/ia-dev/observability/summary/",
     { params },
@@ -515,7 +526,11 @@ export const listIADevMemoryProposals = async (params?: {
 export const approveIADevMemoryProposal = async (payload: {
   proposal_id: string;
   comment?: string;
-}): Promise<{ ok: boolean; proposal?: IADevMemoryProposal; error?: string }> => {
+}): Promise<{
+  ok: boolean;
+  proposal?: IADevMemoryProposal;
+  error?: string;
+}> => {
   const response = await api.post("/ia-dev/memory/proposals/approve/", payload);
   return response.data;
 };
@@ -523,7 +538,11 @@ export const approveIADevMemoryProposal = async (payload: {
 export const rejectIADevMemoryProposal = async (payload: {
   proposal_id: string;
   comment?: string;
-}): Promise<{ ok: boolean; proposal?: IADevMemoryProposal; error?: string }> => {
+}): Promise<{
+  ok: boolean;
+  proposal?: IADevMemoryProposal;
+  error?: string;
+}> => {
   const response = await api.post("/ia-dev/memory/proposals/reject/", payload);
   return response.data;
 };
@@ -578,7 +597,11 @@ export const listIADevMemoryAudit = async (params?: {
   scope?: string;
   entity_key?: string;
   limit?: number;
-}): Promise<{ status: "ok"; count: number; events: IADevMemoryAuditEvent[] }> => {
+}): Promise<{
+  status: "ok";
+  count: number;
+  events: IADevMemoryAuditEvent[];
+}> => {
   const response = await api.get("/ia-dev/memory/audit/", { params });
   return response.data;
 };

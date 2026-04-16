@@ -6,10 +6,10 @@ import {
   Bot,
   ChevronsLeft,
   ChevronsRight,
+  Cpu,
   Database,
   FastForward,
   GripHorizontal,
-  Loader2,
   Maximize2,
   MessageSquare,
   Minimize2,
@@ -23,13 +23,19 @@ import {
   Plus,
   Rewind,
   RotateCcw,
-  SendHorizonal,
   SkipBack,
   SkipForward,
 } from "lucide-react";
 import IADevFlowCanvas from "./flow/IADevFlowCanvas";
-import IADevChartPanel from "./components/IADevChartPanel";
 import IADevMemoryPanel from "./components/IADevMemoryPanel";
+import ChatComposer from "./chat/components/ChatComposer";
+import ChatMessageItem from "./chat/components/ChatMessage";
+import ScrollToBottomButton from "./chat/components/ScrollToBottomButton";
+import { type ChatMessageModel } from "./chat/types";
+import { normalizeChatPayload } from "./chat/utils/normalizeChatPayload";
+import { usePromptHistory } from "./chat/hooks/usePromptHistory";
+import { useSmartAutoScroll } from "./chat/hooks/useSmartAutoScroll";
+import { useIADevChatTransport } from "./chat/hooks/useIADevChatTransport";
 import {
   loadWorkspaceLayout,
   saveWorkspaceLayout,
@@ -39,11 +45,9 @@ import {
   getIADevHealth,
   resetIADevMemory,
   type IADevAction,
-  type IADevChartPayload,
   type IADevChatResponse,
   type IADevMemoryCandidate,
   type IADevMemoryProposal,
-  sendIADevMessage,
 } from "@/services/ia-dev.service";
 
 type ResizeSide = "left" | "right" | null;
@@ -104,33 +108,8 @@ const getAreaFromDomain = (domain?: string | null) => {
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
 
-const asChartPayload = (value: unknown): IADevChartPayload | null => {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value as IADevChartPayload;
-  if (
-    candidate.type ||
-    (Array.isArray(candidate.points) && candidate.points.length > 0) ||
-    (Array.isArray(candidate.labels) && candidate.labels.length > 0) ||
-    (Array.isArray(candidate.data) && candidate.data.length > 0)
-  ) {
-    return candidate;
-  }
-  return null;
-};
-
-const extractChartFromResponse = (result: IADevChatResponse): IADevChartPayload | null => {
-  const chartDirect = asChartPayload(result.data?.chart);
-  if (chartDirect) return chartDirect;
-
-  const chartFromArray = Array.isArray(result.data?.charts)
-    ? asChartPayload(result.data?.charts[0])
-    : null;
-  if (chartFromArray) return chartFromArray;
-
-  const chartAction = (result.actions || []).find((action) => action.type === "render_chart");
-  if (!chartAction) return null;
-  return asChartPayload(chartAction.payload?.chart);
-};
+const createMessageId = (role: "user" | "assistant") =>
+  `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const ResizeHandle = ({ onMouseDown }: { onMouseDown: () => void }) => (
   <button
@@ -138,17 +117,9 @@ const ResizeHandle = ({ onMouseDown }: { onMouseDown: () => void }) => (
     onMouseDown={onMouseDown}
     className="group relative w-2 shrink-0 cursor-col-resize bg-gray-50 transition hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-800"
   >
-    <span className="absolute top-1/2 left-1/2 h-14 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-gray-300 group-hover:bg-brand-500 dark:bg-gray-700 dark:group-hover:bg-brand-400" />
+    <span className="group-hover:bg-brand-500 dark:group-hover:bg-brand-400 absolute top-1/2 left-1/2 h-14 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-gray-300 dark:bg-gray-700" />
   </button>
 );
-
-type ChatMessage = {
-  role: "user" | "assistant";
-  content: string;
-  actions?: IADevAction[];
-  memoryCandidates?: IADevMemoryCandidate[];
-  pendingProposals?: IADevMemoryProposal[];
-};
 
 type ProcessRun = {
   id: string;
@@ -180,14 +151,38 @@ const IADevWorkspace = () => {
     initialWorkspaceLayout?.rightWidth ?? DEFAULT_RIGHT_WIDTH,
   );
   const [resizeSide, setResizeSide] = useState<ResizeSide>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const { pushPrompt, navigate, resetNavigation } = usePromptHistory();
+  const {
+    sendMessage,
+    transportMode,
+    connectionState,
+    lastError: transportError,
+  } = useIADevChatTransport();
+  const {
+    unreadCount,
+    showScrollButton,
+    notifyContentChanged,
+    onScrollToBottomClick,
+    scrollToBottom,
+  } = useSmartAutoScroll({
+    containerRef: chatScrollRef,
+  });
+
   const [chatInput, setChatInput] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([
+  const undoStackRef = useRef<string[]>([]);
+  const redoStackRef = useRef<string[]>([]);
+  const [messages, setMessages] = useState<ChatMessageModel[]>([
     {
+      id: createMessageId("assistant"),
       role: "assistant",
       content:
         "IA DEV listo. Describe una consulta y te muestro agente, tools y trazabilidad.",
+      createdAt: Date.now(),
+      status: "final",
     },
   ]);
+  const [messageWindowSize, setMessageWindowSize] = useState(80);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [chatStatus, setChatStatus] = useState("");
@@ -200,10 +195,10 @@ const IADevWorkspace = () => {
   const [latestMemoryActions, setLatestMemoryActions] = useState<IADevAction[]>(
     [],
   );
-  const [activeChart, setActiveChart] = useState<IADevChartPayload | null>(null);
   const [activeAgent, setActiveAgent] = useState<string>("analista_agent");
   const [activeArea, setActiveArea] = useState<string>("HHGG");
-  const [activeNodeIds, setActiveNodeIds] = useState<string[]>(BASE_ACTIVE_NODE_IDS);
+  const [activeNodeIds, setActiveNodeIds] =
+    useState<string[]>(BASE_ACTIVE_NODE_IDS);
   const [aiDictionaryStatus, setAiDictionaryStatus] = useState<{
     ok: boolean;
     table?: string | null;
@@ -218,12 +213,67 @@ const IADevWorkspace = () => {
   const [terminalHeight, setTerminalHeight] = useState(TERMINAL_DEFAULT_HEIGHT);
   const [terminalDetached, setTerminalDetached] = useState(false);
   const [resizingTerminal, setResizingTerminal] = useState(false);
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(
+    null,
+  );
+  const [composerResetSignal, setComposerResetSignal] = useState(0);
 
-  const selectedRun = selectedRunIndex >= 0 ? runHistory[selectedRunIndex] : null;
+  const setChatInputTracked = (nextValue: string) => {
+    setChatInput((prev) => {
+      if (prev === nextValue) return prev;
+      undoStackRef.current.push(prev);
+      if (undoStackRef.current.length > 150) {
+        undoStackRef.current.shift();
+      }
+      redoStackRef.current = [];
+      return nextValue;
+    });
+  };
+
+  const undoChatInput = () => {
+    setChatInput((prev) => {
+      if (undoStackRef.current.length === 0) return prev;
+      const previous = undoStackRef.current.pop() ?? prev;
+      redoStackRef.current.push(prev);
+      return previous;
+    });
+  };
+
+  const redoChatInput = () => {
+    setChatInput((prev) => {
+      if (redoStackRef.current.length === 0) return prev;
+      const next = redoStackRef.current.pop() ?? prev;
+      undoStackRef.current.push(prev);
+      return next;
+    });
+  };
+
+  const resetChatInputHistory = () => {
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+  };
+
+  const visibleMessages = useMemo(
+    () => messages.slice(-messageWindowSize),
+    [messageWindowSize, messages],
+  );
+  const hasCollapsedMessages = messages.length > messageWindowSize;
+  const transportLabel = useMemo(() => {
+    if (transportMode === "websocket") {
+      return `WS ${connectionState}`;
+    }
+    return "HTTP";
+  }, [connectionState, transportMode]);
+
+  const selectedRun =
+    selectedRunIndex >= 0 ? runHistory[selectedRunIndex] : null;
   const selectedTrace = selectedRun?.trace ?? [];
   const maxStepIndex = Math.max(0, selectedTrace.length - 1);
   const currentStep = selectedTrace[selectedStepIndex] ?? null;
-  const resolveStepActiveNodes = (run: ProcessRun | null, stepIndex: number) => {
+  const resolveStepActiveNodes = (
+    run: ProcessRun | null,
+    stepIndex: number,
+  ) => {
     if (!run) return BASE_ACTIVE_NODE_IDS;
     const step = run.trace[stepIndex];
     if (step?.active_nodes && step.active_nodes.length > 0) {
@@ -243,6 +293,24 @@ const IADevWorkspace = () => {
     } catch {
       return String(detail);
     }
+  };
+
+  const appendAssistantMessage = (
+    content: string,
+    overrides?: Partial<ChatMessageModel>,
+  ) => {
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: createMessageId("assistant"),
+        role: "assistant",
+        content,
+        createdAt: Date.now(),
+        status: "final",
+        ...overrides,
+      },
+    ]);
+    notifyContentChanged("new-message", { behavior: "smooth" });
   };
 
   const getWorkspaceWidth = () =>
@@ -269,7 +337,8 @@ const IADevWorkspace = () => {
   const openRightPanel = () => {
     setRightOpen(true);
     setRightWidth((prev) => {
-      const next = prev >= RIGHT_COLLAPSE_THRESHOLD ? prev : DEFAULT_RIGHT_WIDTH;
+      const next =
+        prev >= RIGHT_COLLAPSE_THRESHOLD ? prev : DEFAULT_RIGHT_WIDTH;
       return clamp(next, 0, getMaxRightWidth());
     });
   };
@@ -307,7 +376,8 @@ const IADevWorkspace = () => {
   const expandRightPanel = () => {
     setRightOpen(true);
     setRightWidth((prev) => {
-      const base = prev >= RIGHT_COLLAPSE_THRESHOLD ? prev : DEFAULT_RIGHT_WIDTH;
+      const base =
+        prev >= RIGHT_COLLAPSE_THRESHOLD ? prev : DEFAULT_RIGHT_WIDTH;
       return clamp(base + PANEL_STEP, 0, getMaxRightWidth());
     });
   };
@@ -326,7 +396,11 @@ const IADevWorkspace = () => {
           0,
           rect.width - LEFT_RAIL_WIDTH - (rightOpen ? rightWidth : 0),
         );
-        const next = clamp(event.clientX - rect.left - LEFT_RAIL_WIDTH, 0, maxAllowed);
+        const next = clamp(
+          event.clientX - rect.left - LEFT_RAIL_WIDTH,
+          0,
+          maxAllowed,
+        );
         if (next < LEFT_COLLAPSE_THRESHOLD) {
           setLeftOpen(false);
           setLeftWidth(0);
@@ -369,7 +443,8 @@ const IADevWorkspace = () => {
 
   useEffect(() => {
     const syncPanelWidths = () => {
-      const workspaceWidth = workspaceRef.current?.getBoundingClientRect().width ?? 0;
+      const workspaceWidth =
+        workspaceRef.current?.getBoundingClientRect().width ?? 0;
 
       if (leftOpen) {
         const maxLeft = Math.max(
@@ -441,6 +516,12 @@ const IADevWorkspace = () => {
   }, []);
 
   useEffect(() => {
+    if (transportError) {
+      setChatStatus(`Transporte: ${transportError}`);
+    }
+  }, [transportError]);
+
+  useEffect(() => {
     if (!isPlaybackRunning) return;
     if (selectedTrace.length === 0) return;
     if (selectedStepIndex >= selectedTrace.length - 1) {
@@ -448,13 +529,21 @@ const IADevWorkspace = () => {
       return;
     }
 
-    const intervalMs = playbackSpeed === 0.5 ? 1800 : playbackSpeed === 2 ? 500 : 1000;
+    const intervalMs =
+      playbackSpeed === 0.5 ? 1800 : playbackSpeed === 2 ? 500 : 1000;
     const timer = window.setTimeout(() => {
-      setSelectedStepIndex((prev) => Math.min(prev + 1, selectedTrace.length - 1));
+      setSelectedStepIndex((prev) =>
+        Math.min(prev + 1, selectedTrace.length - 1),
+      );
     }, intervalMs);
 
     return () => window.clearTimeout(timer);
-  }, [isPlaybackRunning, playbackSpeed, selectedStepIndex, selectedTrace.length]);
+  }, [
+    isPlaybackRunning,
+    playbackSpeed,
+    selectedStepIndex,
+    selectedTrace.length,
+  ]);
 
   useEffect(() => {
     if (!selectedRun) {
@@ -468,6 +557,14 @@ const IADevWorkspace = () => {
     setActiveAgent(selectedRun.agent || "analista_agent");
     setActiveArea(getAreaFromDomain(selectedRun.domain));
   }, [selectedRun, selectedStepIndex]);
+
+  useEffect(() => {
+    if (rightOpen) {
+      window.setTimeout(() => {
+        scrollToBottom("auto");
+      }, 40);
+    }
+  }, [rightOpen, scrollToBottom]);
 
   useEffect(() => {
     if (!resizingTerminal || terminalDetached) return;
@@ -510,59 +607,97 @@ const IADevWorkspace = () => {
     const value = chatInput.trim();
     if (!value || isSubmitting) return;
 
-    setMessages((prev) => [...prev, { role: "user", content: value }]);
+    const userMessageId = createMessageId("user");
+    const assistantMessageId = createMessageId("assistant");
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: userMessageId,
+        role: "user",
+        content: value,
+        createdAt: Date.now(),
+        status: "final",
+      },
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "",
+        createdAt: Date.now(),
+        status: "streaming",
+      },
+    ]);
     setChatInput("");
+    setComposerResetSignal((prev) => prev + 1);
+    resetChatInputHistory();
+    pushPrompt(value);
+    resetNavigation();
+    setStreamingMessageId(assistantMessageId);
     setIsPlaybackRunning(false);
     setSelectedStepIndex(0);
     setSelectedRunIndex(-1);
     setActiveNodeIds(BASE_ACTIVE_NODE_IDS);
     setActiveAgent("analista_agent");
     setActiveArea("HHGG");
+    notifyContentChanged("user-submit", { behavior: "smooth", force: true });
 
     try {
       setIsSubmitting(true);
-      const result = await sendIADevMessage({
+      const result = await sendMessage({
         message: value,
-        session_id: sessionId ?? undefined,
+        sessionId: sessionId ?? undefined,
+        callbacks: {
+          onStart: () => {
+            notifyContentChanged("stream-start", { behavior: "smooth" });
+          },
+          onChunk: (chunk) => {
+            if (!chunk) return;
+            setMessages((prev) =>
+              prev.map((message) =>
+                message.id === assistantMessageId
+                  ? {
+                      ...message,
+                      content: `${message.content}${chunk}`,
+                      status: "streaming",
+                    }
+                  : message,
+              ),
+            );
+            notifyContentChanged("stream-chunk", { behavior: "auto" });
+          },
+        },
       });
 
       setSessionId(result.session_id);
-      const usedTools =
-        result.orchestrator.used_tools && result.orchestrator.used_tools.length > 0
-          ? result.orchestrator.used_tools.join(", ")
-          : "sin tools";
+      const normalizedPayload = normalizeChatPayload(result);
 
-      const assistantMessage =
-        `${result.reply}\n\n` +
-        `Agente: ${result.orchestrator.selected_agent || "analista_agent"} | ` +
-        `Dominio: ${result.orchestrator.domain || "general"} | ` +
-        `Tools: ${usedTools}\n` +
-        `Memoria: ${result.memory.used_messages}/${result.memory.capacity_messages} ` +
-        `(${Math.round(result.memory.usage_ratio * 100)}%)`;
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: assistantMessage,
-          actions: result.actions ?? [],
-          memoryCandidates: result.memory_candidates ?? [],
-          pendingProposals: result.pending_proposals ?? [],
-        },
-      ]);
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                content: result.reply || message.content,
+                status: "final",
+                response: result,
+                normalized: normalizedPayload,
+                actions: result.actions ?? [],
+                memoryCandidates: result.memory_candidates ?? [],
+                pendingProposals: result.pending_proposals ?? [],
+              }
+            : message,
+        ),
+      );
       setLatestMemoryCandidates(result.memory_candidates ?? []);
       setLatestPendingProposals(result.pending_proposals ?? []);
       setLatestMemoryActions(result.actions ?? []);
-      const chartFromResponse = extractChartFromResponse(result);
-      if (chartFromResponse) {
-        setActiveChart(chartFromResponse);
-      }
 
       const channels = Array.from(
         new Set([
           `agent:${result.orchestrator.selected_agent || "analista_agent"}`,
           `domain:${result.orchestrator.domain || "general"}`,
-          ...(result.orchestrator.used_tools ?? []).map((tool) => `tool:${tool}`),
+          ...(result.orchestrator.used_tools ?? []).map(
+            (tool) => `tool:${tool}`,
+          ),
           ...(result.trace ?? []).map((step) => `phase:${step.phase}`),
         ]),
       );
@@ -586,10 +721,13 @@ const IADevWorkspace = () => {
       setSelectedStepIndex(0);
       setIsPlaybackRunning(false);
 
-      setChatStatus(`Sesion ${result.session_id.slice(0, 8)} activa`);
+      setChatStatus(
+        `Sesion ${result.session_id.slice(0, 8)} activa | ${transportLabel}`,
+      );
       if (result.data_sources?.ai_dictionary) {
         setAiDictionaryStatus(result.data_sources.ai_dictionary);
       }
+      notifyContentChanged("stream-end", { behavior: "smooth" });
     } catch (error) {
       const detail =
         typeof error === "object" &&
@@ -604,15 +742,21 @@ const IADevWorkspace = () => {
             ? (error as { message: string }).message
             : "No fue posible procesar la consulta con IA DEV.";
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: `Error de integracion IA DEV: ${detail}`,
-        },
-      ]);
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                status: "error",
+                content: `Error de integracion IA DEV: ${detail}`,
+                error: detail,
+              }
+            : message,
+        ),
+      );
       setChatStatus("Error de conexion con IA DEV");
     } finally {
+      setStreamingMessageId(null);
       setIsSubmitting(false);
     }
   };
@@ -621,24 +765,24 @@ const IADevWorkspace = () => {
     if (!sessionId || isSubmitting) return;
     try {
       setIsSubmitting(true);
+      setChatInput("");
+      setComposerResetSignal((prev) => prev + 1);
+      resetChatInputHistory();
       await resetIADevMemory(sessionId);
-      setActiveChart(null);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: "Memoria de la sesion reiniciada. Continuamos con contexto limpio.",
-        },
-      ]);
+      setLatestMemoryCandidates([]);
+      setLatestPendingProposals([]);
+      setLatestMemoryActions([]);
+      appendAssistantMessage(
+        "Memoria de la sesion reiniciada. Continuamos con contexto limpio.",
+      );
       setChatStatus(`Sesion ${sessionId.slice(0, 8)} reiniciada`);
     } catch {
-      setMessages((prev) => [
-        ...prev,
+      appendAssistantMessage(
+        "No fue posible reiniciar memoria en este momento.",
         {
-          role: "assistant",
-          content: "No fue posible reiniciar memoria en este momento.",
+          status: "error",
         },
-      ]);
+      );
       setChatStatus("No se pudo reiniciar la memoria");
     } finally {
       setIsSubmitting(false);
@@ -648,17 +792,15 @@ const IADevWorkspace = () => {
   const handleActionClick = async (action: IADevAction) => {
     if (isSubmitting) return;
     if (action.type === "memory_review") {
-      setChatStatus("Panel de memoria abierto para revisar propuestas y auditoria.");
+      setChatStatus(
+        "Panel de memoria abierto para revisar propuestas y auditoria.",
+      );
       return;
     }
     if (action.type === "render_chart") {
-      const chart = asChartPayload(action.payload?.chart);
-      if (!chart) {
-        setChatStatus("No se recibio un payload de grafica valido.");
-        return;
-      }
-      setActiveChart(chart);
-      setChatStatus("Grafica cargada desde la accion del agente.");
+      setChatStatus(
+        "La visualizacion ya se muestra integrada en la respuesta.",
+      );
       return;
     }
     if (action.type !== "create_ticket") return;
@@ -678,22 +820,17 @@ const IADevWorkspace = () => {
         category,
       });
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: `Ticket creado correctamente: ${created.ticket.ticket_id}. El equipo de desarrollo puede tomarlo desde ahora.`,
-        },
-      ]);
+      appendAssistantMessage(
+        `Ticket creado correctamente: ${created.ticket.ticket_id}. El equipo de desarrollo puede tomarlo desde ahora.`,
+      );
       setChatStatus(`Ticket ${created.ticket.ticket_id} creado`);
     } catch {
-      setMessages((prev) => [
-        ...prev,
+      appendAssistantMessage(
+        "No fue posible crear el ticket en este momento.",
         {
-          role: "assistant",
-          content: "No fue posible crear el ticket en este momento.",
+          status: "error",
         },
-      ]);
+      );
       setChatStatus("Error al crear ticket");
     } finally {
       setIsSubmitting(false);
@@ -731,7 +868,9 @@ const IADevWorkspace = () => {
             type="button"
             onClick={openNextRun}
             className="rounded p-1 text-slate-300 hover:bg-slate-800 disabled:opacity-40"
-            disabled={selectedRunIndex < 0 || selectedRunIndex >= runHistory.length - 1}
+            disabled={
+              selectedRunIndex < 0 || selectedRunIndex >= runHistory.length - 1
+            }
             title="Proceso siguiente"
           >
             <ChevronsRight size={14} />
@@ -768,42 +907,54 @@ const IADevWorkspace = () => {
             setIsPlaybackRunning(false);
             setSelectedStepIndex(Number(event.target.value));
           }}
-          className="h-1.5 w-full cursor-pointer accent-brand-500"
+          className="accent-brand-500 h-1.5 w-full cursor-pointer"
         />
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto px-3 py-2 font-mono text-[11px] leading-5">
         {selectedRun && selectedTrace.length > 0 ? (
           <div className="space-y-1">
-            {selectedTrace.slice(0, selectedStepIndex + 1).map((step, stepIndex) => (
-              <div key={`${step.phase}-${stepIndex}`} className="text-slate-300">
-                <span className="text-slate-500">[{step.at}]</span>{" "}
-                <span className="text-cyan-300">{step.phase}</span>{" "}
-                <span
-                  className={
-                    step.status === "ok"
-                      ? "text-emerald-300"
-                      : step.status === "warning"
-                        ? "text-amber-300"
-                        : "text-rose-300"
-                  }
+            {selectedTrace
+              .slice(0, selectedStepIndex + 1)
+              .map((step, stepIndex) => (
+                <div
+                  key={`${step.phase}-${stepIndex}`}
+                  className="text-slate-300"
                 >
-                  ({step.status})
-                </span>{" "}
-                <span className="text-slate-200">{stringifyDetail(step.detail)}</span>
-              </div>
-            ))}
+                  <span className="text-slate-500">[{step.at}]</span>{" "}
+                  <span className="text-cyan-300">{step.phase}</span>{" "}
+                  <span
+                    className={
+                      step.status === "ok"
+                        ? "text-emerald-300"
+                        : step.status === "warning"
+                          ? "text-amber-300"
+                          : "text-rose-300"
+                    }
+                  >
+                    ({step.status})
+                  </span>{" "}
+                  <span className="text-slate-200">
+                    {stringifyDetail(step.detail)}
+                  </span>
+                </div>
+              ))}
           </div>
         ) : (
-          <p className="text-slate-500">Esperando ejecucion del orquestador...</p>
+          <p className="text-slate-500">
+            Esperando ejecucion del orquestador...
+          </p>
         )}
       </div>
 
       <div className="flex items-center justify-between border-t border-slate-800 px-3 py-2 text-xs">
         <div className="text-slate-400">
-          paso {selectedTrace.length === 0 ? 0 : selectedStepIndex + 1}/{selectedTrace.length}
+          paso {selectedTrace.length === 0 ? 0 : selectedStepIndex + 1}/
+          {selectedTrace.length}
           {currentStep && (
-            <span className="ml-2 text-slate-300">fase actual: {currentStep.phase}</span>
+            <span className="ml-2 text-slate-300">
+              fase actual: {currentStep.phase}
+            </span>
           )}
         </div>
         <div className="flex items-center gap-1">
@@ -838,7 +989,9 @@ const IADevWorkspace = () => {
             type="button"
             onClick={moveStepForward}
             className="rounded p-1 text-slate-200 hover:bg-slate-800 disabled:opacity-40"
-            disabled={selectedTrace.length === 0 || selectedStepIndex >= maxStepIndex}
+            disabled={
+              selectedTrace.length === 0 || selectedStepIndex >= maxStepIndex
+            }
             title="Paso siguiente"
           >
             <FastForward size={14} />
@@ -847,7 +1000,9 @@ const IADevWorkspace = () => {
             type="button"
             onClick={goToLastStep}
             className="rounded p-1 text-slate-200 hover:bg-slate-800 disabled:opacity-40"
-            disabled={selectedTrace.length === 0 || selectedStepIndex >= maxStepIndex}
+            disabled={
+              selectedTrace.length === 0 || selectedStepIndex >= maxStepIndex
+            }
             title="Ultimo paso"
           >
             <SkipForward size={14} />
@@ -1055,9 +1210,14 @@ const IADevWorkspace = () => {
             </section>
           )}
 
-          {leftOpen && <ResizeHandle onMouseDown={() => setResizeSide("left")} />}
+          {leftOpen && (
+            <ResizeHandle onMouseDown={() => setResizeSide("left")} />
+          )}
 
-          <section ref={centerSectionRef} className="flex min-w-0 flex-1 flex-col">
+          <section
+            ref={centerSectionRef}
+            className="flex min-w-0 flex-1 flex-col"
+          >
             <div className="flex items-center justify-between border-b border-gray-200 px-4 py-2 dark:border-gray-800">
               <div className="flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-white/90">
                 <Bot size={16} />
@@ -1085,7 +1245,7 @@ const IADevWorkspace = () => {
               </div>
             </div>
 
-            <div className="relative min-h-0 flex flex-1 flex-col">
+            <div className="relative flex min-h-0 flex-1 flex-col">
               <div className="relative min-h-0 flex-1 p-4">
                 <IADevFlowCanvas
                   activeNodeIds={activeNodeIds}
@@ -1119,7 +1279,10 @@ const IADevWorkspace = () => {
                   </div>
                   <div
                     className="mx-4 mb-4"
-                    style={{ height: terminalHeight, minHeight: TERMINAL_MIN_HEIGHT }}
+                    style={{
+                      height: terminalHeight,
+                      minHeight: TERMINAL_MIN_HEIGHT,
+                    }}
                   >
                     {renderTerminalPanel(false)}
                   </div>
@@ -1128,7 +1291,9 @@ const IADevWorkspace = () => {
             </div>
           </section>
 
-          {rightOpen && <ResizeHandle onMouseDown={() => setResizeSide("right")} />}
+          {rightOpen && (
+            <ResizeHandle onMouseDown={() => setResizeSide("right")} />
+          )}
 
           {rightOpen ? (
             <aside
@@ -1175,11 +1340,22 @@ const IADevWorkspace = () => {
                 </div>
               </div>
 
-              {chatStatus && (
-                <div className="border-b border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-300">
-                  {chatStatus}
+              <div className="border-b border-gray-200 px-3 py-2 text-xs dark:border-gray-800">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="truncate text-gray-500 dark:text-gray-300">
+                    {chatStatus || "Listo para consultas analiticas."}
+                  </p>
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-semibold text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+                    <Cpu size={10} />
+                    {transportLabel}
+                  </span>
                 </div>
-              )}
+                {streamingMessageId && (
+                  <p className="text-brand-600 dark:text-brand-300 mt-1 text-[11px]">
+                    IA escribiendo en streaming...
+                  </p>
+                )}
+              </div>
 
               <IADevMemoryPanel
                 latestCandidates={latestMemoryCandidates}
@@ -1188,99 +1364,63 @@ const IADevWorkspace = () => {
                 isBusy={isSubmitting}
                 onStatusChange={setChatStatus}
               />
-              <IADevChartPanel
-                chart={activeChart}
-                onClose={() => setActiveChart(null)}
-              />
 
-              <div className="flex flex-1 flex-col gap-3 overflow-auto p-3">
-                {messages.map((message, index) => (
-                  <div
-                    key={`${message.role}-${index}`}
-                    className={`max-w-[92%] rounded-xl px-3 py-2 text-sm break-words whitespace-pre-wrap ${
-                      message.role === "user"
-                        ? "ml-auto bg-brand-500 text-white"
-                        : "mr-auto border border-gray-200 bg-gray-50 text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
-                    }`}
-                  >
-                    {message.content}
-                    {message.role === "assistant" &&
-                      message.pendingProposals &&
-                      message.pendingProposals.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {message.pendingProposals.slice(0, 5).map((proposal) => (
-                            <span
-                              key={proposal.proposal_id}
-                              className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
-                              title={`${proposal.proposal_id} · ${proposal.status}`}
-                            >
-                              {proposal.status}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    {message.role === "assistant" &&
-                      message.memoryCandidates &&
-                      message.memoryCandidates.length > 0 && (
-                        <div className="mt-2 rounded-md border border-gray-200 bg-white/70 px-2 py-1 text-[11px] text-gray-600 dark:border-gray-700 dark:bg-gray-900/70 dark:text-gray-300">
-                          Candidatos de memoria detectados:{" "}
-                          {message.memoryCandidates.length}. Usa el panel
-                          &quot;Memoria y Workflow&quot; para guardar preferencia, proponer
-                          regla o ignorar.
-                        </div>
-                      )}
-                    {message.role === "assistant" &&
-                      message.actions &&
-                      message.actions.length > 0 && (
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {message.actions.map((action) => (
-                            <button
-                              key={action.id}
-                              type="button"
-                              onClick={() => {
-                                void handleActionClick(action);
-                              }}
-                              className="rounded-md border border-brand-300 bg-brand-500/10 px-2 py-1 text-xs font-semibold text-brand-700 transition hover:bg-brand-500/20 disabled:opacity-60 dark:border-brand-700 dark:text-brand-300"
-                              disabled={isSubmitting}
-                            >
-                              {action.label}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                  </div>
-                ))}
-              </div>
-
-              <div className="border-t border-gray-200 p-3 dark:border-gray-800">
-                <div className="flex items-end gap-2">
-                  <textarea
-                    rows={2}
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        void submitChat();
-                      }
-                    }}
-                    placeholder="Escribe tu consulta..."
-                    className="min-h-[64px] flex-1 resize-none rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:border-brand-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
-                  />
-                  <button
-                    onClick={submitChat}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500 text-white hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-70"
-                    title="Enviar"
-                    disabled={isSubmitting}
-                  >
-                    {isSubmitting ? (
-                      <Loader2 size={16} className="animate-spin" />
-                    ) : (
-                      <SendHorizonal size={16} />
+              <div className="relative min-h-0 flex-1">
+                <div ref={chatScrollRef} className="h-full overflow-auto p-3">
+                  <div className="space-y-3">
+                    {hasCollapsedMessages && (
+                      <div className="flex justify-center">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setMessageWindowSize((prev) =>
+                              Math.min(messages.length, prev + 80),
+                            )
+                          }
+                          className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                        >
+                          Cargar mensajes anteriores (
+                          {messages.length - visibleMessages.length})
+                        </button>
+                      </div>
                     )}
-                  </button>
+
+                    {visibleMessages.map((message) => (
+                      <ChatMessageItem
+                        key={message.id}
+                        message={message}
+                        isBusy={isSubmitting}
+                        onActionClick={(action) => {
+                          void handleActionClick(action);
+                        }}
+                      />
+                    ))}
+                  </div>
                 </div>
+
+                {showScrollButton && (
+                  <ScrollToBottomButton
+                    onClick={onScrollToBottomClick}
+                    unreadCount={unreadCount}
+                  />
+                )}
               </div>
+
+              <ChatComposer
+                value={chatInput}
+                disabled={isSubmitting}
+                isGenerating={Boolean(streamingMessageId)}
+                resetSignal={composerResetSignal}
+                onChange={setChatInputTracked}
+                onSubmit={() => {
+                  void submitChat();
+                }}
+                onNavigateHistory={(direction) => {
+                  setChatInputTracked(navigate(direction, chatInput));
+                }}
+                onUndo={undoChatInput}
+                onRedo={redoChatInput}
+              />
             </aside>
           ) : (
             <aside className="flex w-12 shrink-0 items-start justify-center border-l border-gray-200 bg-gray-50 pt-3 dark:border-gray-800 dark:bg-gray-900">

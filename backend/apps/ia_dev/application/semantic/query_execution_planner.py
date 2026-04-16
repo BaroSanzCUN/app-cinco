@@ -37,6 +37,7 @@ class QueryExecutionPlanner:
     ) -> QueryExecutionPlan:
         domain_code = str(resolved_query.intent.domain_code or "").strip().lower()
         template_id = str(resolved_query.intent.template_id or "").strip().lower()
+        constraints = self._build_constraints(resolved_query=resolved_query)
 
         capability_id = self._resolve_capability_id(
             domain_code=domain_code,
@@ -49,6 +50,7 @@ class QueryExecutionPlanner:
                 reason="capability_selected_from_query_intelligence",
                 domain_code=domain_code,
                 capability_id=capability_id,
+                constraints=constraints,
                 policy={"allowed": True, "reason": "capability_first"},
                 metadata={
                     "template_id": template_id,
@@ -75,6 +77,7 @@ class QueryExecutionPlanner:
                         reason=sql_reason,
                         domain_code=domain_code,
                         sql_query=sql_query,
+                        constraints=constraints,
                         policy={
                             "allowed": True,
                             "reason": validation.reason,
@@ -91,6 +94,7 @@ class QueryExecutionPlanner:
                     reason=f"sql_rejected:{validation.reason}",
                     domain_code=domain_code,
                     capability_id=capability_id,
+                    constraints=constraints,
                     policy={
                         "allowed": False,
                         "reason": validation.reason,
@@ -107,6 +111,7 @@ class QueryExecutionPlanner:
                 domain_code=domain_code,
                 requires_context=True,
                 missing_context=missing_context,
+                constraints=constraints,
                 policy={
                     "allowed": False,
                     "reason": "missing_context",
@@ -120,6 +125,7 @@ class QueryExecutionPlanner:
             reason="no_capability_or_sql_plan_available",
             domain_code=domain_code,
             capability_id=capability_id,
+            constraints=constraints,
             policy={"allowed": False, "reason": "fallback_legacy"},
             metadata={"template_id": template_id},
         )
@@ -276,7 +282,11 @@ class QueryExecutionPlanner:
         normalized_domain = str(domain_code or "").strip().lower()
         if normalized_domain in {"empleados", "rrhh"}:
             filters = dict(resolved_query.normalized_filters or {})
-            if template_id == "count_entities_by_status" and str(filters.get("estado") or "").upper() == "ACTIVO":
+            operation = str(resolved_query.intent.operation or "").strip().lower()
+            status_value = self._resolve_status_filter(filters=filters)
+            if operation == "count" and status_value in {"ACTIVO", "INACTIVO"}:
+                return "empleados.count.active.v1"
+            if template_id == "count_entities_by_status" and status_value in {"ACTIVO", "INACTIVO"}:
                 return "empleados.count.active.v1"
             return None
         if normalized_domain in {"ausentismo", "attendance"}:
@@ -300,6 +310,62 @@ class QueryExecutionPlanner:
                 return "attendance.unjustified.summary.v1"
             return "attendance.unjustified.summary.v1"
         return None
+
+    def _build_constraints(self, *, resolved_query: ResolvedQuerySpec) -> dict[str, Any]:
+        filters = dict(resolved_query.normalized_filters or {})
+        status_value = self._resolve_status_filter(filters=filters)
+        if status_value and "estado" not in filters:
+            filters["estado"] = status_value
+        period = dict(resolved_query.normalized_period or {})
+        group_by = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or []) if str(item).strip()]
+        metrics = [str(item).strip().lower() for item in list(resolved_query.intent.metrics or []) if str(item).strip()]
+        operation = str(resolved_query.intent.operation or "").strip().lower()
+        result_shape = "summary"
+        if operation in {"detail"}:
+            result_shape = "table"
+        elif operation in {"aggregate", "trend", "compare"}:
+            result_shape = "table"
+        elif operation == "count":
+            result_shape = "kpi"
+
+        cedula = str(filters.get("cedula") or "").strip()
+        entity_scope = {
+            "entity_type": "empleado" if cedula else "",
+            "entity_id": cedula,
+            "has_entity_filter": bool(cedula),
+        }
+        period_scope = {
+            "label": str(period.get("label") or ""),
+            "start_date": str(period.get("start_date") or ""),
+            "end_date": str(period.get("end_date") or ""),
+        }
+        relations_payload = list(
+            (dict(resolved_query.semantic_context or {}).get("resolved_semantic") or {}).get("relations") or []
+        )
+        chart_requested = bool(
+            any(metric in {"count", "percentage"} for metric in metrics)
+            and (operation in {"trend", "aggregate", "compare"})
+        )
+        return {
+            "entity_scope": entity_scope,
+            "filters": filters,
+            "period_scope": period_scope,
+            "group_by": group_by,
+            "metrics": metrics or (["count"] if operation == "count" else []),
+            "result_shape": result_shape,
+            "joins": relations_payload,
+            "chart_requested": chart_requested,
+            "operation": operation,
+            "template_id": str(resolved_query.intent.template_id or ""),
+        }
+
+    @staticmethod
+    def _resolve_status_filter(*, filters: dict[str, Any]) -> str:
+        for key in ("estado", "estado_usuario", "estado_empleado"):
+            status = str((filters or {}).get(key) or "").strip().upper()
+            if status in {"ACTIVO", "INACTIVO"}:
+                return status
+        return ""
 
     def _build_sql_query(self, *, resolved_query: ResolvedQuerySpec) -> tuple[str, str]:
         template_id = str(resolved_query.intent.template_id or "").strip().lower()
@@ -405,6 +471,14 @@ class QueryExecutionPlanner:
         return ""
 
     def _resolve_date_column(self, *, context: dict[str, Any]) -> str:
+        for profile in list(context.get("column_profiles") or []):
+            if not isinstance(profile, dict):
+                continue
+            if not bool(profile.get("is_date")):
+                continue
+            physical = str(profile.get("column_name") or "").strip()
+            if self._is_safe_identifier(physical):
+                return physical
         for item in list(context.get("columns") or []):
             if not isinstance(item, dict):
                 continue
@@ -419,6 +493,14 @@ class QueryExecutionPlanner:
         return ""
 
     def _resolve_entity_column(self, *, context: dict[str, Any]) -> str:
+        for profile in list(context.get("column_profiles") or []):
+            if not isinstance(profile, dict):
+                continue
+            if not bool(profile.get("is_identifier")):
+                continue
+            physical = str(profile.get("column_name") or "").strip()
+            if self._is_safe_identifier(physical):
+                return physical
         for item in list(context.get("columns") or []):
             if not isinstance(item, dict):
                 continue
@@ -431,6 +513,16 @@ class QueryExecutionPlanner:
         return "cedula"
 
     def _resolve_status_column(self, *, context: dict[str, Any]) -> str:
+        for profile in list(context.get("column_profiles") or []):
+            if not isinstance(profile, dict):
+                continue
+            allowed = list(profile.get("allowed_values") or [])
+            if not allowed:
+                continue
+            if {"ACTIVO", "INACTIVO"} & {str(item or "").strip().upper() for item in allowed}:
+                physical = str(profile.get("column_name") or "").strip()
+                if self._is_safe_identifier(physical):
+                    return physical
         preferred = ("estado", "status", "activo", "is_active", "estado_empleado")
         for item in list(context.get("columns") or []):
             if not isinstance(item, dict):
@@ -444,10 +536,23 @@ class QueryExecutionPlanner:
         requested = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or [])]
         if not requested:
             return ""
+        profile_by_logical: dict[str, str] = {}
+        for profile in list(context.get("column_profiles") or []):
+            if not isinstance(profile, dict):
+                continue
+            logical = str(profile.get("logical_name") or "").strip().lower()
+            physical = str(profile.get("column_name") or "").strip()
+            if not logical or not physical:
+                continue
+            if not bool(profile.get("supports_group_by") or profile.get("supports_dimension")):
+                continue
+            profile_by_logical[logical] = physical
         aliases = dict(context.get("aliases") or {})
         columns = {str(item.get("column_name") or "").strip().lower(): str(item.get("column_name") or "").strip() for item in list(context.get("columns") or []) if isinstance(item, dict)}
         for item in requested:
             mapped = str(aliases.get(item, item)).strip().lower()
+            if mapped in profile_by_logical and self._is_safe_identifier(profile_by_logical[mapped]):
+                return profile_by_logical[mapped]
             if mapped in columns and self._is_safe_identifier(columns[mapped]):
                 return columns[mapped]
             if self._is_safe_identifier(mapped):

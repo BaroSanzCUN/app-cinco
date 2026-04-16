@@ -352,8 +352,20 @@ class IADevObservabilitySummaryView(APIView):
                 {"detail": "limit debe ser numerico"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        payload = observability_service.summary(
+        domain_code = str(request.query_params.get("domain_code", "")).strip() or None
+        generator = str(request.query_params.get("generator", "")).strip().lower() or None
+        fallback_reason = str(request.query_params.get("fallback_reason", "")).strip().lower() or None
+        if generator and generator not in {"openai", "heuristic"}:
+            return Response(
+                {"detail": "generator debe ser openai o heuristic"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        payload = observability_service.summary_filtered(
             window_seconds=window_seconds,
             limit=limit,
+            domain_code=domain_code,
+            generator=generator,
+            fallback_reason=fallback_reason,
         )
         return Response({"status": "ok", "observability": payload}, status=status.HTTP_200_OK)

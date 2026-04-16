@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   addEdge,
   Background,
@@ -28,9 +34,7 @@ import {
   saveFlowLayout,
   type IADevPersistedEdge,
 } from "../persistence/layoutStorage";
-import type {
-  IAFlowCanvasNode,
-} from "./types";
+import type { IAFlowCanvasNode } from "./types";
 
 const nodeTypes: NodeTypes = {
   iaFlowNode: IAFlowNode,
@@ -169,7 +173,10 @@ const IADevFlowCanvas = ({
       {
         id: AREAS_NODE_ID,
         type: "iaFlowLegend",
-        position: persistedLayout?.nodePositions?.[AREAS_NODE_ID] ?? { x: 14, y: 20 },
+        position: persistedLayout?.nodePositions?.[AREAS_NODE_ID] ?? {
+          x: 14,
+          y: 20,
+        },
         draggable: true,
         selectable: true,
         connectable: false,
@@ -186,7 +193,10 @@ const IADevFlowCanvas = ({
       {
         id: AGENTS_NODE_ID,
         type: "iaFlowLegend",
-        position: persistedLayout?.nodePositions?.[AGENTS_NODE_ID] ?? { x: 190, y: 20 },
+        position: persistedLayout?.nodePositions?.[AGENTS_NODE_ID] ?? {
+          x: 190,
+          y: 20,
+        },
         draggable: true,
         selectable: true,
         connectable: false,
@@ -201,7 +211,13 @@ const IADevFlowCanvas = ({
         },
       },
     ],
-    [activeAgent, activeArea, availableAgents, persistedLayout?.nodePositions, serviceAreas],
+    [
+      activeAgent,
+      activeArea,
+      availableAgents,
+      persistedLayout?.nodePositions,
+      serviceAreas,
+    ],
   );
   const initialNodes = useMemo(
     () => cloneNodes([...baseNodes, ...legendNodes]),
@@ -210,11 +226,10 @@ const IADevFlowCanvas = ({
   const initialEdges = useMemo(() => {
     const nodeIds = new Set(initialNodes.map((node) => node.id));
     if (persistedLayout) {
-      const isLayoutBeforeRouteNode =
-        !Object.prototype.hasOwnProperty.call(
-          persistedLayout.nodePositions ?? {},
-          "route",
-        );
+      const isLayoutBeforeRouteNode = !Object.prototype.hasOwnProperty.call(
+        persistedLayout.nodePositions ?? {},
+        "route",
+      );
       if (isLayoutBeforeRouteNode) {
         return cloneEdges(baseEdges);
       }
@@ -374,7 +389,14 @@ const IADevFlowCanvas = ({
                 : node.data,
       })),
     );
-  }, [activeAgent, activeArea, activeNodeSet, availableAgents, serviceAreas, setNodes]);
+  }, [
+    activeAgent,
+    activeArea,
+    activeNodeSet,
+    availableAgents,
+    serviceAreas,
+    setNodes,
+  ]);
 
   useEffect(() => {
     if (isRestoringRef.current) return;
@@ -388,6 +410,20 @@ const IADevFlowCanvas = ({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target) {
+        const tagName = target.tagName.toLowerCase();
+        const isEditableTarget =
+          target.isContentEditable ||
+          tagName === "input" ||
+          tagName === "textarea" ||
+          tagName === "select" ||
+          Boolean(target.closest("[contenteditable='true']"));
+        if (isEditableTarget) {
+          return;
+        }
+      }
+
       const isModifier = event.ctrlKey || event.metaKey;
       if (!isModifier) return;
 

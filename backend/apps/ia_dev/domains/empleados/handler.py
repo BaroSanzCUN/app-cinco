@@ -8,6 +8,10 @@ from typing import Any
 
 from apps.empleados.services.empleado_service import EmpleadoService
 from apps.ia_dev.application.context.run_context import RunContext
+from apps.ia_dev.application.contracts.query_intelligence_contracts import (
+    QueryExecutionPlan,
+    ResolvedQuerySpec,
+)
 from apps.ia_dev.application.delegation.task_contracts import DelegationResult, DelegationTask
 from apps.ia_dev.services.memory_service import SessionMemoryStore
 
@@ -34,6 +38,8 @@ class EmpleadosHandler:
         run_context: RunContext,
         planned_capability: dict[str, Any],
         memory_context: dict[str, Any] | None = None,
+        resolved_query: ResolvedQuerySpec | None = None,
+        execution_plan: QueryExecutionPlan | None = None,
         observability=None,
     ) -> EmpleadosHandleResult:
         sid, _ = SessionMemoryStore.get_or_create(session_id)
@@ -70,24 +76,33 @@ class EmpleadosHandler:
                     metadata={"capability_id": capability_id},
                 )
 
-            total_activos, filtros_aplicados = self.obtener_cantidad_activos(consulta=message)
+            target_status = self._resolve_target_status(
+                message=message,
+                resolved_query=resolved_query,
+                execution_plan=execution_plan,
+            )
+            total_activos, filtros_aplicados = self.obtener_cantidad_por_estado(
+                consulta=message,
+                estado=target_status,
+            )
             used_tools.append("get_empleados_count_active")
-            payload["kpis"] = {"total_empleados_activos": int(total_activos)}
+            payload["kpis"] = {"total_empleados": int(total_activos)}
             payload["table"] = {
                 "columns": ["estado", "total_empleados"],
-                "rows": [{"estado": "ACTIVO", "total_empleados": int(total_activos)}],
+                "rows": [{"estado": target_status, "total_empleados": int(total_activos)}],
                 "rowcount": 1,
             }
             payload["insights"] = [
-                f"Total de empleados activos calculado con filtros: {filtros_aplicados or {'estado': 'ACTIVO'}}."
+                f"Total de empleados {target_status.lower()} calculado con filtros: {filtros_aplicados or {'estado': target_status}}."
             ]
-            reply = f"Cantidad de empleados activos: {int(total_activos)}."
+            reply = f"Cantidad de empleados {target_status.lower()}: {int(total_activos)}."
             _push_trace(
                 "empleados_count_active",
                 "ok",
                 {
                     "capability_id": capability_id,
                     "total_activos": int(total_activos),
+                    "estado_objetivo": target_status,
                     "filtros_aplicados": filtros_aplicados,
                 },
             )
@@ -143,6 +158,7 @@ class EmpleadosHandler:
                 metadata={
                     "capability_id": capability_id,
                     "filtros_aplicados": filtros_aplicados,
+                    "estado_objetivo": target_status,
                     "policy_tags": list(planned_capability.get("policy_tags") or []),
                 },
             )
@@ -168,8 +184,19 @@ class EmpleadosHandler:
         }
 
     def obtener_cantidad_activos(self, *, consulta: str = "") -> tuple[int, dict[str, str]]:
+        return self.obtener_cantidad_por_estado(consulta=consulta, estado="ACTIVO")
+
+    def obtener_cantidad_por_estado(
+        self,
+        *,
+        consulta: str = "",
+        estado: str = "ACTIVO",
+    ) -> tuple[int, dict[str, str]]:
         filtros = self._extraer_filtros_count_activos(consulta=consulta)
-        query_params: dict[str, str] = {"estado": "ACTIVO"}
+        target_status = str(estado or "ACTIVO").strip().upper()
+        if target_status not in {"ACTIVO", "INACTIVO"}:
+            target_status = "ACTIVO"
+        query_params: dict[str, str] = {"estado": target_status}
         query_params.update({k: v for k, v in filtros.items() if v})
         queryset = self.service.listar(query_params=query_params)
         return int(queryset.count()), query_params
@@ -360,6 +387,26 @@ class EmpleadosHandler:
             if value:
                 filtros[key] = value
         return filtros
+
+    @staticmethod
+    def _resolve_target_status(
+        *,
+        message: str,
+        resolved_query: ResolvedQuerySpec | None,
+        execution_plan: QueryExecutionPlan | None,
+    ) -> str:
+        constraints_filters = dict((execution_plan.constraints if execution_plan else {}).get("filters") or {})
+        status = str(constraints_filters.get("estado") or "").strip().upper()
+        if status in {"ACTIVO", "INACTIVO"}:
+            return status
+        if resolved_query is not None:
+            status = str((resolved_query.normalized_filters or {}).get("estado") or "").strip().upper()
+            if status in {"ACTIVO", "INACTIVO"}:
+                return status
+        normalized = str(message or "").strip().lower()
+        if "inactivo" in normalized or "inactivos" in normalized:
+            return "INACTIVO"
+        return "ACTIVO"
 
     @staticmethod
     def _record_event(*, observability, event_type: str, meta: dict[str, Any]) -> None:

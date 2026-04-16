@@ -1,4 +1,5 @@
-﻿import json
+import json
+import hashlib
 import logging
 import os
 import re
@@ -6,6 +7,9 @@ import threading
 import time
 import unicodedata
 from datetime import date, datetime, timedelta
+from typing import Any
+
+from apps.ia_dev.application.semantic.cause_diagnostics_service import CauseDiagnosticsService
 
 from .observability_service import ObservabilityService
 from .dictionary_tool_service import DictionaryToolService
@@ -53,6 +57,7 @@ class IADevOrchestratorService:
             self.general_model,
         )
         self._last_openai_usage: dict | None = None
+        self.cause_diagnostics_service = CauseDiagnosticsService()
         self._delegate_state = threading.local()
         self._delegate_state.skip = False
         self._chat_application_service = None
@@ -137,6 +142,11 @@ class IADevOrchestratorService:
             "knowledge_governance": {
                 "mode": self.knowledge_governance.mode,
                 "requires_auth": self.knowledge_governance.mode == "ceo",
+            },
+            "cause_diagnostics": {
+                "ok": False,
+                "generator": "",
+                "confidence": 0.0,
             },
         }
 
@@ -341,6 +351,7 @@ class IADevOrchestratorService:
             "series": [],
             "labels": [],
             "insights": [],
+            "cause_generation_meta": {},
             "table": {
                 "columns": [],
                 "rows": [],
@@ -501,7 +512,7 @@ class IADevOrchestratorService:
                 )
             elif proposal_result.get("requires_auth"):
                 reply = (
-                    f"Se creó la propuesta {proposal_id} y quedó pendiente de aprobación del CEO.\n"
+                    f"Se creo la propuesta {proposal_id} y quedo pendiente de aprobacion del CEO.\n"
                     "Para aplicarla usa el endpoint: POST /ia-dev/knowledge/proposals/approve/ "
                     "con `proposal_id` y `auth_key`."
                 )
@@ -542,7 +553,7 @@ class IADevOrchestratorService:
                     f"Resultado: {persistence.get('message', 'regla persistida en ai_dictionary')}"
                 )
                 payload["insights"].append(
-                    f"Autoevolución aplicada: propuesta {proposal_id}."
+                    f"Autoevolucion aplicada: propuesta {proposal_id}."
                 )
                 push_trace(
                     "knowledge_governance",
@@ -743,6 +754,40 @@ class IADevOrchestratorService:
                             f"({detail.get('periodo_inicio')} a {detail.get('periodo_fin')}, top {top_n}):\n\n"
                             f"{self._format_rows_table(aggregated_rows)}"
                         )
+                    if self._message_requests_probable_causes(message):
+                        cause_result = self._generate_probable_causes(
+                            message=message,
+                            rows=aggregated_rows,
+                            group_label=group_label,
+                            metric_key=metric_key,
+                            observability=self.observability,
+                            run_id=str(sid),
+                            capability_id="attendance.summary.by_attribute.legacy",
+                        )
+                        probable_causes = list(cause_result.get("insights") or [])
+                        cause_generation_meta = dict(cause_result.get("meta") or {})
+                        payload["insights"].extend(probable_causes)
+                        payload["cause_generation_meta"] = cause_generation_meta
+                        data_sources["cause_diagnostics"] = {
+                            "ok": bool(cause_generation_meta),
+                            "generator": str(cause_generation_meta.get("generator") or ""),
+                            "confidence": float(cause_generation_meta.get("confidence") or 0.0),
+                        }
+                        push_trace(
+                            "cause_diagnostics",
+                            "ok" if str(cause_generation_meta.get("generator") or "") == "openai" else "warning",
+                            self._build_cause_diagnostics_trace_detail(
+                                meta=cause_generation_meta,
+                                capability_id="attendance.summary.by_attribute.legacy",
+                            ),
+                            {"q", "gpt", "route", "rules", "result"},
+                        )
+                        if probable_causes:
+                            reply = (
+                                f"{reply}\n\n"
+                                "Sugerencias de causas probables:\n"
+                                + "\n".join(f"- {item}" for item in probable_causes)
+                            )
 
                     if self._is_chart_request(message):
                         chart_payload = {
@@ -1507,12 +1552,20 @@ class IADevOrchestratorService:
         mappings = (
             ("por supervisor", ("supervisor", "Supervisor")),
             ("supervisor", ("supervisor", "Supervisor")),
+            ("supervisores", ("supervisor", "Supervisor")),
+            ("jefe", ("supervisor", "Supervisor")),
+            ("jefes", ("supervisor", "Supervisor")),
+            ("lider", ("supervisor", "Supervisor")),
+            ("lideres", ("supervisor", "Supervisor")),
             ("por area", ("area", "Area")),
             ("area", ("area", "Area")),
+            ("areas", ("area", "Area")),
             ("por cargo", ("cargo", "Cargo")),
             ("cargo", ("cargo", "Cargo")),
+            ("cargos", ("cargo", "Cargo")),
             ("por carpeta", ("carpeta", "Carpeta")),
             ("carpeta", ("carpeta", "Carpeta")),
+            ("carpetas", ("carpeta", "Carpeta")),
             ("por justificacion", ("justificacion", "Justificacion")),
             ("justificacion", ("justificacion", "Justificacion")),
             ("por causa", ("justificacion", "Justificacion")),
@@ -1560,7 +1613,24 @@ class IADevOrchestratorService:
         normalized = self._normalize_text(message)
         asks_count = any(token in normalized for token in ("cantidad", "cuantos", "cuantas", "total", "numero"))
         asks_group = "por " in normalized
-        return bool(asks_count and asks_group)
+        asks_aggregate_semantic = any(
+            token in normalized
+            for token in (
+                "concentra",
+                "concentran",
+                "concentracion",
+                "distribucion",
+                "participacion",
+                "ranking",
+                "top",
+                "comparativo",
+                "comparar",
+            )
+        )
+        asks_relative_order = "mas" in normalized and any(
+            token in normalized for token in ("ausent", "injustific")
+        )
+        return bool((asks_count and asks_group) or asks_aggregate_semantic or asks_relative_order)
 
     def _extract_top_n(self, message: str, *, default: int = 10) -> int:
         normalized = self._normalize_text(message)
@@ -1571,6 +1641,179 @@ class IADevOrchestratorService:
             except ValueError:
                 pass
         return max(1, min(int(default), 50))
+
+    def _message_requests_probable_causes(self, message: str) -> bool:
+        normalized = self._normalize_text(message)
+        return any(
+            token in normalized
+            for token in (
+                "causa",
+                "causas",
+                "probable",
+                "probables",
+                "sugiere",
+                "sugerir",
+                "sugerencia",
+                "porque",
+                "por que",
+            )
+        )
+
+    @staticmethod
+    def _build_probable_causes_insights(*, rows: list[dict], group_label: str) -> list[str]:
+        if not rows:
+            return ["No hay datos suficientes en el periodo para sugerir causas probables."]
+        first = dict(rows[0] or {})
+        group_value = str(
+            first.get("grupo")
+            or first.get("group")
+            or first.get("area")
+            or first.get("supervisor")
+            or first.get("cargo")
+            or "N/D"
+        ).strip()
+        top_pct = ""
+        raw_pct = first.get("porcentaje")
+        try:
+            if raw_pct is not None and str(raw_pct).strip() != "":
+                top_pct = f"{float(raw_pct):.1f}%"
+        except Exception:
+            top_pct = str(raw_pct or "").strip()
+
+        first_hint = (
+            f"Mayor concentracion por {group_label.lower()}: {group_value}"
+            + (f" ({top_pct})." if top_pct else ".")
+        )
+        return [
+            first_hint,
+            "Posibles causas a validar: sobrecarga operativa, picos de incapacidades y cobertura insuficiente de reemplazos.",
+            "Recomendacion: cruza ausentismo con turnos, novedades medicas y dotacion por equipo para confirmar causa raiz.",
+        ]
+
+    @staticmethod
+    def _build_cause_diagnostics_trace_detail(*, meta: dict[str, Any], capability_id: str) -> dict[str, Any]:
+        payload = dict(meta or {})
+        policy_decision = dict(payload.get("policy_decision") or {})
+        validation_errors = [
+            str(item or "").strip()
+            for item in list(payload.get("validation_errors") or [])
+            if str(item or "").strip()
+        ]
+        return {
+            "capability_id": str(capability_id or ""),
+            "generator": str(payload.get("generator") or ""),
+            "confidence": IADevOrchestratorService._safe_float(payload.get("confidence"), 0.0),
+            "validated": bool(payload.get("validated")),
+            "top_group": str(payload.get("top_group") or ""),
+            "top_pct": IADevOrchestratorService._safe_float(payload.get("top_pct"), 0.0),
+            "fallback_reason": str(payload.get("fallback_reason") or ""),
+            "validation_errors": validation_errors,
+            "prompt_hash": str(payload.get("prompt_hash") or ""),
+            "policy_reason": str(policy_decision.get("reason") or ""),
+            "policy_selected_generator": str(policy_decision.get("selected_generator") or ""),
+            "policy_allowed": bool(policy_decision.get("allowed")),
+        }
+
+    def _generate_probable_causes(
+        self,
+        *,
+        message: str,
+        rows: list[dict],
+        group_label: str,
+        metric_key: str,
+        observability=None,
+        run_id: str | None = None,
+        capability_id: str | None = None,
+    ) -> dict[str, Any]:
+        service = getattr(self, "cause_diagnostics_service", None)
+        if service is not None:
+            try:
+                return service.generate(
+                    message=message,
+                    rows=[dict(item or {}) for item in list(rows or []) if isinstance(item, dict)],
+                    group_label=group_label,
+                    metric_key=metric_key,
+                    observability=observability,
+                    run_id=run_id,
+                    trace_id=None,
+                    domain_code="attendance",
+                    capability_id=capability_id,
+                )
+            except Exception:
+                pass
+        fallback = self._build_probable_causes_insights(rows=rows, group_label=group_label)
+        first_row = dict(rows[0] or {}) if rows else {}
+        top_group = str(
+            first_row.get("group")
+            or first_row.get("grupo")
+            or first_row.get("area")
+            or first_row.get("supervisor")
+            or first_row.get("cargo")
+            or ""
+        )
+        prompt_hash = hashlib.sha256(
+            json.dumps(
+                {
+                    "message": str(message or "").strip().lower(),
+                    "group_label": str(group_label or "").strip().lower(),
+                    "rows_sample": [dict(item or {}) for item in list(rows or [])[:5] if isinstance(item, dict)],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        meta = {
+            "generator": "heuristic",
+            "evidence_rows": rows[:5] if isinstance(rows, list) else [],
+            "top_group": top_group,
+            "top_pct": self._safe_float(first_row.get("porcentaje"), 0.0),
+            "confidence": 0.55,
+            "fallback_reason": "cause_diagnostics_service_unavailable",
+            "validated": True,
+            "prompt_hash": prompt_hash,
+            "validation_errors": ["cause_diagnostics_service_unavailable"],
+            "policy_decision": {
+                "selected_generator": "heuristic",
+                "allowed": False,
+                "reason": "cause_diagnostics_service_unavailable",
+            },
+        }
+        if observability is not None and hasattr(observability, "record_event"):
+            observability.record_event(
+                event_type="cause_diagnostics_result",
+                source="IADevOrchestratorService",
+                meta={
+                    "run_id": run_id,
+                    "trace_id": None,
+                    "domain_code": "attendance",
+                    "capability_id": str(capability_id or ""),
+                    "generator": str(meta.get("generator") or "heuristic"),
+                    "confidence": float(meta.get("confidence") or 0.0),
+                    "validated": bool(meta.get("validated")),
+                    "fallback_reason": str(meta.get("fallback_reason") or ""),
+                    "validation_error_count": len(list(meta.get("validation_errors") or [])),
+                    "validation_errors": list(meta.get("validation_errors") or [])[:5],
+                    "policy_reason": str((meta.get("policy_decision") or {}).get("reason") or ""),
+                    "policy_selected_generator": str((meta.get("policy_decision") or {}).get("selected_generator") or ""),
+                    "policy_allowed": bool((meta.get("policy_decision") or {}).get("allowed")),
+                    "model": str(self.general_model or ""),
+                    "prompt_hash": str(meta.get("prompt_hash") or ""),
+                    "evidence_rows_count": len(list(meta.get("evidence_rows") or [])),
+                    "top_group": str(meta.get("top_group") or ""),
+                    "top_pct": float(meta.get("top_pct") or 0.0),
+                },
+            )
+        return {
+            "insights": fallback,
+            "meta": meta,
+        }
+
+    @staticmethod
+    def _safe_float(value: object, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
 
     @staticmethod
     def _normalize_group_value(value: object) -> str:
@@ -2291,6 +2534,7 @@ class IADevOrchestratorService:
             active.update({"alert", "audit"})
 
         return sorted(active)
+
 
 
 

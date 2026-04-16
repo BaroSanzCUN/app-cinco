@@ -10,6 +10,7 @@ import type {
 type IADevChartPanelProps = {
   chart: IADevChartPayload | null;
   onClose?: () => void;
+  embedded?: boolean;
 };
 
 type NormalizedChartData = {
@@ -19,19 +20,114 @@ type NormalizedChartData = {
 };
 
 const normalizeChartType = (type?: string): "bar" | "line" | "area" => {
-  const normalized = String(type || "").trim().toLowerCase();
+  const normalized = String(type || "")
+    .trim()
+    .toLowerCase();
   if (normalized === "line") return "line";
   if (normalized === "area") return "area";
   return "bar";
 };
 
-const asNumber = (value: unknown): number => {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+const normalizeNumericString = (value: string): string => {
+  let text = value.trim();
+  if (!text) return "";
+  text = text.replace(/[^\d,.\-]/g, "");
+  if (!text || text === "-" || text === "." || text === ",") return "";
+
+  const hasComma = text.includes(",");
+  const hasDot = text.includes(".");
+
+  if (hasComma && hasDot) {
+    const lastComma = text.lastIndexOf(",");
+    const lastDot = text.lastIndexOf(".");
+    if (lastComma > lastDot) {
+      text = text.replace(/\./g, "").replace(",", ".");
+    } else {
+      text = text.replace(/,/g, "");
+    }
+    return text;
+  }
+
+  if (hasComma) {
+    if (/,\d{1,2}$/.test(text)) {
+      return text.replace(",", ".");
+    }
+    return text.replace(/,/g, "");
+  }
+
+  if (hasDot) {
+    const dotCount = (text.match(/\./g) || []).length;
+    if (dotCount > 1) {
+      const lastDot = text.lastIndexOf(".");
+      const intPart = text.slice(0, lastDot).replace(/\./g, "");
+      const decimalPart = text.slice(lastDot + 1);
+      return `${intPart}.${decimalPart}`;
+    }
+  }
+
+  return text;
 };
 
-const normalizeRows = (chart: IADevChartPayload): Array<{ category: string; value: number }> => {
+const asNumberOrNull = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const normalized = normalizeNumericString(value);
+    if (!normalized) return null;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const asNumber = (value: unknown): number => {
+  return asNumberOrNull(value) ?? 0;
+};
+
+const resolveBestYKey = (
+  rows: Array<Record<string, unknown>>,
+  xKey: string,
+  preferredYKey: string,
+): string => {
+  if (rows.length === 0) return preferredYKey;
+  const keys = Array.from(
+    new Set(
+      rows.flatMap((row) => Object.keys(row)).filter((key) => key !== xKey),
+    ),
+  );
+
+  const scoreKey = (key: string) => {
+    let numericCount = 0;
+    let nonZeroCount = 0;
+    for (const row of rows) {
+      const numeric = asNumberOrNull(row[key]);
+      if (numeric == null) continue;
+      numericCount += 1;
+      if (numeric !== 0) nonZeroCount += 1;
+    }
+    return { key, numericCount, nonZeroCount };
+  };
+
+  const preferredScore = scoreKey(preferredYKey);
+  if (preferredScore.numericCount > 0 && preferredScore.nonZeroCount > 0) {
+    return preferredYKey;
+  }
+
+  const ranked = keys
+    .map(scoreKey)
+    .sort(
+      (a, b) =>
+        b.nonZeroCount - a.nonZeroCount || b.numericCount - a.numericCount,
+    );
+
+  if (ranked.length === 0) return preferredYKey;
+  if (ranked[0].numericCount === 0) return preferredYKey;
+  return ranked[0].key;
+};
+
+const normalizeRows = (
+  chart: IADevChartPayload,
+): Array<{ category: string; value: number }> => {
   if (Array.isArray(chart.points) && chart.points.length > 0) {
     return chart.points.map((item) => ({
       category: String(item.x ?? ""),
@@ -55,9 +151,12 @@ const normalizeRows = (chart: IADevChartPayload): Array<{ category: string; valu
 
   if (Array.isArray(chart.data) && chart.data.length > 0) {
     const xKey = String(chart.x_key || "categoria");
-    const seriesMeta = Array.isArray(chart.series) ? (chart.series[0] as IADevChartSeriesMeta) : null;
-    const yKey =
+    const seriesMeta = Array.isArray(chart.series)
+      ? (chart.series[0] as IADevChartSeriesMeta)
+      : null;
+    const preferredYKey =
       String(seriesMeta?.value_key || chart.y_key || "valor").trim() || "valor";
+    const yKey = resolveBestYKey(chart.data, xKey, preferredYKey);
     return chart.data.map((item) => ({
       category: String(item?.[xKey] ?? ""),
       value: asNumber(item?.[yKey]),
@@ -67,7 +166,9 @@ const normalizeRows = (chart: IADevChartPayload): Array<{ category: string; valu
   return [];
 };
 
-const normalizeChart = (chart: IADevChartPayload | null): NormalizedChartData | null => {
+const normalizeChart = (
+  chart: IADevChartPayload | null,
+): NormalizedChartData | null => {
   if (!chart) return null;
   const rows = normalizeRows(chart).filter((item) => item.category);
   if (rows.length === 0) return null;
@@ -78,7 +179,11 @@ const normalizeChart = (chart: IADevChartPayload | null): NormalizedChartData | 
   };
 };
 
-const IADevChartPanel = ({ chart, onClose }: IADevChartPanelProps) => {
+const IADevChartPanel = ({
+  chart,
+  onClose,
+  embedded = false,
+}: IADevChartPanelProps) => {
   const normalized = useMemo(() => normalizeChart(chart), [chart]);
   const chartRef = useRef<HTMLDivElement | null>(null);
   const [isRendering, setIsRendering] = useState(false);
@@ -96,7 +201,8 @@ const IADevChartPanel = ({ chart, onClose }: IADevChartPanelProps) => {
 
         const am5 = await import("@amcharts/amcharts5");
         const am5xy = await import("@amcharts/amcharts5/xy");
-        const am5themesAnimated = await import("@amcharts/amcharts5/themes/Animated");
+        const am5themesAnimated =
+          await import("@amcharts/amcharts5/themes/Animated");
 
         if (!mounted || !chartRef.current) return;
 
@@ -214,10 +320,14 @@ const IADevChartPanel = ({ chart, onClose }: IADevChartPanelProps) => {
   if (!chart) return null;
 
   return (
-    <div className="mx-3 mt-3 rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/60">
+    <div
+      className={`rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-gray-900/60 ${
+        embedded ? "" : "mx-3 mt-3"
+      }`}
+    >
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          <p className="flex items-center gap-2 text-xs font-semibold tracking-wide text-gray-500 uppercase dark:text-gray-400">
             <BarChart3 size={13} />
             Visualización
           </p>
@@ -225,14 +335,16 @@ const IADevChartPanel = ({ chart, onClose }: IADevChartPanelProps) => {
             {normalized?.title || chart.title || "Gráfica de resultados"}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-white dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-          title="Cerrar visualización"
-        >
-          <X size={14} />
-        </button>
+        {!embedded && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-white dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+            title="Cerrar visualización"
+          >
+            <X size={14} />
+          </button>
+        )}
       </div>
 
       {renderError ? (

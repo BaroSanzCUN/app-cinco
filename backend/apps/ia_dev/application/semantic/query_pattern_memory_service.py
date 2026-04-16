@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from typing import Any
 
 from apps.ia_dev.application.context.run_context import RunContext
@@ -41,62 +42,107 @@ class QueryPatternMemoryService:
             return {"enabled": True, "saved": False, "reason": "missing_user_key"}
         if not validation.satisfied:
             return {"enabled": True, "saved": False, "reason": validation.reason}
+        if not self._flag_enabled("IA_DEV_MEMORY_PROPOSALS_ENABLED", "1"):
+            return {
+                "enabled": True,
+                "saved": False,
+                "reason": "memory_proposals_disabled",
+                "flag": "IA_DEV_MEMORY_PROPOSALS_ENABLED",
+            }
 
         domain_code = str(resolved_query.intent.domain_code or "general").strip().upper()
         template_id = str(resolved_query.intent.template_id or "unknown").strip().lower()
         capability_id = str(execution_plan.capability_id or execution_plan.metadata.get("capability_id") or "").strip()
-        pattern_value = {
-            "domain_code": domain_code,
-            "template_id": template_id,
-            "operation": str(resolved_query.intent.operation or ""),
-            "normalized_filters": dict(resolved_query.normalized_filters or {}),
-            "normalized_period": dict(resolved_query.normalized_period or {}),
-            "strategy": str(execution_plan.strategy or ""),
-            "capability_id": capability_id,
-            "quality": {
-                "satisfied": bool(validation.satisfied),
-                "reason": str(validation.reason or ""),
-                "checks": dict(validation.checks or {}),
-            },
-            "response_signature": self._response_signature(response=response),
-        }
-
-        pattern = QueryPatternMemory(
+        satisfaction_score = self._compute_satisfaction_score(validation=validation)
+        min_score = self._min_score_threshold()
+        if satisfaction_score < min_score:
+            return {
+                "enabled": True,
+                "saved": False,
+                "reason": "satisfaction_score_below_threshold",
+                "score": satisfaction_score,
+                "min_score": min_score,
+            }
+        identifiers = self._extract_identifier_filters(
+            normalized_filters=dict(resolved_query.normalized_filters or {}),
+            execution_constraints=dict(execution_plan.constraints or {}),
+        )
+        pattern_value = self._build_pattern_value(
+            resolved_query=resolved_query,
+            execution_plan=execution_plan,
+            validation=validation,
+            satisfaction_score=satisfaction_score,
+            response=response,
             scope="user",
-            candidate_key=f"query.pattern.{domain_code.lower()}.{template_id}",
-            candidate_value=pattern_value,
-            reason="query_intelligence_success_pattern",
-            sensitivity="low",
-            domain_code=domain_code,
-            capability_id=capability_id or "query.execution",
         )
-        idempotency_key = self._idempotency_key(
-            run_id=run_context.run_id,
-            pattern=pattern,
+        sensitivity = self._infer_sensitivity(
+            normalized_filters=dict(resolved_query.normalized_filters or {}),
+            identifiers=identifiers,
         )
-        result = self.memory_writer.create_proposal(
-            user_key=user_key,
-            payload={
-                **pattern.as_dict(),
-                "idempotency_key": idempotency_key,
-                "direct_write": False,
-            },
-            source_run_id=run_context.run_id,
+        user_scope_enabled = self._flag_enabled("IA_DEV_QUERY_PATTERN_MEMORY_USER_ENABLED", "1")
+        business_scope_enabled = self._flag_enabled(
+            "IA_DEV_QUERY_PATTERN_MEMORY_BUSINESS_ENABLED",
+            "0",
         )
+        business_scope_allowed = bool(business_scope_enabled and not identifiers)
+
+        if not user_scope_enabled and not business_scope_allowed:
+            return {
+                "enabled": True,
+                "saved": False,
+                "reason": "query_pattern_memory_scope_disabled",
+                "user_scope_enabled": user_scope_enabled,
+                "business_scope_allowed": business_scope_allowed,
+            }
+
+        result = None
+        if user_scope_enabled:
+            pattern = QueryPatternMemory(
+                scope="user",
+                candidate_key=f"query.pattern.{domain_code.lower()}.{template_id}",
+                candidate_value=pattern_value,
+                reason="query_intelligence_success_pattern",
+                sensitivity=sensitivity,
+                domain_code=domain_code,
+                capability_id=capability_id or "query.execution",
+            )
+            idempotency_key = self._idempotency_key(
+                user_key=user_key,
+                pattern=pattern,
+            )
+            result = self.memory_writer.create_proposal(
+                user_key=user_key,
+                payload={
+                    **pattern.as_dict(),
+                    "idempotency_key": idempotency_key,
+                    "direct_write": False,
+                },
+                source_run_id=run_context.run_id,
+            )
+        else:
+            result = {"ok": False, "error": "user_scope_disabled"}
 
         business_result = None
-        if self._flag_enabled("IA_DEV_QUERY_PATTERN_MEMORY_BUSINESS_ENABLED", "0"):
+        if business_scope_allowed:
+            business_value = self._build_pattern_value(
+                resolved_query=resolved_query,
+                execution_plan=execution_plan,
+                validation=validation,
+                satisfaction_score=satisfaction_score,
+                response=response,
+                scope="business",
+            )
             business_pattern = QueryPatternMemory(
                 scope="business",
                 candidate_key=f"query.pattern.domain.{domain_code.lower()}.{template_id}",
-                candidate_value=pattern_value,
+                candidate_value=business_value,
                 reason="query_intelligence_domain_pattern",
                 sensitivity="medium",
                 domain_code=domain_code,
                 capability_id=capability_id or "query.execution",
             )
             business_idempotency = self._idempotency_key(
-                run_id=run_context.run_id,
+                user_key=user_key,
                 pattern=business_pattern,
             )
             business_result = self.memory_writer.create_proposal(
@@ -108,6 +154,12 @@ class QueryPatternMemoryService:
                 },
                 source_run_id=run_context.run_id,
             )
+        elif business_scope_enabled and identifiers:
+            business_result = {
+                "ok": False,
+                "error": "business_scope_blocked_by_identifiers",
+                "identifiers": sorted(identifiers),
+            }
 
         self._record_event(
             observability=observability,
@@ -121,6 +173,10 @@ class QueryPatternMemoryService:
                 "strategy": execution_plan.strategy,
                 "result_ok": bool(result.get("ok")),
                 "business_result_ok": bool((business_result or {}).get("ok")),
+                "satisfaction_score": satisfaction_score,
+                "min_score": min_score,
+                "user_scope_enabled": user_scope_enabled,
+                "business_scope_allowed": business_scope_allowed,
             },
         )
         return {
@@ -128,13 +184,15 @@ class QueryPatternMemoryService:
             "saved": bool(result.get("ok")),
             "result": result,
             "business_result": business_result,
+            "score": satisfaction_score,
+            "min_score": min_score,
         }
 
     @staticmethod
-    def _idempotency_key(*, run_id: str, pattern: QueryPatternMemory) -> str:
+    def _idempotency_key(*, user_key: str, pattern: QueryPatternMemory) -> str:
         raw = json.dumps(
             {
-                "run_id": run_id,
+                "user_key": user_key,
                 "candidate_key": pattern.candidate_key,
                 "candidate_value": pattern.candidate_value,
                 "scope": pattern.scope,
@@ -144,6 +202,134 @@ class QueryPatternMemoryService:
         )
         digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
         return f"qipattern-{digest}"
+
+    @staticmethod
+    def _min_score_threshold() -> float:
+        raw = str(os.getenv("IA_DEV_QUERY_PATTERN_MEMORY_MIN_SCORE", "0.75") or "0.75").strip()
+        try:
+            value = float(raw)
+        except ValueError:
+            value = 0.75
+        return max(0.0, min(value, 1.0))
+
+    @staticmethod
+    def _compute_satisfaction_score(*, validation: SatisfactionValidation) -> float:
+        if not bool(validation.satisfied):
+            return 0.0
+        checks = dict(validation.checks or {})
+        score = 1.0
+        if checks.get("expected_period") and checks.get("resolved_period_from_response") in {None, ""}:
+            score -= 0.15
+        if checks.get("expected_cedula") and not list(checks.get("row_cedulas") or []):
+            score -= 0.2
+        if checks.get("expected_group_by") and not str(checks.get("matched_group_dimension") or "").strip():
+            score -= 0.2
+        if checks.get("chart_requested") and not bool(checks.get("has_chart_payload")):
+            score = min(score, 0.1)
+        return max(0.0, min(score, 1.0))
+
+    @staticmethod
+    def _extract_identifier_filters(
+        *,
+        normalized_filters: dict[str, Any],
+        execution_constraints: dict[str, Any],
+    ) -> set[str]:
+        values: set[str] = set()
+        sources = [
+            dict(normalized_filters or {}),
+            dict((execution_constraints or {}).get("filters") or {}),
+        ]
+        for payload in sources:
+            for key, value in payload.items():
+                normalized_key = str(key or "").strip().lower()
+                text = str(value or "").strip()
+                if normalized_key in {"cedula", "identificacion", "documento", "id_empleado"} and text:
+                    values.add(re.sub(r"\D", "", text))
+        values.discard("")
+        return values
+
+    @staticmethod
+    def _infer_sensitivity(*, normalized_filters: dict[str, Any], identifiers: set[str]) -> str:
+        if identifiers:
+            return "medium"
+        filter_keys = {str(key or "").strip().lower() for key in dict(normalized_filters or {}).keys()}
+        if filter_keys.intersection({"cedula", "documento", "identificacion", "id_empleado", "nombre"}):
+            return "medium"
+        return "low"
+
+    def _build_pattern_value(
+        self,
+        *,
+        resolved_query: ResolvedQuerySpec,
+        execution_plan: QueryExecutionPlan,
+        validation: SatisfactionValidation,
+        satisfaction_score: float,
+        response: dict[str, Any],
+        scope: str,
+    ) -> dict[str, Any]:
+        filters = dict(resolved_query.normalized_filters or {})
+        constraints = dict(execution_plan.constraints or {})
+        scope_value = str(scope or "").strip().lower()
+        if scope_value == "business":
+            filters = self._sanitize_filters_for_business(filters=filters)
+            constraints = self._sanitize_constraints_for_business(constraints=constraints)
+
+        resolved_semantic = dict((resolved_query.semantic_context or {}).get("resolved_semantic") or {})
+        semantic_signature = {
+            "synonyms": list(resolved_semantic.get("synonyms") or [])[:10],
+            "columns": list(resolved_semantic.get("columns") or [])[:20],
+            "relations": list(resolved_semantic.get("relations") or [])[:10],
+        }
+        checks = dict(validation.checks or {})
+        checks_excerpt = {
+            "expected_period": checks.get("expected_period"),
+            "expected_group_by": checks.get("expected_group_by"),
+            "expected_cedula": checks.get("expected_cedula"),
+            "matched_group_dimension": checks.get("matched_group_dimension"),
+        }
+
+        return {
+            "domain_code": str(resolved_query.intent.domain_code or "").strip().upper(),
+            "template_id": str(resolved_query.intent.template_id or "").strip().lower(),
+            "operation": str(resolved_query.intent.operation or "").strip().lower(),
+            "entity_type": str(resolved_query.intent.entity_type or "").strip().lower(),
+            "semantic_pattern": {
+                "filters": filters,
+                "group_by": list(resolved_query.intent.group_by or []),
+                "metrics": list(resolved_query.intent.metrics or []),
+                "period": dict(resolved_query.normalized_period or {}),
+                "semantic_signature": semantic_signature,
+            },
+            "execution_pattern": {
+                "strategy": str(execution_plan.strategy or "").strip().lower(),
+                "capability_id": str(execution_plan.capability_id or "").strip(),
+                "constraints": constraints,
+            },
+            "satisfaction": {
+                "satisfied": bool(validation.satisfied),
+                "reason": str(validation.reason or ""),
+                "score": satisfaction_score,
+                "checks_excerpt": checks_excerpt,
+            },
+            "response_signature": self._response_signature(response=response),
+        }
+
+    @staticmethod
+    def _sanitize_filters_for_business(*, filters: dict[str, Any]) -> dict[str, Any]:
+        redacted: dict[str, Any] = {}
+        for key, value in dict(filters or {}).items():
+            normalized = str(key or "").strip().lower()
+            if normalized in {"cedula", "documento", "identificacion", "id_empleado", "nombre"}:
+                continue
+            redacted[key] = value
+        return redacted
+
+    @staticmethod
+    def _sanitize_constraints_for_business(*, constraints: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(constraints or {})
+        filters = dict(payload.get("filters") or {})
+        payload["filters"] = QueryPatternMemoryService._sanitize_filters_for_business(filters=filters)
+        return payload
 
     @staticmethod
     def _response_signature(*, response: dict[str, Any]) -> dict[str, Any]:
