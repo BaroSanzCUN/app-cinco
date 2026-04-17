@@ -8,6 +8,7 @@ import { useSidebar } from "../../context/SidebarContext";
 import React, { useEffect, useRef, useState } from "react";
 import { House } from "lucide-react";
 import { ChevronDownIcon, HorizontaLDots } from "../../icons/index";
+import { IconMessageChatbot } from '@tabler/icons-react';
 
 type NavItem = {
   name: string;
@@ -25,6 +26,11 @@ const defaultNavItems: NavItem[] = [
         path: "/operaciones/gestion-actividades",
       },
     ],
+  },
+  {
+    name: "Agente IA",
+    icon: <IconMessageChatbot className="h-5 w-5" />,
+    path: "/agente-ia",
   },
   {
     name: "PROGRAMACION",
@@ -61,6 +67,7 @@ const AppSidebar: React.FC = () => {
     prefix: string;
     name: string;
     isActive: boolean;
+    icon?: React.ReactNode;
     useHomeIcon: boolean;
     forceActiveText: boolean;
   } | null>(null);
@@ -73,7 +80,11 @@ const AppSidebar: React.FC = () => {
     key: string,
     itemName: string,
     isItemActive: boolean,
-    options?: { useHomeIcon?: boolean; forceActiveText?: boolean },
+    options?: {
+      icon?: React.ReactNode;
+      useHomeIcon?: boolean;
+      forceActiveText?: boolean;
+    },
   ) => {
     if (isSidebarOpen) return;
 
@@ -88,6 +99,7 @@ const AppSidebar: React.FC = () => {
       prefix: itemName.substring(0, 2).toUpperCase(),
       name: itemName,
       isActive: isItemActive,
+      icon: options?.icon,
       useHomeIcon: options?.useHomeIcon ?? false,
       forceActiveText: options?.forceActiveText ?? false,
     });
@@ -128,6 +140,7 @@ const AppSidebar: React.FC = () => {
                     collapsedItemKey,
                     nav.name,
                     isItemActive,
+                    { icon: nav.icon },
                   )
                 }
                 onMouseLeave={() => handleCollapsedItemMouseLeave(collapsedItemKey)}
@@ -157,6 +170,7 @@ const AppSidebar: React.FC = () => {
                       collapsedItemKey,
                       nav.name,
                       isItemActive,
+                      { icon: nav.icon },
                     )
                   }
                   onMouseLeave={() => handleCollapsedItemMouseLeave(collapsedItemKey)}
@@ -373,6 +387,8 @@ const AppSidebar: React.FC = () => {
             >
               {collapsedPreview.useHomeIcon ? (
                 <House className="h-4 w-4" />
+              ) : collapsedPreview.icon ? (
+                collapsedPreview.icon
               ) : (
                 collapsedPreview.prefix
               )}
