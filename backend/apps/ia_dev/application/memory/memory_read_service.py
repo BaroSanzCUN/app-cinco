@@ -15,11 +15,13 @@ class MemoryReadService:
         *,
         domain_code: str | None = None,
         capability_id: str | None = None,
+        memory_key_prefix: str | None = None,
         limit: int = 100,
     ) -> list[dict]:
         return self.repo.get_business_memory(
             domain_code=domain_code,
             capability_id=capability_id,
+            memory_key_prefix=memory_key_prefix,
             limit=limit,
         )
 

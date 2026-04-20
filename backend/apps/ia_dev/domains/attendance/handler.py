@@ -162,6 +162,11 @@ class AttendanceHandler:
                 hints=memory_hints,
                 used=memory_hints_used,
             )
+            attendance_reason_filter = self._resolve_attendance_reason_filter(
+                message=message,
+                constraints=constraints,
+                resolved_query=resolved_query,
+            )
             _push_trace(
                 "period_resolver",
                 "ok",
@@ -172,6 +177,7 @@ class AttendanceHandler:
                     "end": period.end.isoformat(),
                     "personal_status": personal_status,
                     "target_cedula": target_cedula,
+                    "attendance_reason_filter": attendance_reason_filter,
                 },
                 ["q", "route", "rules", "aus"],
             )
@@ -183,11 +189,14 @@ class AttendanceHandler:
             reply = ""
 
             if capability_id == "attendance.unjustified.summary.v1":
+                focus = "all" if attendance_reason_filter else "unjustified"
                 summary = _measure_tool(
                     "attendance_get_summary",
-                    self.tool.get_unjustified_summary,
+                    self.tool.get_attendance_summary,
                     period=period,
                     cedula=target_cedula,
+                    focus=focus,
+                    justificacion_filter=attendance_reason_filter,
                 )
                 used_tools.append("get_attendance_summary")
                 response_output_mode = "summary"
@@ -200,8 +209,12 @@ class AttendanceHandler:
                     f"Periodo: {summary.get('periodo_inicio')} a {summary.get('periodo_fin')}",
                     "Puedes pedir tabla por empleado, supervisor, area o cargo.",
                 ]
+                summary_label = self._describe_attendance_scope(
+                    focus=focus,
+                    attendance_reason_filter=attendance_reason_filter,
+                )
                 reply = (
-                    f"Resumen de ausentismo del periodo {summary.get('periodo_inicio')} al {summary.get('periodo_fin')}: "
+                    f"Resumen de {summary_label} del periodo {summary.get('periodo_inicio')} al {summary.get('periodo_fin')}: "
                     f"total={payload['kpis']['total_ausentismos']}, "
                     f"justificados={payload['kpis']['justificados']}, "
                     f"injustificados={payload['kpis']['injustificados']}."
@@ -221,22 +234,37 @@ class AttendanceHandler:
                             "reason": "join_personal_enabled_from_memory_hint",
                         }
                     )
-                detail = _measure_tool(
-                    "attendance_get_unjustified_with_personal"
-                    if needs_personal_join
-                    else "attendance_get_unjustified_table",
-                    self.tool.get_unjustified_table,
-                    period=period,
-                    include_personal=needs_personal_join,
-                    personal_status=personal_status,
-                    limit=150,
-                    cedula=target_cedula,
-                )
-                used_tools.append(
-                    "get_attendance_unjustified_with_personal"
-                    if needs_personal_join
-                    else "get_attendance_unjustified_table"
-                )
+                if attendance_reason_filter:
+                    needs_personal_join = True
+                    detail = _measure_tool(
+                        "attendance_get_detail_with_personal",
+                        self.tool.service.get_detail_with_personal,
+                        period.start,
+                        period.end,
+                        limit=150,
+                        personal_status=personal_status,
+                        cedula=target_cedula,
+                        justificacion_filter=attendance_reason_filter,
+                        focus="all",
+                    )
+                    used_tools.append("get_attendance_detail_with_personal")
+                else:
+                    detail = _measure_tool(
+                        "attendance_get_unjustified_with_personal"
+                        if needs_personal_join
+                        else "attendance_get_unjustified_table",
+                        self.tool.get_unjustified_table,
+                        period=period,
+                        include_personal=needs_personal_join,
+                        personal_status=personal_status,
+                        limit=150,
+                        cedula=target_cedula,
+                    )
+                    used_tools.append(
+                        "get_attendance_unjustified_with_personal"
+                        if needs_personal_join
+                        else "get_attendance_unjustified_table"
+                    )
                 source_rows = list(detail.get("rows") or [])
                 rows = [
                     {k: v for k, v in row.items() if k != "personal_match"}
@@ -248,13 +276,21 @@ class AttendanceHandler:
                     "rowcount": len(rows),
                 }
                 if not rows:
+                    detail_label = self._describe_attendance_scope(
+                        focus="all" if attendance_reason_filter else "unjustified",
+                        attendance_reason_filter=attendance_reason_filter,
+                    )
                     reply = (
-                        "No se encontraron ausentismos injustificados entre "
+                        f"No se encontraron registros de {detail_label} entre "
                         f"{detail.get('periodo_inicio')} y {detail.get('periodo_fin')}."
                     )
                 else:
+                    detail_label = self._describe_attendance_scope(
+                        focus="all" if attendance_reason_filter else "unjustified",
+                        attendance_reason_filter=attendance_reason_filter,
+                    )
                     reply = (
-                        "Tabla de ausentismos injustificados del periodo "
+                        f"Tabla de {detail_label} del periodo "
                         f"{detail.get('periodo_inicio')} al {detail.get('periodo_fin')} "
                         f"({len(rows)} filas):\n\n{self._format_rows_table(rows)}"
                     )
@@ -275,7 +311,7 @@ class AttendanceHandler:
                     "attendance_get_recurrence_grouped",
                     self.tool.get_recurrence_grouped,
                     period=period,
-                    threshold=2,
+                    threshold=3,
                     personal_status=personal_status,
                     limit=150,
                 )
@@ -312,7 +348,7 @@ class AttendanceHandler:
                     }
                     payload["kpis"] = {
                         "total_reincidentes": int(itemized.get("recurrent_count") or grouped.get("rowcount") or 0),
-                        "umbral_reincidencia": int(itemized.get("threshold") or grouped.get("threshold") or 2),
+                        "umbral_reincidencia": int(itemized.get("threshold") or grouped.get("threshold") or 3),
                         "total_ausentismos_reincidentes": len(rows_for_response),
                     }
                     if not rows_for_response:
@@ -337,7 +373,7 @@ class AttendanceHandler:
                     }
                     payload["kpis"] = {
                         "total_reincidentes": int(grouped.get("rowcount") or len(grouped_rows)),
-                        "umbral_reincidencia": int(grouped.get("threshold") or 2),
+                        "umbral_reincidencia": int(grouped.get("threshold") or 3),
                     }
                     if not grouped_rows:
                         reply = (
@@ -394,10 +430,11 @@ class AttendanceHandler:
                     chart_type=chart_type,
                     cedula=target_cedula,
                     focus=aggregation_focus,
+                    justificacion_filter=attendance_reason_filter,
                 )
                 used_tools.append(
                     "get_attendance_unjustified_with_personal"
-                    if aggregation_focus == "unjustified"
+                    if aggregation_focus == "unjustified" and not attendance_reason_filter
                     else "get_attendance_detail_with_personal"
                 )
                 used_tools.append(f"attendance_analytics_summary_by_{group_by}")
@@ -436,14 +473,22 @@ class AttendanceHandler:
                     )
 
                 if not rows_for_response:
+                    grouped_label = self._describe_attendance_scope(
+                        focus=aggregation_focus,
+                        attendance_reason_filter=attendance_reason_filter,
+                    )
                     reply = (
-                        "No se encontraron ausentismos para agrupar por "
+                        f"No se encontraron {grouped_label} para agrupar por "
                         f"{group_label.lower()} entre {analytics.get('periodo_inicio')} y {analytics.get('periodo_fin')}."
                     )
                 else:
-                    focus_label = "injustificados" if aggregation_focus == "unjustified" else "totales"
+                    focus_label = self._describe_attendance_scope(
+                        focus=aggregation_focus,
+                        attendance_reason_filter=attendance_reason_filter,
+                        plural_compact=True,
+                    )
                     reply = (
-                        f"Resumen de ausentismos {focus_label} por {group_label.lower()} "
+                        f"Resumen de {focus_label} por {group_label.lower()} "
                         f"({analytics.get('periodo_inicio')} a {analytics.get('periodo_fin')}, top {payload['kpis']['top_n']}):\n\n"
                         f"{self._format_rows_table(rows_for_response)}"
                     )
@@ -984,8 +1029,11 @@ class AttendanceHandler:
                 return "cargo", "Cargo"
             if first in {"carpeta", "justificacion", "causa", "motivo"}:
                 return "carpeta" if first == "carpeta" else "justificacion", "Carpeta" if first == "carpeta" else "Justificacion"
-            if first in {"tipo", "estado", "estado_justificacion"}:
+            if first in {"tipo_labor", "tipo labor", "tipo de labor", "labor"}:
+                return "tipo_labor", "Tipo Labor"
+            if first in {"estado", "estado_justificacion", "tipo_ausentismo", "tipo de ausentismo", "tipo de ausencia"}:
                 return "estado_justificacion", "Estado"
+            return first, first.replace("_", " ").strip().title()
 
         if capability_id.endswith("by_supervisor.v1"):
             return "supervisor", "Supervisor"
@@ -1002,6 +1050,12 @@ class AttendanceHandler:
             ("area", "area", "Area"),
             ("por cargo", "cargo", "Cargo"),
             ("cargo", "cargo", "Cargo"),
+            ("por tipo de labor", "tipo_labor", "Tipo Labor"),
+            ("tipo de labor", "tipo_labor", "Tipo Labor"),
+            ("por tipo labor", "tipo_labor", "Tipo Labor"),
+            ("tipo labor", "tipo_labor", "Tipo Labor"),
+            ("por labor", "tipo_labor", "Tipo Labor"),
+            ("labor", "tipo_labor", "Tipo Labor"),
             ("por carpeta", "carpeta", "Carpeta"),
             ("carpeta", "carpeta", "Carpeta"),
             ("por justificacion", "justificacion", "Justificacion"),
@@ -1010,14 +1064,21 @@ class AttendanceHandler:
             ("causa", "justificacion", "Justificacion"),
             ("por motivo", "justificacion", "Justificacion"),
             ("motivo", "justificacion", "Justificacion"),
-            ("por tipo", "estado_justificacion", "Estado"),
-            ("tipo", "estado_justificacion", "Estado"),
+            ("por tipo de ausentismo", "estado_justificacion", "Estado"),
+            ("tipo de ausentismo", "estado_justificacion", "Estado"),
+            ("por tipo de ausencia", "estado_justificacion", "Estado"),
+            ("tipo de ausencia", "estado_justificacion", "Estado"),
             ("por estado", "estado_justificacion", "Estado"),
             ("estado", "estado_justificacion", "Estado"),
         )
         for token, key, label in mappings:
             if token in normalized:
                 return key, label
+        generic_match = re.search(r"\bpor\s+([a-z0-9_]{2,60})\b", normalized)
+        if generic_match:
+            generic = str(generic_match.group(1) or "").strip().lower()
+            if generic:
+                return generic, generic.replace("_", " ").strip().title()
         return "supervisor", "Supervisor"
 
     def _resolve_aggregation_focus(self, *, message: str) -> str:
@@ -1025,6 +1086,54 @@ class AttendanceHandler:
         if "injustific" in normalized or "sin justificar" in normalized:
             return "unjustified"
         return "all"
+
+    @classmethod
+    def _resolve_attendance_reason_filter(
+        cls,
+        *,
+        message: str,
+        constraints: dict[str, Any],
+        resolved_query: ResolvedQuerySpec | None,
+    ) -> str:
+        filters = dict(constraints.get("filters") or {})
+        direct = str(filters.get("justificacion") or "").strip().upper()
+        if direct:
+            return direct
+        if resolved_query is not None:
+            direct = str((resolved_query.normalized_filters or {}).get("justificacion") or "").strip().upper()
+            if direct:
+                return direct
+        normalized = cls._normalize_text(message)
+        reason_signals = {
+            "vacaciones": "VACACIONES",
+            "vacacion": "VACACIONES",
+            "incapacidad": "INCAPACIDAD",
+            "incapacidades": "INCAPACIDAD",
+            "licencia": "LICENCIA",
+            "licencias": "LICENCIA",
+            "permiso": "PERMISO",
+            "permisos": "PERMISO",
+            "calamidad": "CALAMIDAD",
+        }
+        for token, canonical in reason_signals.items():
+            if re.search(rf"\b{re.escape(token)}\b", normalized):
+                return canonical
+        return ""
+
+    @staticmethod
+    def _describe_attendance_scope(
+        *,
+        focus: str,
+        attendance_reason_filter: str | None,
+        plural_compact: bool = False,
+    ) -> str:
+        reason = str(attendance_reason_filter or "").strip().lower()
+        if reason:
+            prefix = "ausentismos por " if plural_compact else "ausentismos por "
+            return f"{prefix}{reason}"
+        if str(focus or "").strip().lower() == "unjustified":
+            return "ausentismos injustificados" if plural_compact else "ausentismos injustificados"
+        return "ausentismos totales" if plural_compact else "ausentismos"
 
     def _extract_top_n(self, message: str, *, hints: dict[str, Any] | None = None, default: int = 10) -> int:
         normalized = self._normalize_text(message)

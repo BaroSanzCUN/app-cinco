@@ -62,6 +62,14 @@ class ChatMemoryRuntimeService:
             capability_id=(capability_id or "").strip() or None,
             limit=30,
         )
+        business_memory = self._merge_memory_entries(
+            base_entries=business_memory,
+            extra_entries=self._load_business_query_patterns(
+                domain_code=(domain_code or "").strip().upper() or None,
+                capability_id=(capability_id or "").strip() or None,
+            ),
+            limit=45,
+        )
         used = bool(user_memory or business_memory)
 
         if used and observability is not None and hasattr(observability, "record_event"):
@@ -91,6 +99,55 @@ class ChatMemoryRuntimeService:
             "business_memory": business_memory,
             "used": used,
         }
+
+    def _load_business_query_patterns(
+        self,
+        *,
+        domain_code: str | None,
+        capability_id: str | None,
+    ) -> list[dict[str, Any]]:
+        scoped = self.router.reader.get_business_hints(
+            domain_code=domain_code,
+            capability_id=capability_id,
+            memory_key_prefix="query.pattern.domain.",
+            limit=20,
+        )
+        normalized_domain = str(domain_code or "").strip().upper()
+        if normalized_domain and normalized_domain not in {"GENERAL", "LEGACY"}:
+            return list(scoped or [])
+        global_patterns = self.router.reader.get_business_hints(
+            domain_code=None,
+            capability_id=None,
+            memory_key_prefix="query.pattern.domain.",
+            limit=20,
+        )
+        return self._merge_memory_entries(base_entries=scoped, extra_entries=global_patterns, limit=20)
+
+    @staticmethod
+    def _merge_memory_entries(
+        *,
+        base_entries: list[dict[str, Any]] | None,
+        extra_entries: list[dict[str, Any]] | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        for row in list(base_entries or []) + list(extra_entries or []):
+            if not isinstance(row, dict):
+                continue
+            fingerprint = (
+                str(row.get("domain_code") or "").strip().upper(),
+                str(row.get("capability_id") or "").strip(),
+                str(row.get("memory_key") or "").strip().lower(),
+                str(row.get("id") or "").strip(),
+            )
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            merged.append(dict(row))
+            if len(merged) >= max(1, int(limit)):
+                break
+        return merged
 
     def detect_candidates(
         self,

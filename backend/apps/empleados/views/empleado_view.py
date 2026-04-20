@@ -183,13 +183,13 @@ class EmpleadoViewSet(ModelViewSet):
 
         **Eliminación física (caso específico):**
         - Enviar `?hard_delete=true`
-        - Requiere usuario administrador (`is_superuser`)
+        - Requiere una cuenta administradora (`is_superuser`)
         """,
         tags=["empleados"],
         parameters=[
             OpenApiParameter(
                 name='hard_delete',
-                description='Si es true y el usuario es superusuario, elimina físicamente el registro',
+                description='Si es true y la cuenta es superusuaria, elimina físicamente el registro',
                 required=False,
                 type=OpenApiTypes.BOOL
             ),

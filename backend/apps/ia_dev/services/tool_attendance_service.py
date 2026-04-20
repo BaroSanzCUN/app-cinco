@@ -1,5 +1,6 @@
 ﻿import os
 import re
+import unicodedata
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +15,14 @@ _SAFE_COLUMN_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 class AttendanceToolService:
+    _ATTENDANCE_REASON_PATTERNS = {
+        "VACACIONES": ("VACACION", "VACACIONES", "VACACIÓN", "VACACIONES"),
+        "INCAPACIDAD": ("INCAPACIDAD", "INCAPACIDADES", "INCAP"),
+        "LICENCIA": ("LICENCIA", "LICENCIAS"),
+        "PERMISO": ("PERMISO", "PERMISOS"),
+        "CALAMIDAD": ("CALAMIDAD",),
+    }
+
     def __init__(self):
         self.table = os.getenv("IA_DEV_ATTENDANCE_TABLE", "cincosas_cincosas.gestionh_ausentismo")
         self.db_alias = os.getenv("IA_DEV_DB_ALIAS", "default")
@@ -39,7 +48,7 @@ class AttendanceToolService:
         )
         self.personal_table = self._resolve_table_from_dictionary(
             configured_table=self.personal_table,
-            preferred_domain_code="USUARIOS",
+            preferred_domain_code="EMPLEADOS",
         )
 
     def _safe_table(self) -> str:
@@ -152,6 +161,46 @@ class AttendanceToolService:
         return raw
 
     @staticmethod
+    def _normalize_text(value: Any) -> str:
+        lowered = str(value or "").strip().lower()
+        normalized = unicodedata.normalize("NFKD", lowered)
+        return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+    @classmethod
+    def _resolve_attendance_reason_patterns(cls, value: str | None) -> tuple[str, list[str]]:
+        normalized = cls._normalize_text(value).upper()
+        if not normalized:
+            return "", []
+        for canonical, patterns in cls._ATTENDANCE_REASON_PATTERNS.items():
+            normalized_patterns = [cls._normalize_text(item).upper() for item in patterns]
+            if normalized == canonical or normalized in normalized_patterns:
+                return canonical, list(dict.fromkeys([item for item in patterns if str(item or "").strip()]))
+        return normalized, [normalized]
+
+    @classmethod
+    def _build_reason_clause(cls, *, column_expr: str, reason_filter: str | None) -> tuple[str, list[Any], str]:
+        canonical, patterns = cls._resolve_attendance_reason_patterns(reason_filter)
+        if not patterns:
+            return "", [], ""
+        safe_patterns = [str(item or "").strip().upper() for item in patterns if str(item or "").strip()]
+        if not safe_patterns:
+            return "", [], ""
+        like_clauses = [f"UPPER(TRIM(COALESCE({column_expr}, ''))) LIKE %s" for _ in safe_patterns]
+        params = [f"%{item}%" for item in safe_patterns]
+        return f" AND ({' OR '.join(like_clauses)})", params, canonical
+
+    @staticmethod
+    def _build_focus_clause(*, column_expr: str, focus: str | None) -> str:
+        safe_focus = str(focus or "all").strip().lower()
+        if safe_focus != "unjustified":
+            return ""
+        return (
+            f" AND ({column_expr} IS NULL"
+            f" OR TRIM({column_expr}) = ''"
+            f" OR UPPER(TRIM({column_expr})) = 'SIN JUSTIFICAR')"
+        )
+
+    @staticmethod
     def _split_table_name(qualified_table: str) -> tuple[str | None, str]:
         if "." not in qualified_table:
             return None, qualified_table
@@ -200,6 +249,47 @@ class AttendanceToolService:
         with connections[self.db_alias].cursor() as cursor:
             cursor.execute(query, params)
             return {str(row[0]) for row in cursor.fetchall() if row and row[0]}
+
+    def _get_attendance_columns(self) -> set[str]:
+        table = self._safe_table()
+        schema, table_name = self._split_table_name(table)
+        if not _SAFE_COLUMN_RE.match(table_name):
+            return set()
+
+        if schema and not _SAFE_COLUMN_RE.match(schema):
+            return set()
+
+        if schema:
+            query = """
+                SELECT COLUMN_NAME
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND table_name = %s
+            """
+            params = [schema, table_name]
+        else:
+            query = """
+                SELECT COLUMN_NAME
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = %s
+            """
+            params = [table_name]
+
+        with connections[self.db_alias].cursor() as cursor:
+            cursor.execute(query, params)
+            return {str(row[0]) for row in cursor.fetchall() if row and row[0]}
+
+    @staticmethod
+    def _resolve_justified_detail_extra_columns(*, canonical_reason: str | None, focus: str | None) -> list[str]:
+        if not str(canonical_reason or "").strip():
+            return []
+        if str(focus or "all").strip().lower() == "unjustified":
+            return []
+        columns = ["ini_incapa", "fin_incapa"]
+        if str(canonical_reason or "").strip().upper() == "INCAPACIDAD":
+            columns.extend(["causa_aus", "ini_inca", "tipo_inca", "codigo_inca", "desc_inca"])
+        return columns
 
     @staticmethod
     def _resolve_status_column(columns: set[str]) -> str | None:
@@ -410,6 +500,78 @@ class AttendanceToolService:
             "injustificados": int(row[4] or 0),
         }
 
+    def get_attendance_summary(
+        self,
+        start_date: date,
+        end_date: date,
+        *,
+        cedula: str | None = None,
+        focus: str = "all",
+        justificacion_filter: str | None = None,
+    ) -> dict:
+        table = self._safe_table()
+        normalized_cedula = self._normalize_id_value(cedula)
+        cedula_clause = ""
+        params: list[Any] = [start_date, end_date, start_date, end_date]
+        if normalized_cedula:
+            cedula_clause = f" AND {self._normalized_id_sql('g.cedula')} = %s"
+            params.append(normalized_cedula)
+        reason_clause, reason_params, canonical_reason = self._build_reason_clause(
+            column_expr="g.justificacion",
+            reason_filter=justificacion_filter,
+        )
+        focus_clause = self._build_focus_clause(column_expr="g.justificacion", focus=focus)
+        sql = f"""
+            SELECT
+                %s AS periodo_inicio,
+                %s AS periodo_fin,
+                COUNT(*) AS total_ausentismos,
+                COALESCE(SUM(
+                    CASE
+                        WHEN g.justificacion IS NOT NULL
+                         AND TRIM(g.justificacion) <> ''
+                         AND UPPER(TRIM(g.justificacion)) <> 'SIN JUSTIFICAR'
+                        THEN 1 ELSE 0
+                    END
+                ), 0) AS justificados,
+                COALESCE(SUM(
+                    CASE
+                        WHEN g.justificacion IS NULL
+                          OR TRIM(g.justificacion) = ''
+                          OR UPPER(TRIM(g.justificacion)) = 'SIN JUSTIFICAR'
+                        THEN 1 ELSE 0
+                    END
+                ), 0) AS injustificados
+            FROM {table} AS g
+            WHERE DATE(g.fecha_edit) BETWEEN %s AND %s
+              AND UPPER(TRIM(COALESCE(g.ausentismo, ''))) = 'SI'
+              {cedula_clause}
+              {reason_clause}
+              {focus_clause}
+        """
+        with connections[self.db_alias].cursor() as cursor:
+            cursor.execute(sql, [*params, *reason_params])
+            row = cursor.fetchone()
+
+        if not row:
+            return {
+                "periodo_inicio": start_date.isoformat(),
+                "periodo_fin": end_date.isoformat(),
+                "total_ausentismos": 0,
+                "justificados": 0,
+                "injustificados": 0,
+                "justificacion_filter": canonical_reason,
+            }
+
+        return {
+            "periodo_inicio": str(row[0]),
+            "periodo_fin": str(row[1]),
+            "total_ausentismos": int(row[2] or 0),
+            "justificados": int(row[3] or 0),
+            "injustificados": int(row[4] or 0),
+            "justificacion_filter": canonical_reason,
+        }
+
     def get_unjustified_table(
         self,
         start_date: date,
@@ -446,11 +608,27 @@ class AttendanceToolService:
         *,
         personal_status: str = "all",
         cedula: str | None = None,
+        extra_personal_columns: list[str] | None = None,
     ) -> dict:
         base_rows = self._attendance_base_unjustified(start_date, end_date, limit, cedula=cedula)
         cedulas = [str(row[0] or "") for row in base_rows]
+        personal_columns = [
+            "cedula",
+            "nombre",
+            "apellido",
+            "supervisor",
+            "area",
+            "cargo",
+            "carpeta",
+            *[
+                str(item or "").strip().lower()
+                for item in list(extra_personal_columns or [])
+                if str(item or "").strip()
+            ],
+        ]
+        personal_columns = list(dict.fromkeys(personal_columns))
         employer_catalog = self.get_data_employers(
-            ["cedula", "nombre", "apellido", "supervisor", "area", "cargo", "carpeta"],
+            personal_columns,
             cedulas,
             status=personal_status,
         )
@@ -506,6 +684,10 @@ class AttendanceToolService:
                     "estado_justificacion": "INJUSTIFICADO",
                 }
             )
+            for extra_key in personal_columns:
+                if extra_key in {"cedula", "nombre", "apellido", "supervisor", "area", "cargo", "carpeta"}:
+                    continue
+                rows[-1][extra_key] = str((emp or {}).get(extra_key) or "")
 
         matched = sum(1 for row in rows if row.get("personal_match"))
         unmatched = max(0, len(rows) - matched)
@@ -536,6 +718,9 @@ class AttendanceToolService:
         limit: int = 150,
         personal_status: str = "all",
         cedula: str | None = None,
+        extra_personal_columns: list[str] | None = None,
+        justificacion_filter: str | None = None,
+        focus: str = "all",
     ) -> dict:
         table = self._safe_table()
         safe_limit = max(1, min(int(limit), 500))
@@ -545,6 +730,24 @@ class AttendanceToolService:
         if normalized_cedula:
             cedula_clause = f" AND {self._normalized_id_sql('g.cedula')} = %s"
             params.append(normalized_cedula)
+        reason_clause, reason_params, canonical_reason = self._build_reason_clause(
+            column_expr="g.justificacion",
+            reason_filter=justificacion_filter,
+        )
+        focus_clause = self._build_focus_clause(column_expr="g.justificacion", focus=focus)
+        attendance_columns = self._get_attendance_columns()
+        justified_extra_columns = [
+            column
+            for column in self._resolve_justified_detail_extra_columns(
+                canonical_reason=canonical_reason,
+                focus=focus,
+            )
+            if column in attendance_columns and _SAFE_COLUMN_RE.match(column)
+        ]
+        justified_extra_select = "".join(
+            f", COALESCE(CAST(g.{column} AS CHAR), '') AS {column}"
+            for column in justified_extra_columns
+        )
 
         query = f"""
             SELECT
@@ -552,13 +755,17 @@ class AttendanceToolService:
                 DATE(g.fecha_edit) AS fecha_ausentismo,
                 UPPER(TRIM(COALESCE(g.ausentismo, ''))) AS ausentismo,
                 COALESCE(g.justificacion, '') AS justificacion
+                {justified_extra_select}
             FROM {table} AS g
             WHERE DATE(g.fecha_edit) BETWEEN %s AND %s
             {cedula_clause}
               AND UPPER(TRIM(COALESCE(g.ausentismo, ''))) = 'SI'
+              {reason_clause}
+              {focus_clause}
             ORDER BY DATE(g.fecha_edit) DESC, g.cedula
             LIMIT %s
         """
+        params.extend(reason_params)
         params.append(safe_limit)
 
         with connections[self.db_alias].cursor() as cursor:
@@ -566,8 +773,23 @@ class AttendanceToolService:
             base_rows = cursor.fetchall()
 
         cedulas = [str(row[0] or "") for row in base_rows]
+        personal_columns = [
+            "cedula",
+            "nombre",
+            "apellido",
+            "supervisor",
+            "area",
+            "cargo",
+            "carpeta",
+            *[
+                str(item or "").strip().lower()
+                for item in list(extra_personal_columns or [])
+                if str(item or "").strip()
+            ],
+        ]
+        personal_columns = list(dict.fromkeys(personal_columns))
         employer_catalog = self.get_data_employers(
-            ["cedula", "nombre", "apellido", "supervisor", "area", "cargo", "carpeta"],
+            personal_columns,
             cedulas,
             status=personal_status,
         )
@@ -586,8 +808,19 @@ class AttendanceToolService:
         supervisors = supervisor_catalog["by_cedula"]
 
         rows: list[dict] = []
-        for cedula, fecha_ausentismo, ausentismo, justificacion in base_rows:
-            cedula_raw = str(cedula or "")
+        select_columns = [
+            "cedula",
+            "fecha_ausentismo",
+            "ausentismo",
+            "justificacion",
+            *justified_extra_columns,
+        ]
+        for raw_row in base_rows:
+            row_data = {
+                column_name: raw_row[idx] if idx < len(raw_row) else ""
+                for idx, column_name in enumerate(select_columns)
+            }
+            cedula_raw = str(row_data.get("cedula") or "")
             cedula_norm = self._normalize_id_value(cedula_raw)
             emp = by_cedula.get(cedula_norm)
 
@@ -605,7 +838,7 @@ class AttendanceToolService:
             supervisor = supervisor_nombre or supervisor_cedula_raw or "N/D"
 
             estado_justificacion = "INJUSTIFICADO"
-            if str(justificacion or "").strip() and str(justificacion or "").strip().upper() != "SIN JUSTIFICAR":
+            if str(row_data.get("justificacion") or "").strip() and str(row_data.get("justificacion") or "").strip().upper() != "SIN JUSTIFICAR":
                 estado_justificacion = "JUSTIFICADO"
 
             rows.append(
@@ -614,9 +847,9 @@ class AttendanceToolService:
                     "nombre": nombre,
                     "apellido": apellido,
                     "nombre_completo": nombre_completo,
-                    "fecha_ausentismo": str(fecha_ausentismo),
-                    "ausentismo": str(ausentismo or ""),
-                    "justificacion": str(justificacion or ""),
+                    "fecha_ausentismo": str(row_data.get("fecha_ausentismo") or ""),
+                    "ausentismo": str(row_data.get("ausentismo") or ""),
+                    "justificacion": str(row_data.get("justificacion") or ""),
                     "estado_justificacion": estado_justificacion,
                     "supervisor_cedula": supervisor_cedula_raw,
                     "supervisor": supervisor,
@@ -625,6 +858,12 @@ class AttendanceToolService:
                     "carpeta": str((emp or {}).get("carpeta") or ""),
                 }
             )
+            for attendance_key in justified_extra_columns:
+                rows[-1][attendance_key] = str(row_data.get(attendance_key) or "")
+            for extra_key in personal_columns:
+                if extra_key in {"cedula", "nombre", "apellido", "supervisor", "area", "cargo", "carpeta"}:
+                    continue
+                rows[-1][extra_key] = str((emp or {}).get(extra_key) or "")
 
         return {
             "periodo_inicio": start_date.isoformat(),
@@ -639,6 +878,7 @@ class AttendanceToolService:
             "attendance_table": self.table,
             "attendance_table_source": self.table_source,
             "truncated": len(rows) == safe_limit,
+            "justificacion_filter": canonical_reason,
         }
 
     def get_recurrent_unjustified_with_supervisor(
@@ -646,7 +886,7 @@ class AttendanceToolService:
         start_date: date,
         end_date: date,
         *,
-        threshold: int = 2,
+        threshold: int = 3,
         limit: int = 150,
         personal_status: str = "all",
     ) -> dict:

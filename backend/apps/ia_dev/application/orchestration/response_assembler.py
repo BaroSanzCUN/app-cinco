@@ -36,6 +36,7 @@ class LegacyResponseAssembler:
         response["actions"] = existing_actions
         response["memory_candidates"] = list(effects.get("memory_candidates") or [])
         response["pending_proposals"] = list(effects.get("pending_proposals") or [])
+        self._inject_frontend_presentation(response=response)
         self._inject_query_intelligence_semantic_diagnostics(
             response=response,
             run_context=run_context,
@@ -228,6 +229,202 @@ class LegacyResponseAssembler:
         qi_source["semantic_diagnostics"] = semantic_diagnostics
         data_sources["query_intelligence"] = qi_source
         response["data_sources"] = data_sources
+
+    def _inject_frontend_presentation(self, *, response: dict[str, Any]) -> None:
+        data = dict(response.get("data") or {})
+        table = dict(data.get("table") or {})
+        rows = [
+            dict(row)
+            for row in list(table.get("rows") or [])
+            if isinstance(row, dict)
+        ]
+        kpis = dict(data.get("kpis") or {})
+        labels = [str(item or "").strip() for item in list(data.get("labels") or []) if str(item or "").strip()]
+        numeric_series = self._coerce_numeric_series(data.get("series"))
+        meta = dict(data.get("meta") or {})
+        presentation = dict(meta.get("presentation") or {})
+
+        presentation.setdefault(
+            "primary",
+            self._infer_primary_render(
+                kpis=kpis,
+                rows=rows,
+                labels=labels,
+                numeric_series=numeric_series,
+            ),
+        )
+        presentation.setdefault("has_kpis", bool(kpis))
+        presentation.setdefault("has_table", bool(rows))
+        presentation.setdefault("has_chart_inputs", bool(labels and numeric_series))
+
+        if not data.get("chart"):
+            inferred_chart = self._build_chart_payload(
+                response=response,
+                table_rows=rows,
+                table_columns=list(table.get("columns") or []),
+                labels=labels,
+                numeric_series=numeric_series,
+            )
+            if inferred_chart:
+                data["chart"] = inferred_chart
+
+        existing_charts = [item for item in list(data.get("charts") or []) if isinstance(item, dict)]
+        if data.get("chart") and not existing_charts:
+            data["charts"] = [dict(data.get("chart") or {})]
+
+        meta["presentation"] = presentation
+        data["meta"] = meta
+        response["data"] = data
+
+    @staticmethod
+    def _coerce_numeric_series(series_value: Any) -> list[float]:
+        items = list(series_value or []) if isinstance(series_value, list) else []
+        if not items:
+            return []
+        numeric: list[float] = []
+        for item in items:
+            if isinstance(item, (int, float)):
+                numeric.append(float(item))
+                continue
+            if isinstance(item, str):
+                try:
+                    numeric.append(float(item))
+                except Exception:
+                    return []
+                continue
+            if isinstance(item, dict):
+                nested = item.get("data")
+                if isinstance(nested, list):
+                    nested_numeric: list[float] = []
+                    for nested_item in nested:
+                        try:
+                            nested_numeric.append(float(nested_item))
+                        except Exception:
+                            return []
+                    return nested_numeric
+                return []
+            return []
+        return numeric
+
+    @staticmethod
+    def _infer_primary_render(
+        *,
+        kpis: dict[str, Any],
+        rows: list[dict[str, Any]],
+        labels: list[str],
+        numeric_series: list[float],
+    ) -> str:
+        if labels and numeric_series:
+            return "chart"
+        if rows:
+            return "table"
+        if kpis:
+            return "kpi_cards"
+        return "text"
+
+    def _build_chart_payload(
+        self,
+        *,
+        response: dict[str, Any],
+        table_rows: list[dict[str, Any]],
+        table_columns: list[Any],
+        labels: list[str],
+        numeric_series: list[float],
+    ) -> dict[str, Any] | None:
+        title = self._resolve_chart_title(response=response)
+        if labels and numeric_series and len(labels) == len(numeric_series):
+            return {
+                "engine": "amcharts5",
+                "chart_library": "amcharts5",
+                "type": "line" if self._looks_like_timeseries(labels) else "bar",
+                "title": title,
+                "labels": labels,
+                "series": numeric_series,
+                "meta": {
+                    "source": "response_assembler",
+                    "inferred_from": "labels_series",
+                },
+            }
+
+        if not table_rows:
+            return None
+
+        sample = dict(table_rows[0])
+        candidate_columns = [str(item or "").strip() for item in table_columns if str(item or "").strip()] or list(sample.keys())
+        category_key = ""
+        for key in candidate_columns:
+            if isinstance(sample.get(key), str):
+                category_key = key
+                break
+        if not category_key and candidate_columns:
+            category_key = candidate_columns[0]
+        if not category_key:
+            return None
+
+        metric_keys = [
+            key
+            for key in candidate_columns
+            if key != category_key and self._is_numeric_value(sample.get(key))
+        ]
+        if not metric_keys:
+            return None
+
+        return {
+            "engine": "amcharts5",
+            "chart_library": "amcharts5",
+            "type": "bar",
+            "title": title,
+            "x_key": category_key,
+            "series": [
+                {
+                    "name": str(key).replace("_", " ").strip().title(),
+                    "value_key": key,
+                }
+                for key in metric_keys
+            ],
+            "data": table_rows[:50],
+            "meta": {
+                "source": "response_assembler",
+                "inferred_from": "table",
+                "recommended_limit": 50,
+            },
+        }
+
+    @staticmethod
+    def _is_numeric_value(value: Any) -> bool:
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            return True
+        if isinstance(value, str):
+            try:
+                float(value)
+                return True
+            except Exception:
+                return False
+        return False
+
+    @staticmethod
+    def _looks_like_timeseries(labels: list[str]) -> bool:
+        if len(labels) < 3:
+            return False
+        matches = 0
+        for label in labels:
+            value = str(label or "").strip()
+            if len(value) >= 7 and value[:4].isdigit() and value[4] == "-" and value[5:7].isdigit():
+                matches += 1
+        return (matches / max(len(labels), 1)) >= 0.6
+
+    @staticmethod
+    def _resolve_chart_title(*, response: dict[str, Any]) -> str:
+        reply = str(response.get("reply") or "").strip()
+        if reply:
+            return reply[:96]
+        data = dict(response.get("data") or {})
+        insights = [str(item or "").strip() for item in list(data.get("insights") or []) if str(item or "").strip()]
+        if insights:
+            return insights[0][:96]
+        return "Resultado analitico"
 
     def _build_semantic_diagnostics_payload(
         self,

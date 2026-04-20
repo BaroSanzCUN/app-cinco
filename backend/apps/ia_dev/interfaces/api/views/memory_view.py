@@ -192,7 +192,7 @@ class IADevUserMemoryView(APIView):
         query_user_key = str(request.query_params.get("user_key", "")).strip() or None
         if query_user_key and query_user_key != requester_user_key and not _is_admin_like(request):
             return Response(
-                {"ok": False, "error": "No autorizado para consultar memoria de otro usuario"},
+                {"ok": False, "error": "No autorizado para consultar memoria de otra cuenta"},
                 status=status.HTTP_403_FORBIDDEN,
             )
         user_key = query_user_key or requester_user_key
@@ -208,7 +208,7 @@ class IADevUserMemoryView(APIView):
         body_user_key = str(request.data.get("user_key", "")).strip() or None
         if body_user_key and body_user_key != requester_user_key and not _is_admin_like(request):
             return Response(
-                {"ok": False, "error": "No autorizado para escribir memoria de otro usuario"},
+                {"ok": False, "error": "No autorizado para escribir memoria de otra cuenta"},
                 status=status.HTTP_403_FORBIDDEN,
             )
         user_key = body_user_key or requester_user_key
@@ -258,7 +258,7 @@ class IADevMemoryAuditView(APIView):
                 )
             if entity_key and not entity_key.startswith(f"{user_key}:"):
                 return Response(
-                    {"ok": False, "error": "No autorizado para consultar auditoria de otro usuario"},
+                    {"ok": False, "error": "No autorizado para consultar auditoria de otra cuenta"},
                     status=status.HTTP_403_FORBIDDEN,
                 )
             memory_scope = "user"

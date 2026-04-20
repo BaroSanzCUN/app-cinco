@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unicodedata
 from typing import Any
 
@@ -24,6 +25,7 @@ class IntentToCapabilityBridge:
         "totales",
         "total de",
         "cantidad",
+        "numero",
         "cuantos",
         "cuantas",
     )
@@ -54,16 +56,24 @@ class IntentToCapabilityBridge:
     _EMPLOYEES_TOKENS = (
         "empleado",
         "empleados",
+        "personal",
+        "colaborador",
+        "colaboradores",
         "cedula",
         "cedulas",
         "rrhh",
         "recurso humano",
         "recursos humanos",
+        "movil",
     )
     _ACTIVE_STATUS_TOKENS = (
         "activo",
         "activos",
         "empleados activos",
+        "habilitado",
+        "habilitados",
+        "vigente",
+        "vigentes",
     )
     _TREND_TOKENS = (
         "tendencia",
@@ -109,6 +119,7 @@ class IntentToCapabilityBridge:
         "por supervisor",
         "supervisor",
         "supervisores",
+        "jefe directo",
         "jefe",
         "jefes",
         "lider",
@@ -126,6 +137,15 @@ class IntentToCapabilityBridge:
     _BY_CARPETA_TOKENS = (
         "por carpeta",
         "carpeta",
+    )
+    _BY_TIPO_LABOR_TOKENS = (
+        "por labor",
+        "labor",
+        "labores",
+        "por tipo labor",
+        "tipo labor",
+        "por tipo de labor",
+        "tipo de labor",
     )
     _BY_JUSTIFICACION_TOKENS = (
         "por justificacion",
@@ -182,6 +202,24 @@ class IntentToCapabilityBridge:
         mentions_attendance = any(
             token in msg for token in ("ausent", "asistenc", "injustific", "justific", "incapacidad", "vacaciones")
         )
+        canonical_alignment = dict(classification.get("canonical_alignment") or {})
+        canonical_safe = bool(canonical_alignment.get("safe"))
+        canonical_capability_hint = str(canonical_alignment.get("capability_hint") or "").strip()
+        canonical_domain_hint = str(canonical_alignment.get("domain_hint") or "").strip().lower()
+        canonical_intent_hint = str(canonical_alignment.get("intent_hint") or "").strip().lower()
+        if canonical_safe and canonical_capability_hint:
+            return {
+                "capability_id": canonical_capability_hint,
+                "reason": "legacy_bridge_aligned_from_canonical_capability",
+                "source_intent": canonical_intent_hint or intent,
+                "source_domain": canonical_domain_hint or domain,
+                "output_mode": output_mode,
+                "needs_database": needs_database,
+            }
+        if canonical_safe and canonical_domain_hint and canonical_domain_hint not in {"general", "legacy"}:
+            domain = canonical_domain_hint
+            if canonical_intent_hint:
+                intent = canonical_intent_hint
 
         capability_id = "legacy.passthrough.v1"
         reason = "fallback_to_legacy"
@@ -208,6 +246,7 @@ class IntentToCapabilityBridge:
             wants_by_area = any(token in msg for token in self._BY_AREA_TOKENS)
             wants_by_cargo = any(token in msg for token in self._BY_CARGO_TOKENS)
             wants_by_carpeta = any(token in msg for token in self._BY_CARPETA_TOKENS)
+            wants_by_tipo_labor = any(token in msg for token in self._BY_TIPO_LABOR_TOKENS)
             wants_by_justificacion = any(token in msg for token in self._BY_JUSTIFICACION_TOKENS)
             wants_by_tipo = any(token in msg for token in self._BY_TIPO_TOKENS)
             wants_group_dimension = any(
@@ -216,6 +255,7 @@ class IntentToCapabilityBridge:
                     wants_by_area,
                     wants_by_cargo,
                     wants_by_carpeta,
+                    wants_by_tipo_labor,
                     wants_by_justificacion,
                     wants_by_tipo,
                 )
@@ -271,13 +311,13 @@ class IntentToCapabilityBridge:
                     else "attendance.trend.daily.v1"
                 )
                 reason = "attendance_trend_detected"
-            elif wants_by_supervisor and wants_analytics:
+            elif wants_by_supervisor and (wants_analytics or wants_summary or output_mode == "summary"):
                 capability_id = "attendance.summary.by_supervisor.v1"
                 reason = "attendance_summary_by_supervisor_detected"
-            elif wants_by_area and wants_analytics:
+            elif wants_by_area and (wants_analytics or wants_summary or output_mode == "summary"):
                 capability_id = "attendance.summary.by_area.v1"
                 reason = "attendance_summary_by_area_detected"
-            elif wants_by_cargo and wants_analytics:
+            elif wants_by_cargo and (wants_analytics or wants_summary or output_mode == "summary"):
                 capability_id = "attendance.summary.by_cargo.v1"
                 reason = "attendance_summary_by_cargo_detected"
             elif wants_group_dimension and (wants_analytics or wants_summary):
@@ -305,12 +345,43 @@ class IntentToCapabilityBridge:
             else:
                 capability_id = "attendance.unjustified.table.v1"
                 reason = "attendance_table_detected"
-        elif domain in {"empleados", "rrhh"} or any(token in msg for token in self._EMPLOYEES_TOKENS):
+        elif (
+            domain in {"empleados", "rrhh"}
+            or any(token in msg for token in self._EMPLOYEES_TOKENS)
+            or re.search(r"\b(?:info|informacion|detalle|datos|ficha)\s+de\s+[a-z0-9_-]{3,40}\b", msg)
+            or re.search(r"^\s*(?:info|informacion|detalle|datos|ficha)\s+[a-z0-9_-]{3,40}\s*$", msg)
+        ):
             wants_count = any(token in msg for token in self._SUMMARY_TOKENS)
             wants_active = any(token in msg for token in self._ACTIVE_STATUS_TOKENS)
-            if wants_count and wants_active:
+            wants_detail = any(token in msg for token in ("detalle", "info", "informacion", "ficha", "datos"))
+            has_identifier_hint = bool(
+                any(token in msg for token in ("cedula", "movil", "codigo sap", "codigo_sap"))
+                or re.search(r"\b\d{6,13}\b", msg)
+                or re.search(r"\b(?:info|informacion|detalle|datos|ficha)\s+de\s+[a-z0-9_-]{3,40}\b", msg)
+                or re.search(r"^\s*(?:info|informacion|detalle|datos|ficha)\s+[a-z0-9_-]{3,40}\s*$", msg)
+            )
+            wants_group_dimension = any(
+                token in msg
+                for token in (
+                    *self._BY_SUPERVISOR_TOKENS,
+                    *self._BY_AREA_TOKENS,
+                    *self._BY_CARGO_TOKENS,
+                    *self._BY_CARPETA_TOKENS,
+                    *self._BY_TIPO_LABOR_TOKENS,
+                )
+            )
+            if wants_active and (wants_count or wants_group_dimension or output_mode == "summary"):
                 capability_id = "empleados.count.active.v1"
-                reason = "empleados_count_active_detected"
+                reason = "empleados_active_summary_detected"
+            elif wants_detail and has_identifier_hint:
+                capability_id = "empleados.detail.v1"
+                reason = "empleados_detail_identifier_detected"
+            elif wants_group_dimension and output_mode == "summary":
+                capability_id = "empleados.count.active.v1"
+                reason = "empleados_grouped_summary_default_active"
+            elif wants_count:
+                capability_id = "empleados.count.active.v1"
+                reason = "empleados_count_default_active"
             else:
                 capability_id = "general.answer.v1"
                 reason = "empleados_query_without_supported_capability"
@@ -385,9 +456,28 @@ class IntentToCapabilityBridge:
         max_candidates: int = 4,
     ) -> list[dict[str, Any]]:
         signals = self._semantic_signals(message)
+        canonical_alignment = dict(classification.get("canonical_alignment") or {})
+        canonical_safe = bool(canonical_alignment.get("safe"))
+        canonical_capability_hint = str(canonical_alignment.get("capability_hint") or "").strip()
         primary = self.resolve(message=message, classification=classification)
         primary["semantic_signals"] = dict(signals)
         candidates: list[dict[str, Any]] = [dict(primary)]
+        if canonical_safe and canonical_capability_hint and canonical_capability_hint != str(primary.get("capability_id") or ""):
+            candidates.insert(
+                0,
+                {
+                    "capability_id": canonical_capability_hint,
+                    "reason": "legacy_bridge_aligned_from_canonical_candidates",
+                    "source_intent": str(classification.get("intent") or ""),
+                    "source_domain": str(classification.get("domain") or "general"),
+                    "output_mode": str(classification.get("output_mode") or "summary"),
+                    "needs_database": bool(classification.get("needs_database")),
+                    "semantic_signals": {
+                        **dict(signals),
+                        "canonical_alignment_applied": True,
+                    },
+                },
+            )
 
         domain = str(classification.get("domain") or "").strip().lower()
         needs_database = bool(classification.get("needs_database"))
@@ -460,8 +550,12 @@ class IntentToCapabilityBridge:
             if signals["wants_top"]:
                 add("attendance.summary.by_supervisor.v1", "semantic_top_supervisor")
 
-        if domain in {"empleados", "rrhh"} or signals["mentions_empleados"]:
-            if signals["wants_count"] and signals["wants_active"]:
+        if domain in {"empleados", "rrhh"} or (
+            signals["mentions_empleados"] and domain in {"general", "rrhh", ""}
+        ):
+            if signals["wants_group_dimension"]:
+                add("empleados.count.active.v1", "semantic_empleados_grouped_default_active")
+            elif signals["wants_count"] or signals["wants_active"]:
                 add("empleados.count.active.v1", "semantic_empleados_count_active")
 
         if domain in {"general", "rrhh"} and needs_database and (
@@ -577,9 +671,21 @@ class IntentToCapabilityBridge:
             add(selected_capability, "semantic_execution_plan_capability")
 
         if domain == "empleados":
-            estado = str(normalized_filters.get("estado") or "").strip().upper()
+            estado = self._resolve_employee_status(normalized_filters)
+            has_identifier = bool(
+                str((normalized_filters or {}).get("cedula") or "").strip()
+                or str((normalized_filters or {}).get("movil") or "").strip()
+                or str((normalized_filters or {}).get("codigo_sap") or "").strip()
+                or str((normalized_filters or {}).get("search") or "").strip()
+            )
             if template_id == "count_entities_by_status" and estado in {"ACTIVO", "INACTIVO"}:
                 add("empleados.count.active.v1", "semantic_empleados_count_by_status")
+            elif template_id == "detail_by_entity_and_period" and has_identifier:
+                add("empleados.detail.v1", "semantic_empleados_detail_by_identifier")
+            elif template_id == "aggregate_by_group_and_period" and group_by and estado in {"ACTIVO", "INACTIVO"}:
+                add("empleados.count.active.v1", "semantic_empleados_grouped_default_active")
+            elif group_by and operation in {"aggregate", "compare", "summary", "count"} and estado in {"ACTIVO", "INACTIVO"}:
+                add("empleados.count.active.v1", "semantic_empleados_grouped_operation")
             elif operation == "count":
                 add("empleados.count.active.v1", "semantic_empleados_count_fallback")
 
@@ -623,3 +729,11 @@ class IntentToCapabilityBridge:
             if len(deduped) >= max(1, int(max_candidates)):
                 break
         return deduped
+
+    @staticmethod
+    def _resolve_employee_status(filters: dict[str, Any]) -> str:
+        for key in ("estado", "estado_empleado"):
+            value = str((filters or {}).get(key) or "").strip().upper()
+            if value in {"ACTIVO", "INACTIVO"}:
+                return value
+        return ""

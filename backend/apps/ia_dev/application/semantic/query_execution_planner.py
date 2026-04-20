@@ -103,6 +103,19 @@ class QueryExecutionPlanner:
                     metadata={"template_id": template_id},
                 )
 
+        # General-domain requests are conversational and should continue to legacy/OpenAI reply
+        # generation instead of triggering context-collection flows intended for DB analytics.
+        if domain_code in {"", "general"}:
+            return QueryExecutionPlan(
+                strategy="fallback",
+                reason="general_domain_conversational_fallback",
+                domain_code=domain_code or "general",
+                capability_id=capability_id,
+                constraints=constraints,
+                policy={"allowed": False, "reason": "fallback_legacy"},
+                metadata={"template_id": template_id},
+            )
+
         missing_context = self._detect_missing_context(resolved_query=resolved_query)
         if missing_context:
             return QueryExecutionPlan(
@@ -283,14 +296,53 @@ class QueryExecutionPlanner:
         if normalized_domain in {"empleados", "rrhh"}:
             filters = dict(resolved_query.normalized_filters or {})
             operation = str(resolved_query.intent.operation or "").strip().lower()
+            group_by = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or []) if str(item).strip()]
             status_value = self._resolve_status_filter(filters=filters)
+            has_employee_identifier = bool(
+                str(filters.get("cedula") or "").strip()
+                or str(filters.get("movil") or "").strip()
+                or str(filters.get("codigo_sap") or "").strip()
+                or str(filters.get("search") or "").strip()
+            )
+            temporal_scope = self._extract_temporal_scope(resolved_query=resolved_query)
+            has_temporal_scope = bool(
+                temporal_scope.get("column_hint")
+                and temporal_scope.get("start_date")
+                and temporal_scope.get("end_date")
+                and not bool(temporal_scope.get("ambiguous"))
+            )
+            if template_id == "detail_by_entity_and_period" and has_employee_identifier:
+                return "empleados.detail.v1"
             if operation == "count" and status_value in {"ACTIVO", "INACTIVO"}:
+                return "empleados.count.active.v1"
+            if group_by and status_value in {"ACTIVO", "INACTIVO"} and operation in {"aggregate", "compare", "summary", "count"}:
                 return "empleados.count.active.v1"
             if template_id == "count_entities_by_status" and status_value in {"ACTIVO", "INACTIVO"}:
                 return "empleados.count.active.v1"
+            if template_id == "aggregate_by_group_and_period" and group_by and status_value in {"ACTIVO", "INACTIVO"}:
+                return "empleados.count.active.v1"
+            if has_temporal_scope and status_value in {"ACTIVO", "INACTIVO"}:
+                return "empleados.count.active.v1"
             return None
         if normalized_domain in {"ausentismo", "attendance"}:
+            filters = dict(resolved_query.normalized_filters or {})
+            raw_query = str(resolved_query.intent.raw_query or "").strip().lower()
             group_by = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or [])]
+            has_attendance_reason = bool(
+                str(filters.get("justificacion") or "").strip()
+                or str(filters.get("motivo_justificacion") or "").strip()
+            )
+            has_people_scope = bool(
+                re.search(r"\b(emplead\w*|colaborador(?:es)?|personal|persona(?:s)?)\b", raw_query)
+            )
+            has_explicit_grouping = bool(
+                re.search(r"\bpor\s+(area|cargo|supervisor|carpeta|labor|tipo de labor|tipo labor|justificacion|motivo|causa)\b", raw_query)
+            )
+            asks_summary_count = bool(
+                re.search(r"\b(cantidad|cuantos|cuantas|total|numero|resumen)\b", raw_query)
+            )
+            if has_attendance_reason and has_people_scope and not group_by and not has_explicit_grouping and not asks_summary_count:
+                return "attendance.unjustified.table_with_personal.v1"
             if template_id == "aggregate_by_group_and_period":
                 if "supervisor" in group_by:
                     return "attendance.summary.by_supervisor.v1"
@@ -298,6 +350,8 @@ class QueryExecutionPlanner:
                     return "attendance.summary.by_area.v1"
                 if "cargo" in group_by:
                     return "attendance.summary.by_cargo.v1"
+                if group_by:
+                    return "attendance.summary.by_attribute.v1"
                 return "attendance.unjustified.summary.v1"
             if template_id == "trend_by_period":
                 label = str((resolved_query.normalized_period or {}).get("label") or "").lower()
@@ -321,7 +375,9 @@ class QueryExecutionPlanner:
         metrics = [str(item).strip().lower() for item in list(resolved_query.intent.metrics or []) if str(item).strip()]
         operation = str(resolved_query.intent.operation or "").strip().lower()
         result_shape = "summary"
-        if operation in {"detail"}:
+        if group_by:
+            result_shape = "table"
+        elif operation in {"detail"}:
             result_shape = "table"
         elif operation in {"aggregate", "trend", "compare"}:
             result_shape = "table"
@@ -329,16 +385,34 @@ class QueryExecutionPlanner:
             result_shape = "kpi"
 
         cedula = str(filters.get("cedula") or "").strip()
+        movil = str(filters.get("movil") or "").strip()
+        codigo_sap = str(filters.get("codigo_sap") or "").strip()
+        search = str(filters.get("search") or "").strip()
+        entity_type = ""
+        entity_id = ""
+        if cedula:
+            entity_type = "cedula"
+            entity_id = cedula
+        elif movil:
+            entity_type = "movil"
+            entity_id = movil
+        elif codigo_sap:
+            entity_type = "codigo_sap"
+            entity_id = codigo_sap
+        elif search:
+            entity_type = "search"
+            entity_id = search
         entity_scope = {
-            "entity_type": "empleado" if cedula else "",
-            "entity_id": cedula,
-            "has_entity_filter": bool(cedula),
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "has_entity_filter": bool(entity_id),
         }
         period_scope = {
             "label": str(period.get("label") or ""),
             "start_date": str(period.get("start_date") or ""),
             "end_date": str(period.get("end_date") or ""),
         }
+        temporal_scope = self._extract_temporal_scope(resolved_query=resolved_query)
         relations_payload = list(
             (dict(resolved_query.semantic_context or {}).get("resolved_semantic") or {}).get("relations") or []
         )
@@ -350,6 +424,7 @@ class QueryExecutionPlanner:
             "entity_scope": entity_scope,
             "filters": filters,
             "period_scope": period_scope,
+            "temporal_scope": temporal_scope,
             "group_by": group_by,
             "metrics": metrics or (["count"] if operation == "count" else []),
             "result_shape": result_shape,
@@ -361,7 +436,7 @@ class QueryExecutionPlanner:
 
     @staticmethod
     def _resolve_status_filter(*, filters: dict[str, Any]) -> str:
-        for key in ("estado", "estado_usuario", "estado_empleado"):
+        for key in ("estado", "estado_empleado"):
             status = str((filters or {}).get(key) or "").strip().upper()
             if status in {"ACTIVO", "INACTIVO"}:
                 return status
@@ -590,12 +665,31 @@ class QueryExecutionPlanner:
         if not list((resolved_query.semantic_context or {}).get("tables") or []):
             missing.append("tablas_registradas_del_dominio")
         if str(resolved_query.intent.template_id or "").strip().lower() == "detail_by_entity_and_period":
-            if not str((resolved_query.normalized_filters or {}).get("cedula") or "").strip():
-                missing.append("cedula_empleado")
+            filters = dict(resolved_query.normalized_filters or {})
+            if not any(
+                str(filters.get(key) or "").strip()
+                for key in ("cedula", "movil", "codigo_sap", "search")
+            ):
+                missing.append("identificador_empleado")
         period = dict(resolved_query.normalized_period or {})
         if not period.get("start_date") or not period.get("end_date"):
             missing.append("periodo_consulta")
+        domain_code = str(resolved_query.intent.domain_code or "").strip().lower()
+        if domain_code in {"empleados", "rrhh"}:
+            temporal_scope = self._extract_temporal_scope(resolved_query=resolved_query)
+            if bool(temporal_scope.get("ambiguous")):
+                reason = str(temporal_scope.get("reason") or "temporal_scope_ambiguous")
+                missing.append(f"temporal_binding:{reason}")
         return missing
+
+    @staticmethod
+    def _extract_temporal_scope(*, resolved_query: ResolvedQuerySpec) -> dict[str, Any]:
+        context = dict(resolved_query.semantic_context or {})
+        direct_scope = dict(context.get("temporal_scope") or {})
+        if direct_scope:
+            return direct_scope
+        resolved_semantic = dict(context.get("resolved_semantic") or {})
+        return dict(resolved_semantic.get("temporal_scope") or {})
 
     def _is_capability_rollout_enabled(self, capability_id: str) -> bool:
         definition = self.catalog.get(capability_id)

@@ -46,11 +46,24 @@ class _FakeRegistry:
         return self._domain
 
 
+class _DualRegistry(_FakeRegistry):
+    def __init__(self, *, primary_domain: _FakeDomain, employee_domain: _FakeDomain):
+        super().__init__(primary_domain)
+        self._primary_domain = primary_domain
+        self._employee_domain = employee_domain
+
+    def get_domain(self, domain_code: str | None):
+        normalized = self.normalize_domain_code(domain_code)
+        if normalized == "empleados":
+            return self._employee_domain
+        return self._primary_domain
+
+
 class _FakeDictionaryTool:
     @staticmethod
     def get_domain_context(domain: str, *, limit: int = 20) -> dict:
         return {
-            "domain": {"id": 1, "code": "USUARIOS", "matched": True},
+            "domain": {"id": 1, "code": "EMPLEADOS", "matched": True},
             "tables": [
                 {
                     "id": 1,
@@ -61,7 +74,7 @@ class _FakeDictionaryTool:
             "fields": [
                 {
                     "table_name": "cinco_base_de_personal",
-                    "campo_logico": "estado_usuario",
+                    "campo_logico": "estado_empleado",
                     "column_name": "estado",
                     "valores_permitidos": "ACTIVO,INACTIVO",
                     "es_filtro": True,
@@ -77,6 +90,12 @@ class _FakeDictionaryTool:
                     "campo_logico": "area",
                     "column_name": "area",
                     "es_group_by": True,
+                },
+                {
+                    "table_name": "cinco_base_de_personal",
+                    "campo_logico": "cargo",
+                    "column_name": "cargo",
+                    "es_group_by": False,
                 },
                 {
                     "table_name": "cinco_base_de_personal",
@@ -103,6 +122,36 @@ class _FakeDictionaryTool:
             ],
         }
 
+    @staticmethod
+    def get_table_field_profiles(table_names, *, limit: int = 80) -> list[dict]:
+        requested = {str(item or "").strip().lower() for item in list(table_names or [])}
+        if "cinco_base_de_personal" not in requested:
+            return []
+        return [
+            {
+                "table_name": "cinco_base_de_personal",
+                "campo_id": 999,
+                "campo_logico": "sede",
+                "column_name": "sede",
+                "definicion_negocio": "Sede del colaborador",
+                "es_filtro": True,
+                "es_group_by": True,
+                "supports_filter": True,
+                "supports_group_by": True,
+                "supports_metric": False,
+                "supports_dimension": True,
+                "is_date": False,
+                "is_identifier": False,
+                "is_chart_dimension": True,
+                "is_chart_measure": False,
+                "allowed_values": [],
+                "allowed_operators": [],
+                "allowed_aggregations": [],
+                "normalization_strategy": "joined_table_profile",
+                "priority": 90,
+            }
+        ]
+
 
 class QuerySemanticResolversTests(SimpleTestCase):
     def test_synonym_semantic_resolver_canonicalize(self):
@@ -113,6 +162,15 @@ class QuerySemanticResolversTests(SimpleTestCase):
             runtime_columns=[],
         )
         self.assertEqual(resolver.canonicalize(term="jefe", synonym_index=index), "supervisor")
+
+    def test_synonym_semantic_resolver_maps_labor_to_tipo_labor(self):
+        resolver = SynonymSemanticResolver()
+        index = resolver.build_index(
+            dictionary_synonyms=[],
+            dictionary_fields=[],
+            runtime_columns=[],
+        )
+        self.assertEqual(resolver.canonicalize(term="labor", synonym_index=index), "tipo_labor")
 
     def test_column_semantic_resolver_normalizes_status_filter(self):
         resolver = ColumnSemanticResolver()
@@ -241,6 +299,182 @@ class QuerySemanticResolversTests(SimpleTestCase):
         )
         self.assertIn("area", list(resolved.intent.group_by or []))
 
+    def test_semantic_business_resolver_recovers_attendance_group_by_from_entity_type_when_llm_omits_it(self):
+        fake_domain = _FakeDomain(
+            raw_context={
+                "tables": [
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "gestionh_ausentismo",
+                        "table_fqn": "cincosas_cincosas.gestionh_ausentismo",
+                        "rol": "hechos",
+                        "es_principal": True,
+                    },
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "cinco_base_de_personal",
+                        "table_fqn": "cincosas_cincosas.cinco_base_de_personal",
+                        "rol": "dimension",
+                        "es_principal": False,
+                    },
+                ],
+                "columns": [
+                    {"table_name": "gestionh_ausentismo", "column_name": "cedula", "nombre_columna_logico": "cedula"},
+                    {"table_name": "gestionh_ausentismo", "column_name": "fecha_edit", "nombre_columna_logico": "fecha_ausentismo"},
+                ],
+                "relationships": [
+                    {
+                        "nombre_relacion": "ausentismo_empleado",
+                        "condicion_join_sql": "gestionh_ausentismo.cedula = cinco_base_de_personal.cedula",
+                        "cardinalidad": "many_to_one",
+                    }
+                ],
+                "flags": {"sql_asistido_permitido": False},
+            }
+        )
+        resolver = SemanticBusinessResolver(
+            registry=_FakeRegistry(fake_domain),
+            dictionary_tool=_FakeDictionaryTool(),
+        )
+        intent = StructuredQueryIntent(
+            raw_query="ausentismos por area",
+            domain_code="ausentismo",
+            operation="aggregate",
+            template_id="aggregate_by_group_and_period",
+            entity_type="area",
+            filters={},
+            group_by=[],
+            metrics=["count"],
+            confidence=0.7,
+            source="openai",
+        )
+        resolved = resolver.resolve_query(
+            message=intent.raw_query,
+            intent=intent,
+            base_classification={"domain": "ausentismo"},
+        )
+        self.assertIn("area", list(resolved.intent.group_by or []))
+
+    def test_semantic_business_resolver_supports_new_attendance_group_dimension_from_joined_employee_table(self):
+        fake_domain = _FakeDomain(
+            raw_context={
+                "tables": [
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "gestionh_ausentismo",
+                        "table_fqn": "cincosas_cincosas.gestionh_ausentismo",
+                        "rol": "hechos",
+                        "es_principal": True,
+                    },
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "cinco_base_de_personal",
+                        "table_fqn": "cincosas_cincosas.cinco_base_de_personal",
+                        "rol": "dimension",
+                        "es_principal": False,
+                    },
+                ],
+                "columns": [
+                    {"table_name": "gestionh_ausentismo", "column_name": "cedula", "nombre_columna_logico": "cedula"},
+                ],
+                "relationships": [
+                    {
+                        "nombre_relacion": "ausentismo_empleado",
+                        "condicion_join_sql": "gestionh_ausentismo.cedula = cinco_base_de_personal.cedula",
+                        "cardinalidad": "many_to_one",
+                    }
+                ],
+                "flags": {"sql_asistido_permitido": False},
+            }
+        )
+        resolver = SemanticBusinessResolver(
+            registry=_FakeRegistry(fake_domain),
+            dictionary_tool=_FakeDictionaryTool(),
+        )
+        intent = StructuredQueryIntent(
+            raw_query="ausentismos por sede",
+            domain_code="ausentismo",
+            operation="aggregate",
+            template_id="aggregate_by_group_and_period",
+            filters={},
+            group_by=[],
+            metrics=["count"],
+            confidence=0.8,
+        )
+        resolved = resolver.resolve_query(
+            message=intent.raw_query,
+            intent=intent,
+            base_classification={"domain": "ausentismo"},
+        )
+        self.assertIn("sede", list(resolved.intent.group_by or []))
+
+    def test_semantic_business_resolver_maps_labor_to_tipo_labor_for_attendance_join(self):
+        attendance_domain = _FakeDomain(
+            raw_context={
+                "tables": [
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "gestionh_ausentismo",
+                        "table_fqn": "cincosas_cincosas.gestionh_ausentismo",
+                        "rol": "hechos",
+                        "es_principal": True,
+                    },
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "cinco_base_de_personal",
+                        "table_fqn": "cincosas_cincosas.cinco_base_de_personal",
+                        "rol": "dimension",
+                        "es_principal": False,
+                    },
+                ],
+                "columns": [
+                    {"table_name": "gestionh_ausentismo", "column_name": "cedula", "nombre_columna_logico": "cedula"},
+                ],
+                "relationships": [
+                    {
+                        "nombre_relacion": "ausentismo_empleado",
+                        "condicion_join_sql": "gestionh_ausentismo.cedula = cinco_base_de_personal.cedula",
+                        "cardinalidad": "many_to_one",
+                    }
+                ],
+                "flags": {"sql_asistido_permitido": False},
+            }
+        )
+        employee_domain = _FakeDomain(
+            raw_context={
+                "columnas_clave": [
+                    {
+                        "table_name": "cinco_base_de_personal",
+                        "column_name": "tipo_labor",
+                        "nombre_columna_logico": "tipo_labor",
+                    }
+                ],
+                "filtros_soportados": ["tipo_labor"],
+                "group_by_soportados": ["tipo_labor"],
+            }
+        )
+        resolver = SemanticBusinessResolver(
+            registry=_DualRegistry(primary_domain=attendance_domain, employee_domain=employee_domain),
+            dictionary_tool=_FakeDictionaryTool(),
+        )
+        intent = StructuredQueryIntent(
+            raw_query="ausentismos por labor",
+            domain_code="ausentismo",
+            operation="aggregate",
+            template_id="aggregate_by_group_and_period",
+            filters={},
+            group_by=["labor"],
+            metrics=["count"],
+            confidence=0.8,
+        )
+        resolved = resolver.resolve_query(
+            message=intent.raw_query,
+            intent=intent,
+            base_classification={"domain": "ausentismo"},
+        )
+        self.assertIn("tipo_labor", list(resolved.intent.group_by or []))
+        self.assertNotIn("estado_justificacion", list(resolved.intent.group_by or []))
+
     def test_semantic_business_resolver_resolves_habilitados_status_from_dictionary(self):
         fake_domain = _FakeDomain(
             raw_context={
@@ -254,7 +488,7 @@ class QuerySemanticResolversTests(SimpleTestCase):
                     }
                 ],
                 "columns": [
-                    {"table_name": "cinco_base_de_personal", "column_name": "estado", "nombre_columna_logico": "estado_usuario"},
+                    {"table_name": "cinco_base_de_personal", "column_name": "estado", "nombre_columna_logico": "estado_empleado"},
                 ],
                 "relationships": [],
                 "flags": {"sql_asistido_permitido": False},
@@ -281,6 +515,90 @@ class QuerySemanticResolversTests(SimpleTestCase):
         )
         self.assertEqual(str(resolved.normalized_filters.get("estado") or ""), "ACTIVO")
         self.assertEqual(str(resolved.intent.template_id or ""), "count_entities_by_status")
+
+    def test_semantic_business_resolver_defaults_employee_queries_to_active_status(self):
+        fake_domain = _FakeDomain(
+            raw_context={
+                "tables": [
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "cinco_base_de_personal",
+                        "table_fqn": "cincosas_cincosas.cinco_base_de_personal",
+                        "rol": "dimension",
+                        "es_principal": True,
+                    }
+                ],
+                "columns": [
+                    {"table_name": "cinco_base_de_personal", "column_name": "estado", "nombre_columna_logico": "estado_empleado"},
+                    {"table_name": "cinco_base_de_personal", "column_name": "area", "nombre_columna_logico": "area"},
+                ],
+                "relationships": [],
+                "flags": {"sql_asistido_permitido": False},
+            }
+        )
+        resolver = SemanticBusinessResolver(
+            registry=_FakeRegistry(fake_domain),
+            dictionary_tool=_FakeDictionaryTool(),
+        )
+        intent = StructuredQueryIntent(
+            raw_query="empleados por area",
+            domain_code="empleados",
+            operation="aggregate",
+            template_id="aggregate_by_group_and_period",
+            filters={},
+            group_by=["area"],
+            metrics=["count"],
+            confidence=0.9,
+        )
+        resolved = resolver.resolve_query(
+            message=intent.raw_query,
+            intent=intent,
+            base_classification={"domain": "empleados"},
+        )
+        self.assertEqual(str(resolved.normalized_filters.get("estado") or ""), "ACTIVO")
+        self.assertEqual(str(resolved.normalized_filters.get("estado_empleado") or ""), "ACTIVO")
+        self.assertIn("area", list(resolved.intent.group_by or []))
+
+    def test_semantic_business_resolver_preserves_group_by_from_domain_scope_when_dictionary_profile_is_weaker(self):
+        fake_domain = _FakeDomain(
+            raw_context={
+                "tables": [
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "cinco_base_de_personal",
+                        "table_fqn": "cincosas_cincosas.cinco_base_de_personal",
+                        "rol": "dimension",
+                        "es_principal": True,
+                    }
+                ],
+                "columns": [
+                    {"table_name": "cinco_base_de_personal", "column_name": "cargo", "nombre_columna_logico": "cargo"},
+                ],
+                "group_by_soportados": ["cargo"],
+                "relationships": [],
+                "flags": {"sql_asistido_permitido": False},
+            }
+        )
+        resolver = SemanticBusinessResolver(
+            registry=_FakeRegistry(fake_domain),
+            dictionary_tool=_FakeDictionaryTool(),
+        )
+        intent = StructuredQueryIntent(
+            raw_query="Cantidad de empleados activos por cargo",
+            domain_code="empleados",
+            operation="aggregate",
+            template_id="aggregate_by_group_and_period",
+            filters={"estado": "ACTIVO"},
+            group_by=["cargo"],
+            metrics=["count"],
+            confidence=0.9,
+        )
+        resolved = resolver.resolve_query(
+            message=intent.raw_query,
+            intent=intent,
+            base_classification={"domain": "empleados"},
+        )
+        self.assertIn("cargo", list(resolved.intent.group_by or []))
 
     def test_relation_semantic_resolver_builds_relation_profiles(self):
         resolver = RelationSemanticResolver()
@@ -337,3 +655,143 @@ class QuerySemanticResolversTests(SimpleTestCase):
             context = resolver.build_semantic_context(domain_code="empleados", include_dictionary=True)
         self.assertEqual(str((context.get("dictionary_seed") or {}).get("status") or ""), "applied")
         dictionary_tool.ensure_rrhh_status_synonyms_seed.assert_called()
+
+    def test_semantic_business_resolver_marks_known_domain_without_operational_scope(self):
+        fake_domain = _FakeDomain(
+            raw_context={
+                "tables": [
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "cinco_base_de_transportes",
+                        "table_fqn": "cincosas_cincosas.cinco_base_de_transportes",
+                        "rol": "dimension",
+                        "es_principal": True,
+                    }
+                ],
+                "columns": [],
+                "relationships": [],
+                "flags": {"sql_asistido_permitido": False},
+                "company_context": {
+                    "codigo_compania": "CINCO",
+                    "dominios_oficiales": ["empleados", "ausentismo", "transporte"],
+                    "dominios_operativos": ["empleados", "ausentismo"],
+                },
+            }
+        )
+        resolver = SemanticBusinessResolver(
+            registry=_FakeRegistry(fake_domain),
+            dictionary_tool=_FakeDictionaryTool(),
+        )
+        intent = StructuredQueryIntent(
+            raw_query="Vehiculo asignado al tecnico",
+            domain_code="transporte",
+            operation="detail",
+            template_id="detail_by_entity_and_period",
+            filters={},
+            group_by=[],
+            metrics=[],
+            confidence=0.7,
+        )
+        resolved = resolver.resolve_query(
+            message=intent.raw_query,
+            intent=intent,
+            base_classification={"domain": "transporte"},
+        )
+        warnings = list(resolved.warnings or [])
+        self.assertIn("domain_known_but_not_operational", warnings)
+        scope = dict((resolved.semantic_context or {}).get("company_operational_scope") or {})
+        self.assertTrue(bool(scope.get("domain_known")))
+        self.assertFalse(bool(scope.get("domain_operational")))
+
+    def test_semantic_business_resolver_rescues_personal_en_vacaciones_to_attendance(self):
+        attendance_domain = _FakeDomain(
+            raw_context={
+                "tables": [
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "gestionh_ausentismo",
+                        "table_fqn": "cincosas_cincosas.gestionh_ausentismo",
+                        "rol": "hechos",
+                        "es_principal": True,
+                    },
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "cinco_base_de_personal",
+                        "table_fqn": "cincosas_cincosas.cinco_base_de_personal",
+                        "rol": "dimension",
+                    },
+                ],
+                "columns": [
+                    {
+                        "table_name": "gestionh_ausentismo",
+                        "column_name": "fecha_edit",
+                        "nombre_columna_logico": "fecha_ausentismo",
+                        "es_filtro": True,
+                    },
+                    {
+                        "table_name": "gestionh_ausentismo",
+                        "column_name": "justificacion",
+                        "nombre_columna_logico": "justificacion",
+                        "es_filtro": True,
+                        "es_group_by": True,
+                    },
+                    {
+                        "table_name": "gestionh_ausentismo",
+                        "column_name": "cedula",
+                        "nombre_columna_logico": "cedula",
+                        "es_filtro": True,
+                    },
+                ],
+                "relationships": [
+                    {
+                        "nombre_relacion": "ausentismo_empleado",
+                        "condicion": "gestionh_ausentismo.cedula = cinco_base_de_personal.cedula",
+                    }
+                ],
+                "flags": {"sql_asistido_permitido": False},
+            }
+        )
+        employee_domain = _FakeDomain(
+            raw_context={
+                "tables": [
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "cinco_base_de_personal",
+                        "table_fqn": "cincosas_cincosas.cinco_base_de_personal",
+                        "rol": "dimension",
+                        "es_principal": True,
+                    }
+                ],
+                "columns": [
+                    {
+                        "table_name": "cinco_base_de_personal",
+                        "column_name": "area",
+                        "nombre_columna_logico": "area",
+                        "es_group_by": True,
+                    }
+                ],
+                "relationships": [],
+                "flags": {"sql_asistido_permitido": False},
+            }
+        )
+        resolver = SemanticBusinessResolver(
+            registry=_DualRegistry(primary_domain=attendance_domain, employee_domain=employee_domain),
+            dictionary_tool=_FakeDictionaryTool(),
+        )
+        intent = StructuredQueryIntent(
+            raw_query="personal en vacaciones del 2026-04-01 al 2026-04-19",
+            domain_code="empleados",
+            operation="detail",
+            template_id="detail_by_entity_and_period",
+            filters={"estado_empleado": "VACACIONES"},
+            group_by=[],
+            metrics=[],
+            confidence=0.8,
+        )
+        resolved = resolver.resolve_query(
+            message=intent.raw_query,
+            intent=intent,
+            base_classification={"domain": "empleados"},
+        )
+        self.assertEqual(str(resolved.intent.domain_code or ""), "ausentismo")
+        self.assertEqual(str((resolved.normalized_filters or {}).get("justificacion") or ""), "VACACIONES")

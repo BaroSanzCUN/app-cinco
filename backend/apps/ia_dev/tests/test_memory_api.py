@@ -89,7 +89,7 @@ class IADevMemoryApiTests(SimpleTestCase):
                 "candidate_key": "attendance.output_mode",
                 "candidate_value": {"value": "grouped"},
                 "sensitivity": "low",
-                "reason": "usuario solicita formato agrupado",
+                "reason": "cuenta solicita formato agrupado",
             },
         )
 

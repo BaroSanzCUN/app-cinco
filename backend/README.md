@@ -26,6 +26,26 @@ Este backend esta pensado para operar en entornos controlados, donde la base de 
 - Servidor de desarrollo:
   - `python manage.py runserver 127.0.0.1:8000`
 
+### Wrapper recomendado (Windows / PowerShell)
+
+Para evitar errores por entorno no activo (por ejemplo `ModuleNotFoundError: django`), usa:
+
+- `powershell -ExecutionPolicy Bypass -File .\scripts\dj.ps1 check`
+
+Este script:
+
+- crea `.venv` si no existe,
+- verifica si Django esta instalado,
+- instala `requirements.txt` si hace falta,
+- y ejecuta `manage.py` con el entorno correcto.
+
+Ejemplos:
+
+- Levantar servidor:
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\dj.ps1 runserver 127.0.0.1:8000`
+- Simular chat IA DEV:
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\dj.ps1 simulate_ia_dev_chat --message "hola" --session-id demo-1 --raw`
+
 ## Comandos permitidos
 
 - `python manage.py runserver`
@@ -113,6 +133,26 @@ Se agrego un nucleo de gobierno/autoevolucion para propuestas de reglas de negoc
 - `POST /ia-dev/knowledge/proposals/reject/`
 - `GET /ia-dev/async/jobs/?job_id=...`
 - `GET /ia-dev/observability/summary/`
+
+## Simular chat IA DEV desde terminal
+
+Se agrego un comando de management para simular consultas del frontend:
+
+- Archivo: `apps/ia_dev/management/commands/simulate_ia_dev_chat.py`
+- Comando base:
+  - `python manage.py simulate_ia_dev_chat --message "hola" --session-id demo-1 --raw`
+
+Modos disponibles:
+
+- `--mode service` (default): llama `IADevOrchestratorService.run(...)` directo, sin levantar servidor.
+- `--mode http`: llama `POST /ia-dev/chat/` y emula el flujo del frontend (requiere servidor activo y auth si aplica).
+
+Ejemplos:
+
+- Conversacion interactiva (sin frontend):
+  - `python manage.py simulate_ia_dev_chat --interactive --session-id demo-ia`
+- Simular endpoint real:
+  - `python manage.py simulate_ia_dev_chat --mode http --message "ausentismo del mes pasado" --session-id demo-http --base-url http://127.0.0.1:8000 --auth-token <jwt>`
 
 ## Estandar de texto y codificacion
 

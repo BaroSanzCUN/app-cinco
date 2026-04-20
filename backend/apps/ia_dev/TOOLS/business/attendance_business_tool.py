@@ -50,6 +50,22 @@ class AttendanceBusinessTool:
     ) -> dict[str, Any]:
         return self.service.get_summary(period.start, period.end, cedula=cedula)
 
+    def get_attendance_summary(
+        self,
+        *,
+        period: AttendancePeriod,
+        cedula: str | None = None,
+        focus: str = "all",
+        justificacion_filter: str | None = None,
+    ) -> dict[str, Any]:
+        return self.service.get_attendance_summary(
+            period.start,
+            period.end,
+            cedula=cedula,
+            focus=focus,
+            justificacion_filter=justificacion_filter,
+        )
+
     def get_unjustified_table(
         self,
         *,
@@ -58,6 +74,7 @@ class AttendanceBusinessTool:
         personal_status: str = "all",
         limit: int = 150,
         cedula: str | None = None,
+        extra_personal_columns: list[str] | None = None,
     ) -> dict[str, Any]:
         safe_limit = max(1, min(int(limit), 500))
         if include_personal:
@@ -67,6 +84,7 @@ class AttendanceBusinessTool:
                 limit=safe_limit,
                 personal_status=personal_status,
                 cedula=cedula,
+                extra_personal_columns=extra_personal_columns,
             )
         return self.service.get_unjustified_table(
             period.start,
@@ -79,7 +97,7 @@ class AttendanceBusinessTool:
         self,
         *,
         period: AttendancePeriod,
-        threshold: int = 2,
+        threshold: int = 3,
         personal_status: str = "all",
         limit: int = 150,
     ) -> dict[str, Any]:
@@ -107,7 +125,7 @@ class AttendanceBusinessTool:
     ) -> dict[str, Any]:
         grouped = grouped_result or self.get_recurrence_grouped(
             period=period,
-            threshold=2,
+            threshold=3,
             personal_status=personal_status,
             limit=150,
         )
@@ -121,7 +139,7 @@ class AttendanceBusinessTool:
             return {
                 "periodo_inicio": grouped.get("periodo_inicio"),
                 "periodo_fin": grouped.get("periodo_fin"),
-                "threshold": int(grouped.get("threshold") or 2),
+                "threshold": int(grouped.get("threshold") or 3),
                 "rowcount": 0,
                 "rows": [],
                 "recurrent_count": int(grouped.get("rowcount") or 0),
@@ -180,16 +198,18 @@ class AttendanceBusinessTool:
         chart_type: str = "bar",
         cedula: str | None = None,
         focus: str = "all",
+        justificacion_filter: str | None = None,
     ) -> dict[str, Any]:
         safe_top_n = max(1, min(int(top_n), 50))
         safe_focus = str(focus or "all").strip().lower()
-        if safe_focus == "unjustified":
+        if safe_focus == "unjustified" and not str(justificacion_filter or "").strip():
             detail = self.get_unjustified_table(
                 period=period,
                 include_personal=True,
                 personal_status=personal_status,
                 limit=500,
                 cedula=cedula,
+                extra_personal_columns=[group_by],
             )
         else:
             detail = self.service.get_detail_with_personal(
@@ -198,6 +218,9 @@ class AttendanceBusinessTool:
                 limit=500,
                 personal_status=personal_status,
                 cedula=cedula,
+                extra_personal_columns=[group_by],
+                justificacion_filter=justificacion_filter,
+                focus=safe_focus,
             )
         source_rows = list(detail.get("rows") or [])
         group_key, group_label = self._resolve_group_by(group_by)
@@ -256,6 +279,7 @@ class AttendanceBusinessTool:
             "source_rowcount": int(detail.get("rowcount") or 0),
             "source_truncated": bool(detail.get("truncated")),
             "personal_status_filter": detail.get("personal_status_filter") or personal_status,
+            "justificacion_filter": detail.get("justificacion_filter") or str(justificacion_filter or "").strip().upper(),
         }
 
     def get_unjustified_trend(
@@ -386,11 +410,16 @@ class AttendanceBusinessTool:
             return "carpeta", "Carpeta"
         if value in {"justificacion", "causa", "motivo"}:
             return "justificacion", "Justificacion"
-        if value in {"tipo", "estado", "estado_justificacion"}:
+        if value in {"tipo_labor", "tipo labor", "tipo de labor", "labor"}:
+            return "tipo_labor", "Tipo Labor"
+        if value in {"estado", "estado_justificacion", "tipo_ausentismo", "tipo de ausentismo", "tipo de ausencia"}:
             return "estado_justificacion", "Estado"
         if value in {"cedula", "empleado"}:
             return "cedula", "Empleado"
-        return "supervisor", "Supervisor"
+        if value == "supervisor":
+            return "supervisor", "Supervisor"
+        label = str(value or "supervisor").replace("_", " ").strip().title()
+        return value or "supervisor", label or "Supervisor"
 
     @staticmethod
     def _date_to_bucket(raw_date: str, granularity: str) -> str | None:

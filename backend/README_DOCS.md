@@ -10,6 +10,24 @@ Guía completa de la API con:
 - Códigos de error
 - Herramientas para testing
 
+### [GUIA_NUEVA_TABLA_Y_AGENTE_EMPRESARIAL.md](./GUIA_NUEVA_TABLA_Y_AGENTE_EMPRESARIAL.md)
+Guía paso a paso para:
+- incluir una nueva tabla de negocio
+- decidir si va en un dominio existente o en un agente nuevo
+- relacionarla con `empleados` u otro dominio
+- registrar `ai_dictionary`, YAML, joins, capabilities y pruebas
+
+### [GUIA_TECNICA_FLUJO_SISTEMA_MULTIAGENTE.md](./GUIA_TECNICA_FLUJO_SISTEMA_MULTIAGENTE.md)
+Guía técnica del flujo end-to-end del sistema multiagente:
+- entrada
+- query intelligence
+- planner
+- policy
+- router
+- handlers
+- memoria
+- observabilidad
+
 ---
 
 ## 🔑 Documentación por Módulo
