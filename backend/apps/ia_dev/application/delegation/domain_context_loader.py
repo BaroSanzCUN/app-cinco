@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -15,28 +16,42 @@ class DomainContextLoader:
         registry_dir: str | Path | None = None,
         store: IADevSqlStore | None = None,
     ):
+        self.domains_dir = Path(__file__).resolve().parents[2] / "domains"
         if registry_dir is None:
-            registry_dir = Path(__file__).resolve().parents[2] / "domains" / "registry"
+            registry_dir = self.domains_dir / "registry"
         self.registry_dir = Path(registry_dir)
         self.store = store or IADevSqlStore()
 
     def load_all(self) -> dict[str, dict[str, Any]]:
+        company_context = self._load_company_context()
         file_contexts = self.load_from_files()
         db_contexts = self.load_from_db()
         merged: dict[str, dict[str, Any]] = {}
         all_codes = set(file_contexts.keys()) | set(db_contexts.keys())
         for code in sorted(all_codes):
-            merged[code] = self._merge_context(
+            merged_payload = self._merge_context(
                 file_context=file_contexts.get(code),
                 db_context=db_contexts.get(code),
             )
+            if company_context:
+                merged_payload["company_context"] = dict(company_context)
+            merged[code] = merged_payload
         return merged
+
+    def _load_company_context(self) -> dict[str, Any]:
+        getter = getattr(self.store, "get_contexto_compania", None)
+        if not callable(getter):
+            return {}
+        company_code = str(os.getenv("IA_DEV_COMPANY_CODE", "CINCO") or "CINCO").strip() or "CINCO"
+        try:
+            payload = getter(codigo_compania=company_code)
+        except Exception:
+            return {}
+        return dict(payload or {}) if isinstance(payload, dict) else {}
 
     def load_from_files(self) -> dict[str, dict[str, Any]]:
         contexts: dict[str, dict[str, Any]] = {}
-        if not self.registry_dir.exists():
-            return contexts
-        for path in sorted(self.registry_dir.glob("*.domain.yaml")):
+        for path in self._iter_domain_definition_paths():
             try:
                 raw = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore")) or {}
             except Exception:
@@ -47,8 +62,37 @@ class DomainContextLoader:
             code = str(normalized.get("domain_code") or "").strip().lower()
             if not code:
                 continue
-            contexts[code] = normalized
+            complementos = self._load_archivos_complementarios(domain_code=code)
+            if complementos:
+                normalized = self._merge_file_companions(
+                    base_context=normalized,
+                    companion_payloads=complementos,
+                )
+            if code in contexts:
+                contexts[code] = self._merge_context(
+                    file_context=contexts.get(code),
+                    db_context=normalized,
+                )
+                contexts[code]["source_of_truth"] = "file"
+                contexts[code]["source_ref"] = str(path)
+            else:
+                contexts[code] = normalized
         return contexts
+
+    def _iter_domain_definition_paths(self) -> list[Path]:
+        paths: list[Path] = []
+        if self.registry_dir.exists():
+            paths.extend(sorted(self.registry_dir.glob("*.domain.yaml")))
+        if self.domains_dir.exists():
+            for domain_dir in sorted(self.domains_dir.iterdir()):
+                if not domain_dir.is_dir():
+                    continue
+                if domain_dir.name.startswith("__") or domain_dir.name == "registry":
+                    continue
+                domain_file = domain_dir / "dominio.yaml"
+                if domain_file.exists():
+                    paths.append(domain_file)
+        return paths
 
     def load_from_db(self) -> dict[str, dict[str, Any]]:
         contexts: dict[str, dict[str, Any]] = {}
@@ -113,7 +157,87 @@ class DomainContextLoader:
             "group_by_soportados": list(raw.get("group_by_soportados") or []),
             "metricas_soportadas": list(raw.get("metricas_soportadas") or []),
             "sensitividades": list(raw.get("sensitividades") or []),
+            "contexto_agente": dict(raw.get("contexto_agente") or {}),
+            "reglas_negocio": list(raw.get("reglas_negocio") or []),
+            "ejemplos_consulta": list(raw.get("ejemplos_consulta") or []),
+            "vocabulario_negocio": list(raw.get("vocabulario_negocio") or []),
+            "tablas_prioritarias": list(raw.get("tablas_prioritarias") or []),
+            "columnas_prioritarias": list(raw.get("columnas_prioritarias") or []),
         }
+
+    def _load_archivos_complementarios(self, *, domain_code: str) -> dict[str, Any]:
+        complementos: dict[str, Any] = {}
+        sufijos = ("contexto", "reglas", "ejemplos")
+        for sufijo in sufijos:
+            for path in self._resolve_companion_candidate_paths(domain_code=domain_code, sufijo=sufijo):
+                if not path.exists():
+                    continue
+                try:
+                    raw = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore")) or {}
+                except Exception:
+                    continue
+                if not isinstance(raw, dict):
+                    continue
+                complementos[sufijo] = raw
+        return complementos
+
+    def _resolve_companion_candidate_paths(self, *, domain_code: str, sufijo: str) -> list[Path]:
+        domain_dir = self.domains_dir / domain_code
+        return [
+            domain_dir / f"{sufijo}.yaml",
+            self.registry_dir / f"{domain_code}.{sufijo}.yaml",
+        ]
+
+    @staticmethod
+    def _merge_file_companions(
+        *,
+        base_context: dict[str, Any],
+        companion_payloads: dict[str, Any],
+    ) -> dict[str, Any]:
+        merged = dict(base_context or {})
+        contexto = dict(companion_payloads.get("contexto") or {})
+        reglas = dict(companion_payloads.get("reglas") or {})
+        ejemplos = dict(companion_payloads.get("ejemplos") or {})
+
+        if contexto:
+            merged["contexto_agente"] = {
+                **dict(merged.get("contexto_agente") or {}),
+                **dict(contexto.get("contexto_agente") or contexto),
+            }
+            merged["vocabulario_negocio"] = list(
+                dict.fromkeys(
+                    [
+                        *list(merged.get("vocabulario_negocio") or []),
+                        *list(contexto.get("vocabulario_negocio") or []),
+                    ]
+                )
+            )
+            merged["tablas_prioritarias"] = list(
+                dict.fromkeys(
+                    [
+                        *list(merged.get("tablas_prioritarias") or []),
+                        *list(contexto.get("tablas_prioritarias") or []),
+                    ]
+                )
+            )
+            merged["columnas_prioritarias"] = list(
+                dict.fromkeys(
+                    [
+                        *list(merged.get("columnas_prioritarias") or []),
+                        *list(contexto.get("columnas_prioritarias") or []),
+                    ]
+                )
+            )
+
+        if reglas:
+            merged["reglas_negocio"] = list(merged.get("reglas_negocio") or []) + list(reglas.get("reglas_negocio") or [])
+
+        if ejemplos:
+            merged["ejemplos_consulta"] = list(merged.get("ejemplos_consulta") or []) + list(
+                ejemplos.get("ejemplos_consulta") or []
+            )
+
+        return merged
 
     @staticmethod
     def _merge_context(

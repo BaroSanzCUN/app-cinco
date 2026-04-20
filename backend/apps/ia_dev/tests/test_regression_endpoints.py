@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from apps.ia_dev.application.context.run_context import RunContext
 from apps.ia_dev.application.contracts.chat_contracts import build_chat_response_snapshot
 from apps.ia_dev.application.orchestration.response_assembler import LegacyResponseAssembler
 from apps.ia_dev.application.policies.policy_guard import PolicyAction, PolicyDecision
+from apps.ia_dev.services.orchestrator_service import IADevOrchestratorService
 from apps.ia_dev.views import chat_view as chat_view_module
 from apps.ia_dev.views.chat_view import (
     IADevChatView,
@@ -49,6 +51,91 @@ class IADevRegressionEndpointsTests(SimpleTestCase):
         self.assertEqual(set(response.data.keys()), set(snapshot.keys()))
         self.assertEqual(response.data["session_id"], "sess-123")
         self.assertIn("observability", response.data)
+
+    def test_orchestrator_bootstraps_http_runtime_defaults_when_flags_are_missing(self):
+        with patch.dict(
+            os.environ,
+            {
+                "IA_DEV_CAP_ATTENDANCE_ENABLED": "",
+                "IA_DEV_CAP_ATTENDANCE_ANALYTICS_ENABLED": "",
+                "IA_DEV_CAP_ATTENDANCE_TABLE_ENABLED": "",
+                "IA_DEV_POLICY_CAPABILITY_EXECUTION_ENABLED": "",
+                "IA_DEV_POLICY_MEMORY_HINTS_ENABLED": "",
+                "IA_DEV_POLICY_ATTENDANCE_PERSONAL_JOIN_ENABLED": "",
+                "IA_DEV_QUERY_PATTERN_MEMORY_ENABLED": "",
+                "IA_DEV_QUERY_PATTERN_FASTPATH_ENABLED": "",
+            },
+            clear=False,
+        ):
+            service = IADevOrchestratorService()
+
+        self.assertEqual(os.getenv("IA_DEV_CAP_ATTENDANCE_ENABLED"), "1")
+        self.assertEqual(os.getenv("IA_DEV_CAP_ATTENDANCE_ANALYTICS_ENABLED"), "1")
+        self.assertEqual(os.getenv("IA_DEV_CAP_ATTENDANCE_TABLE_ENABLED"), "1")
+        self.assertEqual(os.getenv("IA_DEV_POLICY_CAPABILITY_EXECUTION_ENABLED"), "1")
+        self.assertEqual(os.getenv("IA_DEV_POLICY_MEMORY_HINTS_ENABLED"), "1")
+        self.assertEqual(os.getenv("IA_DEV_POLICY_ATTENDANCE_PERSONAL_JOIN_ENABLED"), "1")
+        self.assertEqual(os.getenv("IA_DEV_QUERY_PATTERN_MEMORY_ENABLED"), "1")
+        self.assertEqual(os.getenv("IA_DEV_QUERY_PATTERN_FASTPATH_ENABLED"), "1")
+        self.assertTrue(service.runtime_bootstrap.get("enabled"))
+
+    def test_response_assembler_infers_frontend_chart_and_presentation_meta(self):
+        assembler = LegacyResponseAssembler()
+        legacy_response = build_chat_response_snapshot()
+        legacy_response["session_id"] = "sess-chart"
+        legacy_response["reply"] = "Distribucion de empleados activos por area."
+        legacy_response["data"] = {
+            "kpis": {"total_empleados": 866, "total_grupos": 12},
+            "labels": ["OPERACIONES", "GESTION HUMANA"],
+            "series": [{"name": "cantidad", "data": [500, 120]}],
+            "insights": ["Distribucion lista para grafica."],
+            "table": {
+                "columns": ["area", "cantidad"],
+                "rows": [
+                    {"area": "OPERACIONES", "cantidad": 500},
+                    {"area": "GESTION HUMANA", "cantidad": 120},
+                ],
+                "rowcount": 2,
+            },
+        }
+
+        run_context = RunContext(
+            run_id="run_chart",
+            trace_id="trace_chart",
+            session_id="sess-chart",
+            message="empleados por area",
+            reset_memory=False,
+            routing_mode="capability",
+            started_at_ms=0,
+            started_at_iso="2026-04-20T00:00:00+00:00",
+            metadata={},
+        )
+        policy = PolicyDecision(
+            action=PolicyAction.ALLOW,
+            policy_id="policy.test.allow",
+            reason="test allow",
+            metadata={},
+        )
+
+        response = assembler.assemble(
+            legacy_response=legacy_response,
+            run_context=run_context,
+            planned_capability={"capability_id": "empleados.count.active.v1"},
+            route={"reason": "test"},
+            policy_decision=policy,
+            divergence={"diverged": False, "reason": "none"},
+            memory_effects={},
+        )
+
+        data = dict(response.get("data") or {})
+        chart = dict(data.get("chart") or {})
+        meta = dict(data.get("meta") or {})
+        presentation = dict(meta.get("presentation") or {})
+
+        self.assertEqual(chart.get("chart_library"), "amcharts5")
+        self.assertEqual(chart.get("type"), "bar")
+        self.assertEqual(presentation.get("primary"), "chart")
+        self.assertTrue(presentation.get("has_kpis"))
 
     def test_observability_summary_endpoint_accepts_filters(self):
         payload = {"enabled": True, "window_seconds": 3600, "sample_size": 0}
@@ -213,7 +300,7 @@ class IADevRegressionEndpointsTests(SimpleTestCase):
                                 "filters": [
                                     {
                                         "requested_term": "habilitados",
-                                        "canonical_term": "estado_usuario",
+                                        "canonical_term": "estado_empleado",
                                         "table_name": "cinco_base_de_personal",
                                         "column_name": "estado",
                                         "supports_filter": True,

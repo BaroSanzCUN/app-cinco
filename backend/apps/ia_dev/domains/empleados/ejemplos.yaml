@@ -1,0 +1,13 @@
+ejemplos_consulta:
+  - consulta: "empleados por cargo"
+    interpretacion: "Conteo agrupado de empleados activos por cargo."
+    capacidad_esperada: "empleados.count.active.v1"
+  - consulta: "informacion de 98711054"
+    interpretacion: "Detalle de empleado por cedula."
+    capacidad_esperada: "empleados.detail.v1"
+  - consulta: "informacion movil TIRAN462"
+    interpretacion: "Listado de integrantes de la movil TIRAN462."
+    capacidad_esperada: "empleados.detail.v1"
+  - consulta: "empleados por labor"
+    interpretacion: "Conteo agrupado por tipo_labor."
+    capacidad_esperada: "empleados.count.active.v1"

@@ -1,0 +1,13 @@
+reglas_negocio:
+  - codigo: empleados_estado_por_defecto
+    prioridad: alta
+    descripcion: "Si la consulta es de empleados y no trae estado explicito, usar ACTIVO."
+  - codigo: empleados_movil_no_unico
+    prioridad: alta
+    descripcion: "Movil no identifica persona unica; si llega sola, devolver integrantes de la movil."
+  - codigo: empleados_labor_equivale_tipo_labor
+    prioridad: alta
+    descripcion: "Labor, tipo labor o tipo de labor se normalizan a tipo_labor."
+  - codigo: empleados_por_dimension
+    prioridad: media
+    descripcion: "Si el usuario usa 'por area', 'por cargo', 'por supervisor' o dimension equivalente, interpretar aggregate/group_by."

@@ -172,7 +172,7 @@ class KnowledgeGovernanceService:
         if any(token in text for token in ("ausent", "asistencia", "injustific", "justific")):
             return "AUSENTISMOS"
         if any(token in text for token in ("rrhh", "emplead", "supervisor", "cargo", "area", "carpeta")):
-            return "USUARIOS"
+            return "EMPLEADOS"
         if any(token in text for token in ("transporte", "vehicul", "ruta", "salida")):
             return "TRANSPORTE"
         if any(token in text for token in ("nomina", "pago", "devengo", "descuento")):
@@ -189,7 +189,7 @@ class KnowledgeGovernanceService:
     def _guess_tables(domain_code: str) -> str:
         mapping = {
             "AUSENTISMOS": "cincosas_cincosas.gestionh_ausentismo,cincosas_cincosas.cinco_base_de_personal",
-            "USUARIOS": "cincosas_cincosas.cinco_base_de_personal",
+            "EMPLEADOS": "cincosas_cincosas.cinco_base_de_personal",
             "TRANSPORTE": "pendiente_configurar_fuente_transporte",
             "NOMINA": "pendiente_mapeo_nomina",
             "VIATICOS": "pendiente_mapeo_viaticos",

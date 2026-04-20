@@ -159,6 +159,74 @@ class SatisfactionValidation:
 
 
 @dataclass(slots=True)
+class SatisfactionReviewGateResult:
+    approved: bool
+    answered_user_goal: bool
+    semantic_alignment: bool
+    domain_alignment: bool
+    intent_alignment: bool
+    capability_alignment: bool
+    evidence_sufficient: bool
+    response_safe: bool
+    technical_leak_detected: bool
+    fallback_justified: bool
+    satisfaction_score: float
+    issues: list[dict[str, Any]] = field(default_factory=list)
+    retry_reason: str = ""
+    next_action: str = "approve"
+    review_meta: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "approved": bool(self.approved),
+            "answered_user_goal": bool(self.answered_user_goal),
+            "semantic_alignment": bool(self.semantic_alignment),
+            "domain_alignment": bool(self.domain_alignment),
+            "intent_alignment": bool(self.intent_alignment),
+            "capability_alignment": bool(self.capability_alignment),
+            "evidence_sufficient": bool(self.evidence_sufficient),
+            "response_safe": bool(self.response_safe),
+            "technical_leak_detected": bool(self.technical_leak_detected),
+            "fallback_justified": bool(self.fallback_justified),
+            "satisfaction_score": float(self.satisfaction_score or 0.0),
+            "issues": [dict(item or {}) for item in list(self.issues or []) if isinstance(item, dict)],
+            "retry_reason": str(self.retry_reason or ""),
+            "next_action": str(self.next_action or "approve"),
+            "review_meta": dict(self.review_meta or {}),
+        }
+
+
+@dataclass(slots=True)
+class LoopControllerDecision:
+    cycle_index: int
+    strategy: str
+    satisfaction_score: float
+    gate_status: str
+    decision: str
+    stop_reason: str = ""
+    retry_reason: str = ""
+    next_action: str = "continue"
+    approved: bool = False
+    should_continue: bool = True
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "cycle_index": int(self.cycle_index or 0),
+            "strategy": str(self.strategy or ""),
+            "satisfaction_score": float(self.satisfaction_score or 0.0),
+            "gate_status": str(self.gate_status or ""),
+            "decision": str(self.decision or ""),
+            "stop_reason": str(self.stop_reason or ""),
+            "retry_reason": str(self.retry_reason or ""),
+            "next_action": str(self.next_action or "continue"),
+            "approved": bool(self.approved),
+            "should_continue": bool(self.should_continue),
+            "metadata": dict(self.metadata or {}),
+        }
+
+
+@dataclass(slots=True)
 class QueryPatternMemory:
     scope: str
     candidate_key: str
@@ -177,6 +245,88 @@ class QueryPatternMemory:
             "sensitivity": str(self.sensitivity or "low"),
             "domain_code": str(self.domain_code or ""),
             "capability_id": str(self.capability_id or ""),
+        }
+
+
+@dataclass(slots=True)
+class SemanticNormalizationOutput:
+    raw_query: str
+    normalized_query: str
+    canonical_query: str
+    domain_code: str = ""
+    intent_code: str = ""
+    normalized_filters: dict[str, Any] = field(default_factory=dict)
+    capability_hint: str = ""
+    resolved_by: str = ""
+    semantic_aliases: list[dict[str, Any]] = field(default_factory=list)
+    candidate_domains: list[dict[str, Any]] = field(default_factory=list)
+    candidate_intents: list[dict[str, Any]] = field(default_factory=list)
+    candidate_entities: list[dict[str, Any]] = field(default_factory=list)
+    candidate_filters: list[dict[str, Any]] = field(default_factory=list)
+    capability_hints: list[dict[str, Any]] = field(default_factory=list)
+    ambiguities: list[dict[str, Any]] = field(default_factory=list)
+    llm_invoked: bool = False
+    llm_mode: str = "deterministic"
+    normalization_status: str = "deterministic_only"
+    confidence: float = 0.0
+    llm_comparison: dict[str, Any] = field(default_factory=dict)
+    review_notes: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "raw_query": str(self.raw_query or ""),
+            "normalized_query": str(self.normalized_query or ""),
+            "canonical_query": str(self.canonical_query or ""),
+            "domain_code": str(self.domain_code or ""),
+            "intent_code": str(self.intent_code or ""),
+            "normalized_filters": dict(self.normalized_filters or {}),
+            "capability_hint": str(self.capability_hint or ""),
+            "resolved_by": str(self.resolved_by or ""),
+            "semantic_aliases": [dict(item or {}) for item in list(self.semantic_aliases or []) if isinstance(item, dict)],
+            "candidate_domains": [dict(item or {}) for item in list(self.candidate_domains or []) if isinstance(item, dict)],
+            "candidate_intents": [dict(item or {}) for item in list(self.candidate_intents or []) if isinstance(item, dict)],
+            "candidate_entities": [dict(item or {}) for item in list(self.candidate_entities or []) if isinstance(item, dict)],
+            "candidate_filters": [dict(item or {}) for item in list(self.candidate_filters or []) if isinstance(item, dict)],
+            "capability_hints": [dict(item or {}) for item in list(self.capability_hints or []) if isinstance(item, dict)],
+            "ambiguities": [dict(item or {}) for item in list(self.ambiguities or []) if isinstance(item, dict)],
+            "llm_invoked": bool(self.llm_invoked),
+            "llm_mode": str(self.llm_mode or "deterministic"),
+            "normalization_status": str(self.normalization_status or "deterministic_only"),
+            "confidence": float(self.confidence or 0.0),
+            "llm_comparison": dict(self.llm_comparison or {}),
+            "review_notes": [str(item or "") for item in list(self.review_notes or []) if str(item or "").strip()],
+        }
+
+
+@dataclass(slots=True)
+class CanonicalResolvedQuery:
+    raw_query: str
+    canonical_query: str
+    domain_code: str
+    intent_code: str
+    capability_code: str
+    entities: list[dict[str, Any]] = field(default_factory=list)
+    filters: list[dict[str, Any]] = field(default_factory=list)
+    confidence: float = 0.0
+    resolution_evidence: list[dict[str, Any]] = field(default_factory=list)
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "raw_query": str(self.raw_query or ""),
+            "canonical_query": str(self.canonical_query or ""),
+            "domain_code": str(self.domain_code or ""),
+            "intent_code": str(self.intent_code or ""),
+            "capability_code": str(self.capability_code or ""),
+            "entities": [dict(item or {}) for item in list(self.entities or []) if isinstance(item, dict)],
+            "filters": [dict(item or {}) for item in list(self.filters or []) if isinstance(item, dict)],
+            "confidence": float(self.confidence or 0.0),
+            "resolution_evidence": [
+                dict(item or {})
+                for item in list(self.resolution_evidence or [])
+                if isinstance(item, dict)
+            ],
+            "conflicts": [dict(item or {}) for item in list(self.conflicts or []) if isinstance(item, dict)],
         }
 
 

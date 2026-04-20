@@ -1,0 +1,86 @@
+contexto_agente:
+  descripcion: >
+    Dominio de ausentismo del personal interno. Debe relacionar eventos de
+    gestionh_ausentismo con cinco_base_de_personal para enriquecer respuestas
+    por area, cargo, supervisor, carpeta y tipo_labor, y aprovechar campos
+    propios del ausentismo como causa_aus, ini_inca, tipo_inca, codigo_inca,
+    desc_inca, ini_incapa y fin_incapa cuando existan.
+  criterio_principal: >
+    La tabla gestionh_ausentismo es la fuente de hechos; cinco_base_de_personal
+    es la fuente de contexto organizacional del empleado.
+  defaults_negocio:
+    - "Se considera ausentismo cuando gestionh_ausentismo.ausentismo es SI, ignorando mayusculas, minusculas y espacios; la fecha operativa del ausentismo se interpreta desde fecha_edit."
+    - "Si la justificacion es nula, vacia o SIN JUSTIFICAR, clasificar como INJUSTIFICADO."
+    - "Si la justificacion tiene valor valido, clasificar como JUSTIFICADO y usar justificacion como motivo o causa."
+    - "Se considera reincidente cuando un empleado acumula mas de 2 ausentismos injustificados en el periodo solicitado."
+    - "Vacaciones, incapacidad, licencia, permiso, calamidad, suspension o examenes se interpretan como filtro sobre justificacion."
+    - "Para incapacidad, causa_aus, ini_inca, tipo_inca, codigo_inca y desc_inca se consideran atributos de referencia, filtro o agrupacion; ini_incapa y fin_incapa representan la vigencia del periodo reportado."
+    - "Si usa 'por area', 'por cargo', 'por supervisor', 'por carpeta', 'por labor', 'por causa' o 'por tipo de incapacidad', interpretar aggregate/group_by."
+    - "Si la consulta dice ausentismos sin mas detalle, devolver totales del rango solicitado; si habla de personal o empleados en un tipo de ausentismo, priorizar detalle de personas."
+
+vocabulario_negocio:
+  - ausentismo
+  - ausencia
+  - ausencias
+  - justificacion
+  - motivo
+  - causa
+  - causa_aus
+  - justificado
+  - injustificado
+  - sin justificar
+  - reincidente
+  - reincidencia
+  - incapacidad
+  - ini_inca
+  - inicial
+  - prorroga
+  - tipo_inca
+  - comun
+  - remunerado
+  - codigo_inca
+  - desc_inca
+  - accidente
+  - enfermedad
+  - ini_incapa
+  - fin_incapa
+  - vacaciones
+  - licencia
+  - permiso
+  - calamidad
+  - suspension
+  - examenes
+  - personal
+  - empleados
+  - supervisor
+  - area
+  - cargo
+  - carpeta
+  - labor
+  - tipo_labor
+  - tipo de labor
+  - fecha_ausentismo
+
+tablas_prioritarias:
+  - gestionh_ausentismo
+  - cinco_base_de_personal
+
+columnas_prioritarias:
+  - fecha_edit
+  - cedula
+  - ausentismo
+  - justificacion
+  - estado_justificacion
+  - causa_aus
+  - ini_inca
+  - tipo_inca
+  - codigo_inca
+  - desc_inca
+  - ini_incapa
+  - fin_incapa
+  - cantidad_incidencias
+  - area
+  - cargo
+  - supervisor
+  - carpeta
+  - tipo_labor

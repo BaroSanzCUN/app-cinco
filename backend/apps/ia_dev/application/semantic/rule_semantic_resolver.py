@@ -35,7 +35,7 @@ class RuleSemanticResolver:
         normalized = self._normalize_text(message)
         normalized_domain = self._normalize_text(domain_code)
         if normalized_domain not in {"empleados", "rrhh", "ausentismo", "attendance"} and not any(
-            token in normalized for token in ("empleado", "colaborador", "usuario", "ausentismo")
+            token in normalized for token in ("empleado", "colaborador", "personal", "ausentismo")
         ):
             return {}
         match = re.search(r"\b\d{6,13}\b", normalized)

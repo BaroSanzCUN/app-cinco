@@ -1,0 +1,19 @@
+reglas_negocio:
+  - codigo: ausentismo_reincidencia_injustificada
+    prioridad: alta
+    descripcion: "Se considera reincidencia cuando el empleado acumula mas de 2 ausentismos injustificados en el periodo solicitado."
+  - codigo: ausentismo_tipo_por_justificacion
+    prioridad: alta
+    descripcion: "Vacaciones, incapacidad, licencia, permiso y calamidad se aplican como filtro de justificacion."
+  - codigo: ausentismo_campos_clinicos_y_de_vigencia
+    prioridad: alta
+    descripcion: "causa_aus, ini_inca, tipo_inca, codigo_inca, desc_inca, ini_incapa y fin_incapa son campos validos de referencia del ausentismo; para incapacidad pueden usarse como filtro o agrupacion si existen en la tabla."
+  - codigo: ausentismo_detalle_personal_por_tipo
+    prioridad: alta
+    descripcion: "Si la consulta habla de personal o empleados en un tipo de ausentismo, priorizar detalle de personas."
+  - codigo: ausentismo_dimensiones_empleados
+    prioridad: alta
+    descripcion: "Area, cargo, supervisor, carpeta y tipo_labor se resuelven por join con cinco_base_de_personal."
+  - codigo: ausentismo_por_dimension
+    prioridad: media
+    descripcion: "Si el usuario usa 'por <dimension>', interpretar aggregate/group_by."

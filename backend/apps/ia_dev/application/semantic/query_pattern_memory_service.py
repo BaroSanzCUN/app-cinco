@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import unicodedata
 from typing import Any
 
 from apps.ia_dev.application.context.run_context import RunContext
@@ -36,10 +37,8 @@ class QueryPatternMemoryService:
         response: dict[str, Any],
         observability=None,
     ) -> dict[str, Any]:
-        if not self._flag_enabled("IA_DEV_QUERY_PATTERN_MEMORY_ENABLED", "0"):
+        if not self._flag_enabled("IA_DEV_QUERY_PATTERN_MEMORY_ENABLED", "1"):
             return {"enabled": False, "saved": False}
-        if not user_key:
-            return {"enabled": True, "saved": False, "reason": "missing_user_key"}
         if not validation.satisfied:
             return {"enabled": True, "saved": False, "reason": validation.reason}
         if not self._flag_enabled("IA_DEV_MEMORY_PROPOSALS_ENABLED", "1"):
@@ -80,23 +79,24 @@ class QueryPatternMemoryService:
             identifiers=identifiers,
         )
         user_scope_enabled = self._flag_enabled("IA_DEV_QUERY_PATTERN_MEMORY_USER_ENABLED", "1")
+        effective_user_scope_enabled = bool(user_scope_enabled and user_key)
         business_scope_enabled = self._flag_enabled(
             "IA_DEV_QUERY_PATTERN_MEMORY_BUSINESS_ENABLED",
-            "0",
+            "1",
         )
         business_scope_allowed = bool(business_scope_enabled and not identifiers)
 
-        if not user_scope_enabled and not business_scope_allowed:
+        if not effective_user_scope_enabled and not business_scope_allowed:
             return {
                 "enabled": True,
                 "saved": False,
                 "reason": "query_pattern_memory_scope_disabled",
-                "user_scope_enabled": user_scope_enabled,
+                "user_scope_enabled": effective_user_scope_enabled,
                 "business_scope_allowed": business_scope_allowed,
             }
 
         result = None
-        if user_scope_enabled:
+        if effective_user_scope_enabled:
             pattern = QueryPatternMemory(
                 scope="user",
                 candidate_key=f"query.pattern.{domain_code.lower()}.{template_id}",
@@ -146,13 +146,17 @@ class QueryPatternMemoryService:
                 pattern=business_pattern,
             )
             business_result = self.memory_writer.create_proposal(
-                user_key=user_key,
+                user_key=user_key or "system_query_pattern_runtime",
                 payload={
                     **business_pattern.as_dict(),
                     "idempotency_key": business_idempotency,
                     "direct_write": False,
                 },
                 source_run_id=run_context.run_id,
+            )
+            business_result = self._autoapply_business_pattern_if_safe(
+                result=business_result,
+                fallback_actor=user_key or "system_query_pattern_runtime",
             )
         elif business_scope_enabled and identifiers:
             business_result = {
@@ -175,18 +179,45 @@ class QueryPatternMemoryService:
                 "business_result_ok": bool((business_result or {}).get("ok")),
                 "satisfaction_score": satisfaction_score,
                 "min_score": min_score,
-                "user_scope_enabled": user_scope_enabled,
+                "user_scope_enabled": effective_user_scope_enabled,
                 "business_scope_allowed": business_scope_allowed,
             },
-        )
+            )
         return {
             "enabled": True,
-            "saved": bool(result.get("ok")),
+            "saved": bool(result.get("ok")) or bool((business_result or {}).get("ok")),
             "result": result,
             "business_result": business_result,
             "score": satisfaction_score,
             "min_score": min_score,
         }
+
+    def _autoapply_business_pattern_if_safe(
+        self,
+        *,
+        result: dict[str, Any],
+        fallback_actor: str,
+    ) -> dict[str, Any]:
+        payload = dict(result or {})
+        if not self._flag_enabled("IA_DEV_QUERY_PATTERN_MEMORY_BUSINESS_AUTOAPPLY_ENABLED", "1"):
+            return payload
+        if not bool(payload.get("ok")):
+            return payload
+        proposal = dict(payload.get("proposal") or {})
+        proposal_id = str(proposal.get("proposal_id") or "").strip()
+        status = str(proposal.get("status") or "").strip().lower()
+        if not proposal_id or status not in {"pending", "approved"}:
+            return payload
+        apply_result = self.memory_writer.approve_proposal(
+            proposal_id=proposal_id,
+            actor_user_key=str(fallback_actor or "system_query_pattern_runtime"),
+            actor_role="system",
+            comment="auto_apply_business_query_pattern_low_risk",
+        )
+        if bool(apply_result.get("ok")):
+            payload["proposal"] = dict(apply_result.get("proposal") or proposal)
+            payload["auto_applied"] = True
+        return payload
 
     @staticmethod
     def _idempotency_key(*, user_key: str, pattern: QueryPatternMemory) -> str:
@@ -293,6 +324,10 @@ class QueryPatternMemoryService:
             "template_id": str(resolved_query.intent.template_id or "").strip().lower(),
             "operation": str(resolved_query.intent.operation or "").strip().lower(),
             "entity_type": str(resolved_query.intent.entity_type or "").strip().lower(),
+            "surface_pattern": {
+                "normalized_query": self._normalize_query_text(str(resolved_query.intent.raw_query or "")),
+                "query_shape_key": self._build_query_shape_key(str(resolved_query.intent.raw_query or "")),
+            },
             "semantic_pattern": {
                 "filters": filters,
                 "group_by": list(resolved_query.intent.group_by or []),
@@ -341,6 +376,21 @@ class QueryPatternMemoryService:
             "table_columns": list(table.get("columns") or [])[:20],
             "rowcount": int(table.get("rowcount") or 0),
         }
+
+    @staticmethod
+    def _normalize_query_text(value: str) -> str:
+        lowered = str(value or "").strip().lower()
+        normalized = unicodedata.normalize("NFKD", lowered)
+        return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+    @classmethod
+    def _build_query_shape_key(cls, raw_query: str) -> str:
+        normalized = cls._normalize_query_text(raw_query)
+        normalized = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "<fecha>", normalized)
+        normalized = re.sub(r"\b\d{6,13}\b", "<cedula>", normalized)
+        normalized = re.sub(r"\b[a-z][a-z0-9_-]*\d+[a-z0-9_-]*\b", "<codigo>", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized
 
     @staticmethod
     def _record_event(*, observability, event_type: str, source: str, meta: dict[str, Any]) -> None:

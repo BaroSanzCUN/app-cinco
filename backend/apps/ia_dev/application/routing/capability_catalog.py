@@ -171,6 +171,15 @@ class CapabilityCatalog:
                 rollout_flag="IA_DEV_CAP_EMPLEADOS_ENABLED|IA_DEV_CAP_EMPLEADOS_COUNT_ENABLED",
             ),
             CapabilityDefinition(
+                capability_id="empleados.detail.v1",
+                domain="empleados",
+                handler_key="empleados.detail",
+                description="Detalle de empleado por identificador de negocio.",
+                legacy_intents=("empleados_query",),
+                policy_tags=("contains_personal_data",),
+                rollout_flag="IA_DEV_CAP_EMPLEADOS_ENABLED",
+            ),
+            CapabilityDefinition(
                 capability_id="knowledge.proposal.create.v1",
                 domain="knowledge",
                 handler_key="knowledge.proposal_create",

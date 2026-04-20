@@ -16,6 +16,12 @@ class OrchestratorLegacySemanticsTests(SimpleTestCase):
         )
         self.assertEqual(resolved, ("area", "Area"))
 
+    def test_group_dimension_resolves_tipo_labor_before_generic_tipo(self):
+        resolved = self.service._resolve_attendance_group_dimension(
+            "ausentismos ultimo mes por tipo de labor"
+        )
+        self.assertEqual(resolved, ("tipo_labor", "Tipo Labor"))
+
     def test_group_aggregate_detects_concentration_without_count_tokens(self):
         should_aggregate = self.service._is_attendance_group_count_request(
             message="Que areas concentran mas ausentismos en rolling 90 dias",
@@ -75,3 +81,16 @@ class OrchestratorLegacySemanticsTests(SimpleTestCase):
         self.assertEqual(str(meta.get("generator") or ""), "openai")
         self.assertTrue(bool(meta.get("validated")))
         self.assertTrue(list(result.get("insights") or []))
+
+    def test_count_active_employees_accepts_personal_keyword(self):
+        self.assertTrue(self.service._is_count_active_employees_request("cantidad personal activo"))
+        self.assertTrue(self.service._is_count_active_employees_request("personal activo"))
+
+    def test_count_active_employees_accepts_colaboradores_keyword(self):
+        self.assertTrue(self.service._is_count_active_employees_request("numero de colaboradores activos"))
+
+    def test_count_active_employees_accepts_typo_cantididad(self):
+        self.assertTrue(self.service._is_count_active_employees_request("cantididad empleados activos"))
+
+    def test_count_active_employees_does_not_force_analytics_group_query(self):
+        self.assertFalse(self.service._is_count_active_employees_request("empleados activos por area"))

@@ -9,6 +9,11 @@ class SynonymSemanticResolver:
     """
     Resolver de sinonimos semanticos usando dd_sinonimos y aliases de campos.
     """
+    _LOCAL_EQUIVALENCES = {
+        "labor": "tipo_labor",
+        "labores": "tipo_labor",
+        "tipo_labor": "tipo_labor",
+    }
 
     @classmethod
     def normalize_text(cls, value: str | None) -> str:
@@ -54,6 +59,13 @@ class SynonymSemanticResolver:
                 index.setdefault(logical, logical)
             if logical and column:
                 index.setdefault(column, logical)
+
+        for alias, canonical in self._LOCAL_EQUIVALENCES.items():
+            normalized_alias = self.normalize_text(alias)
+            normalized_canonical = self.normalize_text(canonical)
+            if normalized_alias and normalized_canonical:
+                index.setdefault(normalized_alias, normalized_canonical)
+                index.setdefault(normalized_canonical, normalized_canonical)
 
         return index
 

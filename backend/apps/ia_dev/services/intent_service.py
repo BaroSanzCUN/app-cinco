@@ -40,7 +40,71 @@ class IntentClassifierService:
 
     def _contains_count_request(self, message: str) -> bool:
         msg = self._normalize_text(message)
-        return any(token in msg for token in ("cantidad", "cuantos", "cuantas", "total", "numero"))
+        return any(token in msg for token in ("cantidad", "cuantos", "cuantas", "total", "numero")) or bool(
+            re.search(r"\bcantid[a-z]*\b", msg)
+        )
+
+    def _contains_employee_domain(self, message: str) -> bool:
+        msg = self._normalize_text(message)
+        return any(
+            token in msg
+            for token in (
+                "rrhh",
+                "emplead",
+                "colaborador",
+                "personal",
+                "persona",
+                "cedula",
+                "supervisor",
+                "cargo",
+                "area",
+                "carpeta",
+            )
+        ) or bool(re.search(r"\bmovil\b", msg))
+
+    def _contains_employee_status_focus(self, message: str) -> bool:
+        msg = self._normalize_text(message)
+        return any(
+            token in msg
+            for token in (
+                "activ",
+                "vigent",
+                "habilitad",
+                "inactiv",
+            )
+        )
+
+    def _is_employee_status_count_request(self, message: str) -> bool:
+        msg = self._normalize_text(message)
+        if not self._contains_employee_status_focus(message):
+            return False
+        if self._contains_count_request(message):
+            return True
+        return bool(re.search(r"\bhay\b", msg))
+
+    def _looks_like_employee_lookup_request(self, message: str) -> bool:
+        msg = self._normalize_text(message)
+        if self._contains_attendance_domain(message):
+            return False
+        if any(token in msg for token in ("transporte", "ruta", "movilidad", "vehicul")):
+            return False
+        if re.search(r"\bmovil(?:\s+(?:de|del|la|el))?\s+[a-z0-9_-]{3,40}\b", msg):
+            return True
+        match = re.search(
+            r"\b(?:info|informacion|detalle|datos|ficha)\s+de\s+([a-z0-9_-]{3,40})\b",
+            msg,
+        )
+        if not match:
+            match = re.search(
+                r"^\s*(?:info|informacion|detalle|datos|ficha)\s+([a-z0-9_-]{3,40})\s*$",
+                msg,
+            )
+        if not match:
+            return False
+        candidate = str(match.group(1) or "").strip()
+        if re.fullmatch(r"\d{6,13}", candidate):
+            return True
+        return bool(re.search(r"[a-z]", candidate) and re.search(r"\d", candidate))
 
     def _contains_group_dimension_request(self, message: str) -> bool:
         msg = self._normalize_text(message)
@@ -94,6 +158,28 @@ class IntentClassifierService:
                     "needs_database": True,
                     "output_mode": "summary",
                     "needs_personal_join": True,
+                }
+            )
+            return result
+        if self._is_employee_status_count_request(message):
+            result.update(
+                {
+                    "domain": "empleados",
+                    "intent": "employee_query",
+                    "selected_agent": "empleados_agent",
+                    "needs_database": True,
+                    "output_mode": "summary",
+                }
+            )
+            return result
+        if self._looks_like_employee_lookup_request(message):
+            result.update(
+                {
+                    "domain": "empleados",
+                    "intent": "employee_query",
+                    "selected_agent": "empleados_agent",
+                    "needs_database": True,
+                    "output_mode": "table",
                 }
             )
             return result
@@ -183,8 +269,8 @@ class IntentClassifierService:
                         "intent can also be knowledge_change_request when user asks to create/update business rules. "
                         "output_mode must be one of: summary, table, list. "
                         "focus must be one of: all, unjustified, missing_personal. "
-                        "Domains: rrhh, attendance, transport, operations, viatics, payroll, audit, general. "
-                        "Agents: rrhh_agent, attendance_agent, transport_agent, operations_agent, "
+                        "Domains: empleados, attendance, transport, operations, viatics, payroll, audit, general. "
+                        "Agents: empleados_agent, attendance_agent, transport_agent, operations_agent, "
                         "viatics_agent, payroll_agent, audit_agent, analista_agent."
                     ),
                 },
@@ -276,8 +362,10 @@ class IntentClassifierService:
             needs_database = True
             if output_mode == "summary" and any(token in msg for token in ("tabla", "lista", "detalle", "mostrar")):
                 output_mode = "table"
-        elif any(token in msg for token in ("rrhh", "emplead", "supervisor", "cargo", "area", "carpeta")):
-            domain = "rrhh"
+        elif self._contains_employee_domain(message) or (
+            self._is_employee_status_count_request(message)
+        ) or self._looks_like_employee_lookup_request(message):
+            domain = "empleados"
             intent = "employee_query"
             needs_database = True
         elif any(token in msg for token in ("transporte", "ruta", "movilidad", "vehicul", "salieron")):
@@ -350,7 +438,8 @@ class IntentClassifierService:
     @staticmethod
     def _agent_for_domain(domain: str | None) -> str:
         mapping = {
-            "rrhh": "rrhh_agent",
+            "rrhh": "empleados_agent",
+            "empleados": "empleados_agent",
             "attendance": "attendance_agent",
             "transport": "transport_agent",
             "operations": "operations_agent",

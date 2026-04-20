@@ -218,7 +218,12 @@ class DictionaryToolService:
         domain_key = (domain or "general").strip().lower()
         code_map = {
             "attendance": "AUSENTISMOS",
-            "rrhh": "USUARIOS",
+            "ausentismo": "AUSENTISMOS",
+            "empleados": "EMPLEADOS",
+            "employee": "EMPLEADOS",
+            "employees": "EMPLEADOS",
+            "personal": "EMPLEADOS",
+            "rrhh": "EMPLEADOS",
             "transport": "TRANSPORTE",
             "operations": "OPERACIONES",
             "viatics": "VIATICOS",
@@ -252,11 +257,12 @@ class DictionaryToolService:
                   AND (
                     UPPER(COALESCE(codigo, '')) = %s
                     OR UPPER(COALESCE(nombre, '')) LIKE %s
+                    OR UPPER(COALESCE(descripcion, '')) LIKE %s
                   )
                 ORDER BY CASE WHEN UPPER(COALESCE(codigo, '')) = %s THEN 0 ELSE 1 END, id
                 LIMIT 1
                 """,
-                [domain_code.upper(), f"%{domain_code.upper()}%", domain_code.upper()],
+                [domain_code.upper(), f"%{domain_code.upper()}%", f"%{domain_code.upper()}%", domain_code.upper()],
             )
             domain_row = cursor.fetchone()
 
@@ -506,6 +512,133 @@ class DictionaryToolService:
         context = self.get_domain_context(domain, limit=limit)
         return list(context.get("field_profiles") or [])
 
+    def get_table_field_profiles(
+        self,
+        table_names: list[str] | tuple[str, ...],
+        *,
+        limit: int = 80,
+    ) -> list[dict[str, Any]]:
+        schema = self._safe_schema()
+        requested = [
+            str(item or "").strip().lower()
+            for item in list(table_names or [])
+            if str(item or "").strip()
+        ]
+        requested = list(dict.fromkeys([item for item in requested if _SAFE_IDENTIFIER_RE.match(item)]))
+        if not requested:
+            return []
+
+        safe_limit = max(1, min(int(limit), 500))
+        with connections[self.db_alias].cursor() as cursor:
+            fields_columns = self._table_columns(cursor=cursor, schema=schema, table_name="dd_campos")
+            profile_table_name = self._resolve_profile_table_name(cursor=cursor, schema=schema)
+            has_profile_table = bool(profile_table_name)
+            profile_columns = (
+                self._table_columns(cursor=cursor, schema=schema, table_name=str(profile_table_name or ""))
+                if has_profile_table
+                else set()
+            )
+
+            join_profile = ""
+            profile_active_filter = "1 = 1"
+            if has_profile_table:
+                join_profile = f"LEFT JOIN {schema}.{profile_table_name} AS p ON p.campo_id = c.id"
+                if "activo" in profile_columns:
+                    profile_active_filter = "(p.activo = 1 OR p.campo_id IS NULL)"
+                elif "activa" in profile_columns:
+                    profile_active_filter = "(p.activa = 1 OR p.campo_id IS NULL)"
+                elif "active" in profile_columns:
+                    profile_active_filter = "(p.active = 1 OR p.campo_id IS NULL)"
+
+            def fexpr(column_name: str, alias_name: str, table_alias: str = "c") -> str:
+                if column_name in fields_columns:
+                    return f"{table_alias}.{column_name} AS {alias_name}"
+                return f"NULL AS {alias_name}"
+
+            def pexpr_any(candidates: tuple[str, ...], alias_name: str) -> str:
+                for item in candidates:
+                    if has_profile_table and item in profile_columns:
+                        return f"p.{item} AS {alias_name}"
+                return f"NULL AS {alias_name}"
+
+            in_clause = ", ".join(["%s"] * len(requested))
+            cursor.execute(
+                f"""
+                SELECT
+                    t.table_name AS table_name,
+                    c.id AS campo_id,
+                    {fexpr("campo_logico", "campo_logico")},
+                    {fexpr("column_name", "column_name")},
+                    {fexpr("tipo_campo", "tipo_campo")},
+                    {fexpr("tipo_dato_tecnico", "tipo_dato_tecnico")},
+                    {fexpr("definicion_negocio", "definicion_negocio")},
+                    {fexpr("es_clave", "es_clave")},
+                    {fexpr("valores_permitidos", "valores_permitidos")},
+                    {fexpr("es_filtro", "es_filtro")},
+                    {fexpr("es_group_by", "es_group_by")},
+                    {fexpr("es_metrica", "es_metrica")},
+                    {pexpr_any(("supports_filter", "soporta_filtro"), "p_supports_filter")},
+                    {pexpr_any(("supports_group_by", "soporta_group_by"), "p_supports_group_by")},
+                    {pexpr_any(("supports_metric", "soporta_metrica"), "p_supports_metric")},
+                    {pexpr_any(("supports_dimension", "soporta_dimension"), "p_supports_dimension")},
+                    {pexpr_any(("is_date", "es_fecha"), "p_is_date")},
+                    {pexpr_any(("is_identifier", "es_identificador"), "p_is_identifier")},
+                    {pexpr_any(("is_chart_dimension", "es_chart_dimension"), "p_is_chart_dimension")},
+                    {pexpr_any(("is_chart_measure", "es_chart_measure"), "p_is_chart_measure")},
+                    {pexpr_any(("allowed_operators_json", "operadores_permitidos_json"), "p_allowed_operators_json")},
+                    {pexpr_any(("allowed_aggregations_json", "agregaciones_permitidas_json"), "p_allowed_aggregations_json")},
+                    {pexpr_any(("normalization_strategy", "estrategia_normalizacion"), "p_normalization_strategy")},
+                    {pexpr_any(("priority", "prioridad"), "p_priority")}
+                FROM {schema}.dd_campos AS c
+                JOIN {schema}.dd_tablas AS t ON t.id = c.tabla_id
+                {join_profile}
+                WHERE {self._active_filter(alias="c", available_columns=fields_columns)}
+                  AND LOWER(COALESCE(t.table_name, '')) IN ({in_clause})
+                  AND ({profile_active_filter})
+                ORDER BY t.table_name, c.id
+                LIMIT %s
+                """,
+                [*requested, safe_limit],
+            )
+            rows = cursor.fetchall()
+
+        profiles: list[dict[str, Any]] = []
+        for row in rows:
+            allowed_values = self._parse_allowed_values(row[8])
+            supports_filter = self._to_bool(row[12]) or self._to_bool(row[9]) or bool(allowed_values)
+            supports_group_by = self._to_bool(row[13]) or self._to_bool(row[10])
+            supports_metric = self._to_bool(row[14]) or self._to_bool(row[11])
+            profiles.append(
+                {
+                    "table_name": str(row[0] or ""),
+                    "campo_id": int(row[1] or 0),
+                    "campo_logico": str(row[2] or ""),
+                    "column_name": str(row[3] or ""),
+                    "tipo_campo": str(row[4] or ""),
+                    "tipo_dato_tecnico": str(row[5] or ""),
+                    "definicion_negocio": str(row[6] or ""),
+                    "es_clave": self._to_bool(row[7]),
+                    "valores_permitidos": str(row[8] or ""),
+                    "allowed_values": allowed_values,
+                    "es_filtro": supports_filter,
+                    "es_group_by": supports_group_by,
+                    "es_metrica": supports_metric,
+                    "supports_filter": supports_filter,
+                    "supports_group_by": supports_group_by,
+                    "supports_metric": supports_metric,
+                    "supports_dimension": self._to_bool(row[15]) or supports_group_by,
+                    "is_date": self._to_bool(row[16]),
+                    "is_identifier": self._to_bool(row[17]),
+                    "is_chart_dimension": self._to_bool(row[18]) or supports_group_by,
+                    "is_chart_measure": self._to_bool(row[19]) or supports_metric,
+                    "allowed_operators": self._to_json(row[20], []),
+                    "allowed_aggregations": self._to_json(row[21], []),
+                    "normalization_strategy": str(row[22] or ""),
+                    "priority": int(row[23] or 0),
+                }
+            )
+        return profiles
+
     def ensure_rrhh_status_synonyms_seed(self) -> dict[str, Any]:
         """
         Seed idempotente de sinonimos RRHH para estados laborales.
@@ -525,7 +658,7 @@ class DictionaryToolService:
         result: dict[str, Any] = {
             "ok": True,
             "status": "skipped",
-            "domain_code": "USUARIOS",
+            "domain_code": "EMPLEADOS",
             "inserted": 0,
             "skipped": 0,
             "seed_size": len(synonyms_seed),
@@ -552,11 +685,12 @@ class DictionaryToolService:
                       AND (
                         UPPER(COALESCE(codigo, '')) = %s
                         OR UPPER(COALESCE(nombre, '')) LIKE %s
+                        OR UPPER(COALESCE(descripcion, '')) LIKE %s
                       )
                     ORDER BY id
                     LIMIT 1
                     """,
-                    ["USUARIOS", "%USUARIO%"],
+                    ["EMPLEADOS", "%EMPLEAD%", "%EMPLEAD%"],
                 )
                 domain_row = cursor.fetchone()
                 if not domain_row:
@@ -564,7 +698,7 @@ class DictionaryToolService:
                         **result,
                         "ok": False,
                         "status": "error",
-                        "errors": ["dd_dominios_usuarios_not_found"],
+                        "errors": ["dd_dominios_empleados_not_found"],
                     }
                 domain_id = int(domain_row[0] or 0)
                 if domain_id <= 0:
@@ -572,7 +706,7 @@ class DictionaryToolService:
                         **result,
                         "ok": False,
                         "status": "error",
-                        "errors": ["dd_dominios_usuarios_invalid_id"],
+                        "errors": ["dd_dominios_empleados_invalid_id"],
                     }
 
                 has_domain_fk = "dominio_id" in synonyms_columns

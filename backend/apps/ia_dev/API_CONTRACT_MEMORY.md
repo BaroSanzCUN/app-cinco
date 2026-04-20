@@ -33,7 +33,7 @@ Semantica:
 - `actions`: acciones sugeridas para frontend (por ejemplo, revisar propuestas).
   El payload puede incluir `workflow_statuses` para priorizacion visual.
 
-## 1) Memoria de usuario
+## 1) Memoria de cuenta
 
 ### GET `/ia-dev/memory/user/`
 
@@ -61,8 +61,8 @@ Respuesta `200`:
 
 Restricciones:
 
-- Usuario normal solo puede leer su propio `user_key`.
-- `403` si intenta consultar memoria de otro usuario.
+- Cuenta normal solo puede leer su propio `user_key`.
+- `403` si intenta consultar memoria de otra cuenta.
 
 ### POST `/ia-dev/memory/user/`
 
@@ -99,7 +99,7 @@ Query params:
 RBAC:
 
 - admin/lead/governance: puede listar global
-- usuario normal: solo sus propuestas (`proposer_user_key`)
+- cuenta normal: solo sus propuestas (`proposer_user_key`)
 
 Extensiones PR7:
 
@@ -154,7 +154,7 @@ Request:
 RBAC:
 
 - Alcance `business` o `general`: gobernado por `POLICIES/approval_policy.yaml`
-- Usuario normal: no puede aprobar/rechazar global
+- Cuenta normal: no puede aprobar/rechazar global
 
 Estados:
 
@@ -176,7 +176,7 @@ Query params:
 RBAC:
 
 - admin/lead/governance: auditoria global
-- usuario normal: solo `scope=user` y su propio prefijo `entity_key`
+- cuenta normal: solo `scope=user` y su propio prefijo `entity_key`
 
 ## Idempotencia y concurrencia
 

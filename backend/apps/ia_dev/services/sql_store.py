@@ -26,6 +26,19 @@ class IADevSqlStore:
         if raw_system_schema.lower() != self._required_system_schema:
             raise ValueError("IA_DEV_SYSTEM_SCHEMA must be 'ai_dictionary'")
         self.system_schema = self._required_system_schema
+        # Catalogo semantico runtime con nombres especificos en espanol.
+        self.tabla_catalogo_dominios = self._resolve_table_name(
+            env_var="IA_DEV_TABLA_CATALOGO_DOMINIOS",
+            default="ia_dev_catalogo_dominios",
+        )
+        self.tabla_catalogo_tablas_dominio = self._resolve_table_name(
+            env_var="IA_DEV_TABLA_CATALOGO_TABLAS_DOMINIO",
+            default="ia_dev_catalogo_tablas_dominio",
+        )
+        # Nombres legacy para migracion sin ruptura.
+        self._tabla_legacy_dominios = "ia_dev_dominios"
+        self._tabla_legacy_tablas_dominio = "ia_dev_tablas_dominio"
+        self._tabla_legacy_columnas = "ia_dev_columnas"
 
     def _execute(self, sql: str, params: list | tuple | None = None):
         prepared_sql = self._prepare_sql(sql)
@@ -54,6 +67,315 @@ class IADevSqlStore:
             lambda match: f"`{schema}`.`{match.group(1)}`",
             rendered,
         )
+
+    @classmethod
+    def _resolve_table_name(cls, *, env_var: str, default: str) -> str:
+        candidate = str(os.getenv(env_var, default) or default).strip()
+        if not cls._is_safe_identifier(candidate):
+            raise ValueError(f"Invalid {env_var} value")
+        return candidate
+
+    def _table_exists(self, *, table_name: str) -> bool:
+        if not self._is_safe_identifier(table_name):
+            return False
+        row = self._fetchone(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_schema = %s
+              AND table_name = %s
+            """,
+            [self.system_schema, table_name],
+        )
+        return bool(int((row or [0])[0] or 0) > 0)
+
+    def _table_rowcount(self, *, table_name: str) -> int:
+        if not self._is_safe_identifier(table_name):
+            return 0
+        if not self._table_exists(table_name=table_name):
+            return 0
+        row = self._fetchone(f"SELECT COUNT(*) FROM {table_name}")
+        return int((row or [0])[0] or 0)
+
+    def _migrate_catalog_tables_from_legacy(self) -> None:
+        # Copia datos legacy -> nuevo catalogo solo si el nuevo esta vacio.
+        if (
+            self.tabla_catalogo_dominios != self._tabla_legacy_dominios
+            and self._table_exists(table_name=self._tabla_legacy_dominios)
+            and self._table_exists(table_name=self.tabla_catalogo_dominios)
+            and self._table_rowcount(table_name=self.tabla_catalogo_dominios) == 0
+        ):
+            self._execute(
+                f"""
+                INSERT INTO {self.tabla_catalogo_dominios} (
+                    id,
+                    codigo_dominio,
+                    nombre_dominio,
+                    objetivo_negocio,
+                    entidad_principal,
+                    estado_dominio,
+                    nivel_madurez,
+                    nivel_confianza_esquema,
+                    source_of_truth,
+                    source_ref,
+                    flags_json,
+                    contexto_semantico_json,
+                    version,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    id,
+                    codigo_dominio,
+                    nombre_dominio,
+                    objetivo_negocio,
+                    entidad_principal,
+                    estado_dominio,
+                    nivel_madurez,
+                    nivel_confianza_esquema,
+                    source_of_truth,
+                    source_ref,
+                    flags_json,
+                    contexto_semantico_json,
+                    version,
+                    created_at,
+                    updated_at
+                FROM {self._tabla_legacy_dominios}
+                """
+            )
+
+        if (
+            self.tabla_catalogo_tablas_dominio != self._tabla_legacy_tablas_dominio
+            and self._table_exists(table_name=self._tabla_legacy_tablas_dominio)
+            and self._table_exists(table_name=self.tabla_catalogo_tablas_dominio)
+            and self._table_rowcount(table_name=self.tabla_catalogo_tablas_dominio) == 0
+        ):
+            self._execute(
+                f"""
+                INSERT INTO {self.tabla_catalogo_tablas_dominio} (
+                    id,
+                    dominio_id,
+                    schema_name,
+                    table_name,
+                    table_fqn,
+                    nombre_tabla_logico,
+                    rol_tabla,
+                    es_principal,
+                    source_of_truth,
+                    source_ref,
+                    estado,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    id,
+                    dominio_id,
+                    schema_name,
+                    table_name,
+                    table_fqn,
+                    nombre_tabla_logico,
+                    rol_tabla,
+                    es_principal,
+                    source_of_truth,
+                    source_ref,
+                    estado,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                FROM {self._tabla_legacy_tablas_dominio}
+                """
+            )
+
+    def _drop_unused_columns_table(self) -> None:
+        # ia_dev_columnas ya no participa en runtime semantico actual.
+        if not self._table_exists(table_name=self._tabla_legacy_columnas):
+            return
+        self._execute(f"DROP TABLE IF EXISTS {self._tabla_legacy_columnas}")
+
+    def _drop_legacy_catalog_tables(self) -> None:
+        # Ya no se usan en runtime: se reemplazaron por tablas catalogo en espanol.
+        for legacy in (
+            self._tabla_legacy_tablas_dominio,
+            self._tabla_legacy_dominios,
+        ):
+            if not self._is_safe_identifier(legacy):
+                continue
+            if legacy in {self.tabla_catalogo_dominios, self.tabla_catalogo_tablas_dominio}:
+                continue
+            if self._table_exists(table_name=legacy):
+                self._execute(f"DROP TABLE IF EXISTS {legacy}")
+
+    @staticmethod
+    def _to_text(value: Any) -> str:
+        return str(value or "").strip()
+
+    @classmethod
+    def _safe_json_list(cls, value: Any) -> list[Any]:
+        parsed = value
+        if isinstance(value, str):
+            parsed = cls._from_json(value, [])
+        elif value is None:
+            parsed = []
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, tuple):
+            return list(parsed)
+        if isinstance(parsed, dict):
+            return [parsed]
+        return []
+
+    @staticmethod
+    def _normalize_company_domain_code(value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        if not raw:
+            return ""
+        normalized = re.sub(r"[^a-z0-9_]+", "", raw)
+        if any(token in normalized for token in ("ausent", "asistencia")):
+            return "ausentismo"
+        if any(token in normalized for token in ("rrhh", "emplead", "personal", "humano")):
+            return "empleados"
+        if "transport" in normalized or "vehicul" in normalized or "movilidad" in normalized:
+            return "transporte"
+        if "viatic" in normalized:
+            return "viaticos"
+        if "nomina" in normalized or "payroll" in normalized:
+            return "nomina"
+        if "compr" in normalized:
+            return "compras"
+        if "agenda" in normalized:
+            return "agenda"
+        return normalized
+
+    def get_contexto_compania(self, *, codigo_compania: str = "CINCO") -> dict[str, Any]:
+        schema = str(self.system_schema or "ai_dictionary")
+        table_name = "dd_contexto_compania"
+        company_code = str(codigo_compania or "CINCO").strip().upper() or "CINCO"
+        defaults: dict[str, Any] = {
+            "codigo_compania": company_code,
+            "nombre_compania": "",
+            "nombre_comercial": "",
+            "aliases_compania": [],
+            "sector": "",
+            "descripcion_negocio": "",
+            "objetivo_orquestador": "",
+            "areas_activas": [],
+            "procesos_clave": [],
+            "dominios_oficiales": [],
+            "lenguaje_interno": [],
+            "sistemas_fuente": [],
+            "politicas_globales": [],
+            "agentes_oficiales": [],
+            "restricciones_operativas": [],
+            "indicadores_clave": [],
+            "estado": "unknown",
+            "version": 0,
+            "dominios_operativos": [],
+            "origen": f"{schema}.{table_name}",
+        }
+        if not self._is_safe_identifier(schema):
+            return defaults
+        if not self._table_exists(table_name=table_name):
+            return defaults
+
+        row = self._fetchone(
+            f"""
+            SELECT
+                codigo_compania,
+                nombre_compania,
+                nombre_comercial,
+                aliases_compania_json,
+                sector,
+                descripcion_negocio,
+                objetivo_orquestador,
+                areas_activas_json,
+                procesos_clave_json,
+                dominios_oficiales_json,
+                lenguaje_interno_json,
+                sistemas_fuente_json,
+                politicas_globales_json,
+                agentes_oficiales_json,
+                restricciones_operativas_json,
+                indicadores_clave_json,
+                estado,
+                version
+            FROM {schema}.{table_name}
+            WHERE UPPER(codigo_compania) = UPPER(%s)
+              AND LOWER(COALESCE(estado, 'active')) = 'active'
+            ORDER BY version DESC, id DESC
+            LIMIT 1
+            """,
+            [company_code],
+        )
+        if not row:
+            row = self._fetchone(
+                f"""
+                SELECT
+                    codigo_compania,
+                    nombre_compania,
+                    nombre_comercial,
+                    aliases_compania_json,
+                    sector,
+                    descripcion_negocio,
+                    objetivo_orquestador,
+                    areas_activas_json,
+                    procesos_clave_json,
+                    dominios_oficiales_json,
+                    lenguaje_interno_json,
+                    sistemas_fuente_json,
+                    politicas_globales_json,
+                    agentes_oficiales_json,
+                    restricciones_operativas_json,
+                    indicadores_clave_json,
+                    estado,
+                    version
+                FROM {schema}.{table_name}
+                WHERE LOWER(COALESCE(estado, 'active')) = 'active'
+                ORDER BY version DESC, id DESC
+                LIMIT 1
+                """
+            )
+        if not row:
+            return defaults
+
+        payload = {
+            "codigo_compania": self._to_text(row[0]).upper() or company_code,
+            "nombre_compania": self._to_text(row[1]),
+            "nombre_comercial": self._to_text(row[2]),
+            "aliases_compania": self._safe_json_list(row[3]),
+            "sector": self._to_text(row[4]),
+            "descripcion_negocio": self._to_text(row[5]),
+            "objetivo_orquestador": self._to_text(row[6]),
+            "areas_activas": self._safe_json_list(row[7]),
+            "procesos_clave": self._safe_json_list(row[8]),
+            "dominios_oficiales": self._safe_json_list(row[9]),
+            "lenguaje_interno": self._safe_json_list(row[10]),
+            "sistemas_fuente": self._safe_json_list(row[11]),
+            "politicas_globales": self._safe_json_list(row[12]),
+            "agentes_oficiales": self._safe_json_list(row[13]),
+            "restricciones_operativas": self._safe_json_list(row[14]),
+            "indicadores_clave": self._safe_json_list(row[15]),
+            "estado": self._to_text(row[16]).lower() or "active",
+            "version": int(row[17] or 0),
+            "origen": f"{schema}.{table_name}",
+        }
+
+        operational_raw = self._fetchall(
+            f"""
+            SELECT DISTINCT COALESCE(d.codigo, d.nombre, '')
+            FROM {schema}.dd_tablas AS t
+            JOIN {schema}.dd_dominios AS d ON d.id = t.dominio_id
+            WHERE COALESCE(t.activo, 1) = 1
+              AND COALESCE(d.activo, 1) = 1
+            """
+        )
+        operational_domains: list[str] = []
+        for item in operational_raw:
+            value = self._normalize_company_domain_code(item[0] if item else "")
+            if value:
+                operational_domains.append(value)
+        payload["dominios_operativos"] = sorted({item for item in operational_domains if item})
+        return {**defaults, **payload}
 
     @staticmethod
     def _now() -> int:
@@ -276,8 +598,8 @@ class IADevSqlStore:
                 """
             )
             self._execute(
-                """
-                CREATE TABLE IF NOT EXISTS ia_dev_dominios (
+                f"""
+                CREATE TABLE IF NOT EXISTS {self.tabla_catalogo_dominios} (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
                     codigo_dominio VARCHAR(80) NOT NULL UNIQUE,
                     nombre_dominio VARCHAR(120) NOT NULL,
@@ -319,8 +641,8 @@ class IADevSqlStore:
                 """
             )
             self._execute(
-                """
-                CREATE TABLE IF NOT EXISTS ia_dev_tablas_dominio (
+                f"""
+                CREATE TABLE IF NOT EXISTS {self.tabla_catalogo_tablas_dominio} (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
                     dominio_id BIGINT NOT NULL,
                     schema_name VARCHAR(120) NULL,
@@ -338,31 +660,6 @@ class IADevSqlStore:
                     UNIQUE KEY uq_ia_dev_tablas_dominio (dominio_id, table_fqn),
                     KEY idx_ia_dev_tablas_dominio_dominio (dominio_id),
                     KEY idx_ia_dev_tablas_dominio_estado (estado)
-                )
-                """
-            )
-            self._execute(
-                """
-                CREATE TABLE IF NOT EXISTS ia_dev_columnas (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                    tabla_dominio_id BIGINT NOT NULL,
-                    column_name VARCHAR(120) NOT NULL,
-                    nombre_columna_logico VARCHAR(120) NULL,
-                    descripcion TEXT NULL,
-                    data_type VARCHAR(80) NULL,
-                    es_clave TINYINT(1) NOT NULL DEFAULT 0,
-                    es_filtro TINYINT(1) NOT NULL DEFAULT 0,
-                    es_group_by TINYINT(1) NOT NULL DEFAULT 0,
-                    es_metrica TINYINT(1) NOT NULL DEFAULT 0,
-                    es_sensible TINYINT(1) NOT NULL DEFAULT 0,
-                    operadores_permitidos_json LONGTEXT NULL,
-                    source_of_truth VARCHAR(24) NOT NULL DEFAULT 'db',
-                    estado VARCHAR(24) NOT NULL DEFAULT 'active',
-                    created_at BIGINT NOT NULL,
-                    updated_at BIGINT NOT NULL,
-                    UNIQUE KEY uq_ia_dev_columnas (tabla_dominio_id, column_name),
-                    KEY idx_ia_dev_columnas_tabla (tabla_dominio_id),
-                    KEY idx_ia_dev_columnas_estado (estado)
                 )
                 """
             )
@@ -457,6 +754,9 @@ class IADevSqlStore:
                 )
                 """
             )
+            self._migrate_catalog_tables_from_legacy()
+            self._drop_unused_columns_table()
+            self._drop_legacy_catalog_tables()
             self._initialized_by_alias.add(init_key)
 
     @staticmethod
@@ -499,7 +799,7 @@ class IADevSqlStore:
                 version,
                 created_at,
                 updated_at
-            FROM ia_dev_dominios
+            FROM {self.tabla_catalogo_dominios}
             {where}
             ORDER BY codigo_dominio
             LIMIT %s
@@ -535,7 +835,7 @@ class IADevSqlStore:
         if not code:
             return None
         row = self._fetchone(
-            """
+            f"""
             SELECT
                 id,
                 codigo_dominio,
@@ -552,7 +852,7 @@ class IADevSqlStore:
                 version,
                 created_at,
                 updated_at
-            FROM ia_dev_dominios
+            FROM {self.tabla_catalogo_dominios}
             WHERE codigo_dominio = %s
             LIMIT 1
             """,
@@ -602,8 +902,8 @@ class IADevSqlStore:
         if existing:
             new_version = int(existing.get("version") or 1) + 1
             self._execute(
-                """
-                UPDATE ia_dev_dominios
+                f"""
+                UPDATE {self.tabla_catalogo_dominios}
                 SET nombre_dominio = %s,
                     objetivo_negocio = %s,
                     entidad_principal = %s,
@@ -637,8 +937,8 @@ class IADevSqlStore:
             return self.get_dominio(codigo_dominio=code) or {}
 
         self._execute(
-            """
-            INSERT INTO ia_dev_dominios (
+            f"""
+            INSERT INTO {self.tabla_catalogo_dominios} (
                 codigo_dominio,
                 nombre_dominio,
                 objetivo_negocio,
@@ -694,9 +994,9 @@ class IADevSqlStore:
         did = int(dominio_id)
         fqn = str(table_fqn or "").strip().lower()
         existing = self._fetchone(
-            """
+            f"""
             SELECT id
-            FROM ia_dev_tablas_dominio
+            FROM {self.tabla_catalogo_tablas_dominio}
             WHERE dominio_id = %s
               AND table_fqn = %s
             LIMIT 1
@@ -705,8 +1005,8 @@ class IADevSqlStore:
         )
         if existing:
             self._execute(
-                """
-                UPDATE ia_dev_tablas_dominio
+                f"""
+                UPDATE {self.tabla_catalogo_tablas_dominio}
                 SET schema_name = %s,
                     table_name = %s,
                     nombre_tabla_logico = %s,
@@ -735,8 +1035,8 @@ class IADevSqlStore:
             )
         else:
             self._execute(
-                """
-                INSERT INTO ia_dev_tablas_dominio (
+                f"""
+                INSERT INTO {self.tabla_catalogo_tablas_dominio} (
                     dominio_id,
                     schema_name,
                     table_name,
@@ -770,7 +1070,7 @@ class IADevSqlStore:
             )
 
         row = self._fetchone(
-            """
+            f"""
             SELECT
                 id,
                 dominio_id,
@@ -784,7 +1084,7 @@ class IADevSqlStore:
                 source_ref,
                 estado,
                 metadata_json
-            FROM ia_dev_tablas_dominio
+            FROM {self.tabla_catalogo_tablas_dominio}
             WHERE dominio_id = %s
               AND table_fqn = %s
             LIMIT 1
@@ -844,8 +1144,8 @@ class IADevSqlStore:
 
         ts = self._now()
         self._execute(
-            """
-            UPDATE ia_dev_dominios
+            f"""
+            UPDATE {self.tabla_catalogo_dominios}
             SET estado_dominio = %s,
                 version = version + 1,
                 updated_at = %s
@@ -949,7 +1249,7 @@ class IADevSqlStore:
                 e.trace_id,
                 e.created_at
             FROM ia_dev_estado_dominio AS e
-            JOIN ia_dev_dominios AS d ON d.id = e.dominio_id
+            JOIN {self.tabla_catalogo_dominios} AS d ON d.id = e.dominio_id
             {where}
             ORDER BY e.id DESC
             LIMIT %s
@@ -997,7 +1297,7 @@ class IADevSqlStore:
                 source_ref,
                 estado,
                 metadata_json
-            FROM ia_dev_tablas_dominio
+            FROM {self.tabla_catalogo_tablas_dominio}
             {where}
             ORDER BY table_fqn
             LIMIT %s
@@ -1025,60 +1325,8 @@ class IADevSqlStore:
         return payload
 
     def list_columnas_dominio(self, *, dominio_id: int, status: str | None = None, limit: int = 500) -> list[dict]:
-        self.ensure_tables()
-        where = "WHERE t.dominio_id = %s"
-        params: list[Any] = [int(dominio_id)]
-        if status:
-            where += " AND c.estado = %s"
-            params.append(str(status).strip().lower())
-        rows = self._fetchall(
-            f"""
-            SELECT
-                c.id,
-                c.tabla_dominio_id,
-                t.table_fqn,
-                c.column_name,
-                c.nombre_columna_logico,
-                c.descripcion,
-                c.data_type,
-                c.es_clave,
-                c.es_filtro,
-                c.es_group_by,
-                c.es_metrica,
-                c.es_sensible,
-                c.operadores_permitidos_json,
-                c.source_of_truth,
-                c.estado
-            FROM ia_dev_columnas AS c
-            JOIN ia_dev_tablas_dominio AS t ON t.id = c.tabla_dominio_id
-            {where}
-            ORDER BY t.table_fqn, c.column_name
-            LIMIT %s
-            """,
-            [*params, max(1, min(int(limit), 3000))],
-        )
-        payload: list[dict] = []
-        for row in rows:
-            payload.append(
-                {
-                    "id": int(row[0]),
-                    "tabla_dominio_id": int(row[1]),
-                    "table_fqn": str(row[2] or ""),
-                    "column_name": str(row[3] or ""),
-                    "nombre_columna_logico": str(row[4] or ""),
-                    "descripcion": str(row[5] or ""),
-                    "data_type": str(row[6] or ""),
-                    "es_clave": bool(row[7]),
-                    "es_filtro": bool(row[8]),
-                    "es_group_by": bool(row[9]),
-                    "es_metrica": bool(row[10]),
-                    "es_sensible": bool(row[11]),
-                    "operadores_permitidos": self._from_json(row[12], []),
-                    "source_of_truth": str(row[13] or ""),
-                    "estado": str(row[14] or ""),
-                }
-            )
-        return payload
+        # Tabla retirada: las columnas se resuelven desde ai_dictionary.dd_campos.
+        return []
 
     def list_relaciones_dominio(self, *, dominio_id: int, status: str | None = None, limit: int = 500) -> list[dict]:
         self.ensure_tables()
@@ -1105,8 +1353,8 @@ class IADevSqlStore:
                 r.source_of_truth,
                 r.estado
             FROM ia_dev_relaciones AS r
-            LEFT JOIN ia_dev_tablas_dominio AS tor ON tor.id = r.tabla_origen_id
-            LEFT JOIN ia_dev_tablas_dominio AS tde ON tde.id = r.tabla_destino_id
+            LEFT JOIN {self.tabla_catalogo_tablas_dominio} AS tor ON tor.id = r.tabla_origen_id
+            LEFT JOIN {self.tabla_catalogo_tablas_dominio} AS tde ON tde.id = r.tabla_destino_id
             {where}
             ORDER BY r.id
             LIMIT %s
@@ -2145,6 +2393,7 @@ class IADevSqlStore:
         *,
         domain_code: str | None = None,
         capability_id: str | None = None,
+        memory_key_prefix: str | None = None,
         status: str | None = "active",
         limit: int = 100,
     ) -> list[dict]:
@@ -2158,6 +2407,9 @@ class IADevSqlStore:
         if capability_id:
             where.append("capability_id = %s")
             params.append(capability_id)
+        if memory_key_prefix:
+            where.append("memory_key LIKE %s")
+            params.append(f"{memory_key_prefix}%")
         if status:
             where.append("status = %s")
             params.append(status)

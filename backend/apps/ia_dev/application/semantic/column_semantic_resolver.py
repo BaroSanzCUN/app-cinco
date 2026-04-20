@@ -17,6 +17,10 @@ class ColumnSemanticResolver:
     _COUNT_METRIC_TOKENS = ("cantidad", "cuantos", "cuantas", "total", "numero")
     _DATE_HINTS = ("fecha", "periodo", "dia", "mes", "year", "ano")
     _IDENTIFIER_HINTS = ("cedula", "identificacion", "documento", "id_empleado")
+    _DETAIL_IDENTIFIER_PATTERNS = (
+        r"\bmovil(?:\s+(?:de|del|la|el))?\s+([a-z0-9_-]{3,40})\b",
+        r"\b(?:info|informacion|detalle|datos|ficha)\s+de\s+([a-z0-9_-]{3,40})\b",
+    )
 
     @staticmethod
     def _normalize_text(value: str | None) -> str:
@@ -122,8 +126,33 @@ class ColumnSemanticResolver:
                 str(profile.get("column_name") or ""),
             )
             current = deduped.get(key)
-            if current is None or float(profile.get("confidence") or 0.0) > float(current.get("confidence") or 0.0):
+            if current is None:
                 deduped[key] = profile
+                continue
+
+            current_confidence = float(current.get("confidence") or 0.0)
+            incoming_confidence = float(profile.get("confidence") or 0.0)
+            base = dict(current if current_confidence >= incoming_confidence else profile)
+            allowed_values = sorted(
+                dict.fromkeys(
+                    [
+                        *self._parse_allowed_values(current.get("allowed_values")),
+                        *self._parse_allowed_values(profile.get("allowed_values")),
+                    ]
+                )
+            )
+            base["table_name"] = str(base.get("table_name") or current.get("table_name") or profile.get("table_name") or "")
+            base["supports_filter"] = bool(current.get("supports_filter")) or bool(profile.get("supports_filter"))
+            base["supports_group_by"] = bool(current.get("supports_group_by")) or bool(profile.get("supports_group_by"))
+            base["supports_metric"] = bool(current.get("supports_metric")) or bool(profile.get("supports_metric"))
+            base["supports_dimension"] = bool(current.get("supports_dimension")) or bool(profile.get("supports_dimension"))
+            base["is_date"] = bool(current.get("is_date")) or bool(profile.get("is_date"))
+            base["is_identifier"] = bool(current.get("is_identifier")) or bool(profile.get("is_identifier"))
+            base["is_chart_dimension"] = bool(current.get("is_chart_dimension")) or bool(profile.get("is_chart_dimension"))
+            base["is_chart_measure"] = bool(current.get("is_chart_measure")) or bool(profile.get("is_chart_measure"))
+            base["allowed_values"] = allowed_values
+            base["confidence"] = max(current_confidence, incoming_confidence)
+            deduped[key] = base
 
         return list(deduped.values())
 
@@ -149,20 +178,71 @@ class ColumnSemanticResolver:
         message: str,
         semantic_context: dict[str, Any],
     ) -> tuple[str, str] | None:
-        match = re.search(r"\b\d{6,13}\b", self._normalize_text(message))
-        if not match:
-            return None
-        value = "".join(ch for ch in match.group(0) if ch.isdigit())
+        normalized_message = self._normalize_text(message)
         profiles = list(semantic_context.get("column_profiles") or [])
+        match = re.search(r"\b\d{6,13}\b", normalized_message)
+        if match:
+            value = "".join(ch for ch in match.group(0) if ch.isdigit())
+            profile = self._find_profile(
+                profiles=profiles,
+                accepted_names={"cedula", "cedula_empleado", "identificacion", "documento"},
+                require_identifier=False,
+            )
+            if profile is not None:
+                logical = str(profile.get("logical_name") or profile.get("column_name") or "cedula").strip().lower()
+                return logical, value
+            for row in profiles:
+                if not isinstance(row, dict):
+                    continue
+                if not self._to_bool(row.get("is_identifier")):
+                    continue
+                logical = str(row.get("logical_name") or "").strip().lower() or str(row.get("column_name") or "").strip().lower()
+                if logical:
+                    return logical, value
+            return "cedula", value
+
+        movil_profile = self._find_profile(
+            profiles=profiles,
+            accepted_names={"movil"},
+            require_identifier=False,
+        )
+        if movil_profile is None:
+            return None
+
+        for pattern in self._DETAIL_IDENTIFIER_PATTERNS:
+            token_match = re.search(pattern, normalized_message)
+            if not token_match:
+                continue
+            value = str(token_match.group(1) or "").strip()
+            if pattern.endswith(r"de\s+([a-z0-9_-]{3,40})\b") and not self._has_letters_and_digits(value):
+                continue
+            logical = str(movil_profile.get("logical_name") or movil_profile.get("column_name") or "movil").strip().lower()
+            return logical, value
+        return None
+
+    @staticmethod
+    def _has_letters_and_digits(value: str) -> bool:
+        text = str(value or "").strip().lower()
+        return bool(re.search(r"[a-z]", text) and re.search(r"\d", text))
+
+    def _find_profile(
+        self,
+        *,
+        profiles: list[dict[str, Any]],
+        accepted_names: set[str],
+        require_identifier: bool,
+    ) -> dict[str, Any] | None:
+        normalized_names = {self._normalize_text(item) for item in accepted_names if str(item or "").strip()}
         for row in profiles:
             if not isinstance(row, dict):
                 continue
-            if not self._to_bool(row.get("is_identifier")):
+            if require_identifier and not self._to_bool(row.get("is_identifier")):
                 continue
-            logical = str(row.get("logical_name") or "").strip().lower() or str(row.get("column_name") or "").strip().lower()
-            if logical:
-                return logical, value
-        return "cedula", value
+            logical = self._normalize_text(row.get("logical_name"))
+            column = self._normalize_text(row.get("column_name"))
+            if logical in normalized_names or column in normalized_names:
+                return row
+        return None
 
     def resolve_filters(
         self,
@@ -187,7 +267,7 @@ class ColumnSemanticResolver:
             logical_name = str(profile.get("logical_name") or canonical_term).strip().lower()
             allowed_values = self._parse_allowed_values(profile.get("allowed_values"))
             value = raw_value
-            if logical_name in {"estado", "estado_usuario", "estado_empleado"}:
+            if logical_name in {"estado", "estado_empleado"}:
                 try:
                     value = normalize_status_value(
                         raw_value=raw_value,

@@ -10,6 +10,9 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from apps.ia_dev.application.semantic.cause_diagnostics_service import CauseDiagnosticsService
+from apps.ia_dev.application.runtime.service_runtime_bootstrap import (
+    apply_service_runtime_bootstrap,
+)
 
 from .observability_service import ObservabilityService
 from .dictionary_tool_service import DictionaryToolService
@@ -30,6 +33,7 @@ _YES_FOLLOW_UP_RE = re.compile(
 
 class IADevOrchestratorService:
     def __init__(self):
+        self.runtime_bootstrap = apply_service_runtime_bootstrap()
         self.intent_classifier = IntentClassifierService()
         self.attendance_tool = AttendanceToolService()
         self.dictionary_tool = DictionaryToolService()
@@ -360,7 +364,7 @@ class IADevOrchestratorService:
         }
 
         reply = (
-            "Consulta recibida. Puedo ayudarte con RRHH, asistencia, transporte, "
+            "Consulta recibida. Puedo ayudarte con empleados, asistencia, transporte, "
             "operaciones, viaticos, nomina y auditoria."
         )
 
@@ -629,7 +633,7 @@ class IADevOrchestratorService:
                     )
             else:
                 reply = (
-                    "Puedo ayudarte con RRHH. Intenta por ejemplo: "
+                    "Puedo ayudarte con empleados. Intenta por ejemplo: "
                     "\"Cantidad empleados activos\" o \"Empleados activos por area\"."
                 )
 
@@ -831,7 +835,7 @@ class IADevOrchestratorService:
                             self.attendance_tool.get_recurrent_unjustified_with_supervisor,
                             period["start"],
                             period["end"],
-                            threshold=2,
+                            threshold=3,
                             limit=150,
                             personal_status=personal_status,
                         )
@@ -873,7 +877,7 @@ class IADevOrchestratorService:
                         }
                         payload["kpis"] = {
                             "total_reincidentes": int(recurrence.get("rowcount") or len(grouped_source_rows)),
-                            "umbral_reincidencia": int(recurrence.get("threshold") or 2),
+                            "umbral_reincidencia": int(recurrence.get("threshold") or 3),
                         }
                         if wants_itemized and grouped_source_rows:
                             payload["kpis"]["total_ausentismos_reincidentes"] = len(rows_for_response)
@@ -1572,8 +1576,16 @@ class IADevOrchestratorService:
             ("causa", ("justificacion", "Justificacion")),
             ("por motivo", ("justificacion", "Justificacion")),
             ("motivo", ("justificacion", "Justificacion")),
-            ("por tipo", ("estado_justificacion", "Estado")),
-            ("tipo", ("estado_justificacion", "Estado")),
+            ("por tipo de labor", ("tipo_labor", "Tipo Labor")),
+            ("tipo de labor", ("tipo_labor", "Tipo Labor")),
+            ("por tipo labor", ("tipo_labor", "Tipo Labor")),
+            ("tipo labor", ("tipo_labor", "Tipo Labor")),
+            ("por labor", ("tipo_labor", "Tipo Labor")),
+            ("labor", ("tipo_labor", "Tipo Labor")),
+            ("por tipo de ausentismo", ("estado_justificacion", "Estado")),
+            ("tipo de ausentismo", ("estado_justificacion", "Estado")),
+            ("por tipo de ausencia", ("estado_justificacion", "Estado")),
+            ("tipo de ausencia", ("estado_justificacion", "Estado")),
             ("por estado", ("estado_justificacion", "Estado")),
             ("estado", ("estado_justificacion", "Estado")),
         )
@@ -1869,10 +1881,55 @@ class IADevOrchestratorService:
 
     def _is_count_active_employees_request(self, message: str) -> bool:
         normalized = self._normalize_text(message)
-        mentions_employee = any(token in normalized for token in ("empleado", "empleados", "rrhh"))
-        asks_count = any(token in normalized for token in ("cantidad", "cuantos", "cuantas", "total", "numero"))
-        asks_active = any(token in normalized for token in ("activo", "activos"))
-        return bool(mentions_employee and asks_count and asks_active)
+        mentions_employee = any(
+            token in normalized
+            for token in (
+                "empleado",
+                "empleados",
+                "personal",
+                "colaborador",
+                "colaboradores",
+                "rrhh",
+            )
+        )
+        asks_count = any(
+            token in normalized
+            for token in ("cantidad", "cuanto", "cuantos", "cuantas", "total", "numero")
+        ) or bool(re.search(r"\bcantid[a-z]*\b", normalized))
+        asks_active = any(
+            token in normalized
+            for token in (
+                "activo",
+                "activos",
+                "habilitado",
+                "habilitados",
+                "vigente",
+                "vigentes",
+            )
+        )
+        if mentions_employee and asks_count and asks_active:
+            return True
+
+        if not (mentions_employee and asks_active):
+            return False
+
+        # Soporta frases cortas frecuentes (ej: "personal activo", "colaboradores activos")
+        # cuando no hay una dimension analitica explicita.
+        if any(
+            token in normalized
+            for token in ("por area", "por cargo", "por supervisor", "por sede", "por departamento")
+        ):
+            return False
+        return bool(
+            re.search(
+                r"\b(personal|emplead(?:o|os)?|colaborador(?:es)?)\s+activ(?:o|os)\b",
+                normalized,
+            )
+            or re.search(
+                r"\bactiv(?:o|os)\s+(de\s+)?(personal|emplead(?:o|os)?|colaborador(?:es)?)\b",
+                normalized,
+            )
+        )
 
     def _wants_itemized_absence_view(self, message: str) -> bool:
         msg = self._normalize_text(message)
@@ -2297,7 +2354,9 @@ class IADevOrchestratorService:
                         "content": (
                             "You are an enterprise assistant. Answer clearly and briefly in Spanish. "
                             "If the user asks for general knowledge, answer directly. "
-                            "Do not invent internal company data."
+                            "Do not invent internal company data. "
+                            "Keep proper names in their canonical/original form unless the user explicitly asks for translation. "
+                            "If the user asks for N examples/items/characters, return exactly N as a numbered list."
                         ),
                     },
                     {
@@ -2473,7 +2532,7 @@ class IADevOrchestratorService:
         elif domain_key in ("payroll", "audit", "viatics"):
             active.update({"audit", "result"})
 
-        if "rrhh_agent" == agent_key:
+        if "empleados_agent" == agent_key:
             active.add("personal")
         if "attendance_agent" == agent_key:
             active.add("aus")
