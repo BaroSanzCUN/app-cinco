@@ -1,6 +1,7 @@
 from django.contrib.auth import authenticate
 from rest_framework import serializers
 
+
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
@@ -24,10 +25,23 @@ class LoginRequestSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField()
 
+
+class AuthUserSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+    nombre = serializers.CharField(allow_blank=True)
+    apellido = serializers.CharField(allow_blank=True)
+    email = serializers.EmailField(allow_blank=True)
+    is_superuser = serializers.BooleanField()
+
+
 class LoginResponseSerializer(serializers.Serializer):
-    access = serializers.CharField()
-    refresh = serializers.CharField()
-    user = serializers.DictField()
+    user = AuthUserSerializer()
+
+
+class SessionResponseSerializer(serializers.Serializer):
+    authenticated = serializers.BooleanField()
+    user = AuthUserSerializer()
 
 
 class LegacyLoginResponseSerializer(serializers.Serializer):

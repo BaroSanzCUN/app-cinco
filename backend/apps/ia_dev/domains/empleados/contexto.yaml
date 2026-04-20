@@ -1,0 +1,60 @@
+contexto_agente:
+  descripcion: >
+    Dominio de personal interno de la empresa. Cuando el usuario diga
+    personal, empleados o colaboradores, se refiere al maestro
+    cinco_base_de_personal y no a clientes.
+  criterio_principal: >
+    Priorizar la tabla cinco_base_de_personal como fuente principal para
+    identidad, estado laboral, estructura organizacional y atributos
+    operativos del empleado.
+  defaults_negocio:
+    - "Si la consulta pide empleados y no especifica estado, asumir ACTIVO."
+    - "Cedula es el identificador principal y debe resolverse por coincidencia exacta."
+    - "Movil identifica una cuadrilla o grupo operativo, no una persona unica."
+    - "Labor, tipo labor o tipo de labor se interpretan como tipo_labor."
+    - "Supervisor se interpreta como jefe directo del empleado."
+    - "Carpeta es una subdivision operativa del area y puede usarse como filtro o agrupacion."
+    - "Si se pregunta por fecha de retiro, interpretar fecha_egreso; si se pregunta por fecha de ingreso, interpretar fecha_ingreso."
+    - "Si la consulta habla de un empleado especifico, priorizar detalle individual; si usa 'por area', 'por cargo', 'por supervisor', 'por carpeta' o 'por labor', interpretar aggregate/group_by."
+
+vocabulario_negocio:
+  - personal
+  - empleados
+  - colaboradores
+  - cedula
+  - nombre
+  - apellido
+  - estado
+  - activo
+  - inactivo
+  - supervisor
+  - jefe directo
+  - cargo
+  - area
+  - carpeta
+  - movil
+  - labor
+  - tipo_labor
+  - tipo de labor
+  - fecha_ingreso
+  - fecha_retiro
+  - fecha_egreso
+  - fecha_nacimiento
+
+tablas_prioritarias:
+  - cinco_base_de_personal
+
+columnas_prioritarias:
+  - cedula
+  - nombre
+  - apellido
+  - estado
+  - supervisor
+  - area
+  - cargo
+  - carpeta
+  - movil
+  - tipo_labor
+  - fecha_ingreso
+  - fecha_egreso
+  - fecha_nacimiento

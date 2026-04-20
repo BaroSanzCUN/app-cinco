@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ia_dev.memory_audit_event.schema.v1",
+  "type": "object",
+  "required": ["event_type", "memory_scope", "action"],
+  "properties": {
+    "event_type": { "type": "string", "maxLength": 64 },
+    "memory_scope": {
+      "type": "string",
+      "enum": ["session", "user", "business", "workflow", "general"]
+    },
+    "entity_key": { "type": "string", "maxLength": 140 },
+    "action": { "type": "string", "maxLength": 24 },
+    "actor_type": { "type": "string", "maxLength": 24 },
+    "actor_key": { "type": "string", "maxLength": 128 },
+    "run_id": { "type": ["string", "null"], "maxLength": 64 },
+    "trace_id": { "type": ["string", "null"], "maxLength": 64 },
+    "before_json": {},
+    "after_json": {},
+    "meta_json": {}
+  }
+}

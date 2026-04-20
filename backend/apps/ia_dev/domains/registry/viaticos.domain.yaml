@@ -1,0 +1,27 @@
+dominio: viaticos
+nombre_dominio: Viaticos
+objetivo_negocio: Analizar consumo y tendencia de viaticos por supervisor, area y periodo.
+entidad_principal: viatico
+estado_dominio: planned
+nivel_madurez: initial
+nivel_confianza_esquema: 0.5
+tablas_asociadas: []
+columnas_clave: []
+joins_conocidos: []
+filtros_soportados:
+  - supervisor
+  - area
+  - periodo
+group_by_soportados:
+  - supervisor
+  - area
+metricas_soportadas:
+  - total_viaticos
+sensitividades:
+  - medium
+  - high
+capacidades: []
+skills_metadata: []
+flags:
+  delegation_enabled: true
+  sql_asistido_permitido: true

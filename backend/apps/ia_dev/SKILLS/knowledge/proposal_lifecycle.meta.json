@@ -1,0 +1,8 @@
+{
+  "skill_id": "knowledge.proposal_lifecycle",
+  "domain": "knowledge",
+  "version": "1.0.0",
+  "tags": ["governance", "approval", "idempotency", "workflow"],
+  "consumers": ["policy_guard", "knowledge_handlers"],
+  "status": "active"
+}

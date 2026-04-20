@@ -1,0 +1,27 @@
+dominio: comisiones
+nombre_dominio: Comisiones
+objetivo_negocio: Analizar comportamiento de comisiones por empleado, supervisor y periodo.
+entidad_principal: empleado
+estado_dominio: planned
+nivel_madurez: initial
+nivel_confianza_esquema: 0.5
+tablas_asociadas: []
+columnas_clave: []
+joins_conocidos: []
+filtros_soportados:
+  - empleado
+  - supervisor
+  - periodo
+group_by_soportados:
+  - empleado
+  - supervisor
+metricas_soportadas:
+  - total_comisiones
+sensitividades:
+  - medium
+  - high
+capacidades: []
+skills_metadata: []
+flags:
+  delegation_enabled: true
+  sql_asistido_permitido: true

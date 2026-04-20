@@ -1,0 +1,80 @@
+﻿<svg width="1440" height="900" viewBox="0 0 1440 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1440" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EEF6FF"/>
+      <stop offset="1" stop-color="#FDF5E8"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#0077B6"/>
+      <stop offset="1" stop-color="#0096C7"/>
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="200%" height="200%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#1F2937" flood-opacity="0.12"/>
+    </filter>
+    <style>
+      .h1 { font: 700 28px 'Segoe UI', sans-serif; fill: #0F172A; }
+      .h2 { font: 700 18px 'Segoe UI', sans-serif; fill: #0F172A; }
+      .body { font: 500 14px 'Segoe UI', sans-serif; fill: #334155; }
+      .mono { font: 500 13px 'Consolas', monospace; fill: #0B3A53; }
+      .btn { font: 700 14px 'Segoe UI', sans-serif; fill: white; }
+      .chip { font: 600 12px 'Segoe UI', sans-serif; fill: #0C4A6E; }
+    </style>
+  </defs>
+
+  <rect width="1440" height="900" fill="url(#bg)"/>
+
+  <text x="64" y="72" class="h1">IA DEV - Vista con boton "Probar rango"</text>
+  <text x="64" y="100" class="body">Mockup de uso para depurar fechas sin ejecutar consultas SQL pesadas</text>
+
+  <rect x="64" y="132" rx="18" ry="18" width="760" height="700" fill="#FFFFFF" filter="url(#shadow)"/>
+  <text x="96" y="178" class="h2">Chat IA DEV</text>
+
+  <rect x="96" y="206" rx="12" ry="12" width="696" height="102" fill="#F8FAFC" stroke="#E2E8F0"/>
+  <text x="114" y="236" class="body">Empleados reincidentes del ultimo mes con nombre, apellido, cedula y supervisor</text>
+  <text x="114" y="262" class="body">formato tabla</text>
+  <rect x="96" y="326" rx="10" ry="10" width="126" height="40" fill="url(#accent)"/>
+  <text x="123" y="351" class="btn">Enviar</text>
+
+  <rect x="236" y="326" rx="10" ry="10" width="150" height="40" fill="#0EA5E9"/>
+  <text x="266" y="351" class="btn">Probar rango</text>
+
+  <rect x="400" y="326" rx="10" ry="10" width="160" height="40" fill="#E0F2FE"/>
+  <text x="430" y="351" class="chip">Sin consulta SQL</text>
+
+  <rect x="96" y="390" rx="12" ry="12" width="696" height="190" fill="#F0FDF4" stroke="#BBF7D0"/>
+  <text x="114" y="420" class="h2">Respuesta del chat</text>
+  <text x="114" y="448" class="body">Reincidentes injustificados en la ventana 2026-03-07 a 2026-04-05...</text>
+  <text x="114" y="474" class="body">Si prefieres, tambien puedo mostrarlo como mes anterior calendario</text>
+  <text x="114" y="500" class="body">(2026-03-01 a 2026-03-31). Responde: si, mes anterior.</text>
+
+  <rect x="96" y="600" rx="12" ry="12" width="696" height="202" fill="#F8FAFC" stroke="#E2E8F0"/>
+  <text x="114" y="630" class="h2">Tabla</text>
+  <text x="114" y="656" class="mono">cedula | nombre | apellido | supervisor | cantidad_incidencias</text>
+  <text x="114" y="682" class="mono">1002496202 | LEONARDO | MONTES | CRISTIAN MARIN | 3</text>
+  <text x="114" y="708" class="mono">1000900196 | N/D | N/D | N/D | 2</text>
+
+  <rect x="856" y="132" rx="18" ry="18" width="520" height="700" fill="#0B1324" filter="url(#shadow)"/>
+  <text x="886" y="178" style="font:700 18px 'Segoe UI', sans-serif; fill:#E2E8F0;">Panel: Resultado de "Probar rango"</text>
+
+  <rect x="886" y="206" rx="10" ry="10" width="460" height="594" fill="#111C33" stroke="#334155"/>
+  <text x="906" y="236" class="mono" fill="#C7D2FE">POST /ia-dev/attendance/period/resolve/</text>
+  <text x="906" y="266" class="mono" fill="#A7F3D0">{</text>
+  <text x="926" y="292" class="mono" fill="#A7F3D0">"status": "ok",</text>
+  <text x="926" y="318" class="mono" fill="#A7F3D0">"period_resolution": {</text>
+  <text x="946" y="344" class="mono" fill="#A7F3D0">"resolved_period": {</text>
+  <text x="966" y="370" class="mono" fill="#A7F3D0">"label": "ultimo_mes_30_dias",</text>
+  <text x="966" y="396" class="mono" fill="#A7F3D0">"source": "openai_period",</text>
+  <text x="966" y="422" class="mono" fill="#A7F3D0">"start_date": "2026-03-07",</text>
+  <text x="966" y="448" class="mono" fill="#A7F3D0">"end_date": "2026-04-05",</text>
+  <text x="966" y="474" class="mono" fill="#A7F3D0">"confidence": 0.91</text>
+  <text x="946" y="500" class="mono" fill="#A7F3D0">},</text>
+  <text x="946" y="526" class="mono" fill="#A7F3D0">"rules_fallback_period": { ... },</text>
+  <text x="946" y="552" class="mono" fill="#A7F3D0">"alternative_hint": "Si prefieres..."</text>
+  <text x="926" y="578" class="mono" fill="#A7F3D0">}</text>
+  <text x="906" y="604" class="mono" fill="#A7F3D0">}</text>
+
+  <rect x="906" y="640" rx="8" ry="8" width="180" height="34" fill="#2563EB"/>
+  <text x="934" y="662" class="btn">Copiar JSON</text>
+  <rect x="1098" y="640" rx="8" ry="8" width="222" height="34" fill="#065F46"/>
+  <text x="1126" y="662" class="btn">Usar este rango en consulta</text>
+</svg>

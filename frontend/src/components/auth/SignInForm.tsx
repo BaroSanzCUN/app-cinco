@@ -47,19 +47,19 @@ export default function SignInForm() {
             errors: error?.errors,
           };
 
-          console.error("Error al iniciar sesion (raw):", error);
-          console.error("Error al iniciar sesion (normalizado):", normalizedError);
+          console.error("Error al iniciar sesión (raw):", error);
+          console.error("Error al iniciar sesión (normalizado):", normalizedError);
         },
       });
     } catch (error) {
       // El error ya fue manejado por useFormSubmit
-      // Solo lo capturamos aquÃ­ para prevenir errores no capturados
+      // Solo lo capturamos aquí para prevenir errores no capturados
     }
   };
 
   const handleForgotPassword = () => {
     // router.push("/forgot-password");
-    alert("Para reestablecer tu contraseña, por favor contacta a tu lider.");
+    alert("Para restablecer tu contraseña, por favor contacta a tu líder.");
   };
 
   return (
@@ -141,7 +141,7 @@ export default function SignInForm() {
                     onClick={() => handleForgotPassword()}
                     className="text-brand-500 hover:text-brand-600 dark:text-brand-400 cursor-pointer text-sm"
                   >
-                    Â¿Olvidaste tu contraseña?
+                    ¿Olvidaste tu contraseña?
                   </span>
                 </div>
                 <div>
@@ -151,7 +151,7 @@ export default function SignInForm() {
                     className="w-full"
                     disabled={isSubmitting || isLoading}
                   >
-                    Iniciar sesiÃ³n
+                    Iniciar sesión
                   </Button>
                 </div>
               </div>

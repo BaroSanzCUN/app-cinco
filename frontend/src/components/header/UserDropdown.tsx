@@ -15,7 +15,7 @@ export default function UserDropdown() {
 
   const displayName = useMemo(() => {
     return (
-      `${user?.nombre.split(" ")[0] || ""} ${user?.apellido?.split(" ")[0] || ""}`.trim() ||
+      `${user?.nombre?.split(" ")[0] || ""} ${user?.apellido?.split(" ")[0] || ""}`.trim() ||
       "Usuario"
     );
   }, [user]);

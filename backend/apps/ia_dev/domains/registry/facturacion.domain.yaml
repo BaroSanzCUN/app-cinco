@@ -1,0 +1,27 @@
+dominio: facturacion
+nombre_dominio: Facturacion
+objetivo_negocio: Analizar facturacion por cliente, responsable y periodo operativo.
+entidad_principal: factura
+estado_dominio: planned
+nivel_madurez: initial
+nivel_confianza_esquema: 0.5
+tablas_asociadas: []
+columnas_clave: []
+joins_conocidos: []
+filtros_soportados:
+  - cliente
+  - responsable
+  - periodo
+group_by_soportados:
+  - cliente
+  - responsable
+metricas_soportadas:
+  - total_facturado
+sensitividades:
+  - medium
+  - high
+capacidades: []
+skills_metadata: []
+flags:
+  delegation_enabled: true
+  sql_asistido_permitido: true

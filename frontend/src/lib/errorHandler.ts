@@ -2,6 +2,8 @@
  * Tipos y utilidades para manejar errores de la API
  */
 
+import { API_BASE_URL } from "@/lib/apiConfig";
+
 export enum ApiErrorType {
   VALIDATION = "VALIDATION",
   AUTHENTICATION = "AUTHENTICATION",
@@ -31,11 +33,20 @@ export interface ApiError extends Error {
   errors?: Record<string, string[]>;
 }
 
+const getNetworkErrorMessage = (): string => {
+  return `No se pudo conectar con el backend (${API_BASE_URL}). Verifica que Django este corriendo y que la BD/VPN este disponible.`;
+};
+
+const getRawErrorMessage = (error: any): string => {
+  if (!error) return "";
+  if (typeof error.message === "string") return error.message;
+  return String(error);
+};
+
 /**
  * Clasifica el tipo de error basado en el estado HTTP y contenido
  */
 export function classifyError(error: any): ApiErrorDetail {
-  // Si el error ya está clasificado, devolverlo
   if (
     error &&
     typeof error === "object" &&
@@ -47,8 +58,8 @@ export function classifyError(error: any): ApiErrorDetail {
 
   const status = error?.response?.status || 0;
   const data = error?.response?.data;
-  const message =
-    data?.message || data?.detail || error?.message || "Error desconocido";
+  const rawMessage =
+    data?.message || data?.detail || getRawErrorMessage(error) || "Error desconocido";
 
   let type: ApiErrorType = ApiErrorType.UNKNOWN;
 
@@ -85,6 +96,13 @@ export function classifyError(error: any): ApiErrorDetail {
     }
   }
 
+  const message =
+    type === ApiErrorType.NETWORK_ERROR ||
+    rawMessage === "Network Error" ||
+    rawMessage === "Failed to fetch"
+      ? getNetworkErrorMessage()
+      : rawMessage;
+
   return {
     type,
     status,
@@ -92,7 +110,7 @@ export function classifyError(error: any): ApiErrorDetail {
     detail: data?.detail,
     errors:
       data?.errors ||
-      (typeof data === "object" && !data.detail && !data.message
+      (typeof data === "object" && !data?.detail && !data?.message
         ? data
         : undefined),
     timestamp: new Date().toISOString(),
@@ -116,11 +134,10 @@ export function createApiError(error: any): ApiError {
 }
 
 /**
- * Obtiene el mensaje de error más apropiado según el tipo
- * Prioriza mensajes específicos del backend (Django)
+ * Obtiene el mensaje de error mas apropiado segun el tipo
+ * Prioriza mensajes especificos del backend (Django)
  */
 export function getErrorMessage(errorDetail: ApiErrorDetail): string {
-  // Priorizar mensajes específicos del backend
   if (errorDetail.detail) {
     return errorDetail.detail;
   }
@@ -128,33 +145,32 @@ export function getErrorMessage(errorDetail: ApiErrorDetail): string {
     return errorDetail.message;
   }
 
-  // Fallback a mensajes genéricos
   switch (errorDetail.type) {
     case ApiErrorType.VALIDATION:
       return "Por favor, revisa los datos ingresados";
     case ApiErrorType.AUTHENTICATION:
-      return "Credenciales inválidas o sesión expirada";
+      return "Credenciales invalidas o sesion expirada";
     case ApiErrorType.AUTHORIZATION:
-      return "No tienes permisos para realizar esta acción";
+      return "No tienes permisos para realizar esta accion";
     case ApiErrorType.NOT_FOUND:
       return "El recurso solicitado no fue encontrado";
     case ApiErrorType.CONFLICT:
-      return "Existe un conflicto con los datos. Por favor, recarga e intenta nuevamente";
+      return "Existe un conflicto con los datos. Recarga e intenta nuevamente";
     case ApiErrorType.RATE_LIMIT:
-      return "Has realizado demasiadas solicitudes. Intenta más tarde";
+      return "Has realizado demasiadas solicitudes. Intenta mas tarde";
     case ApiErrorType.SERVER_ERROR:
-      return "Error en el servidor. Por favor, intenta más tarde";
+      return "Error en el servidor. Intenta mas tarde";
     case ApiErrorType.NETWORK_ERROR:
-      return "Error de conexión. Verifica tu conexión a internet";
+      return getNetworkErrorMessage();
     case ApiErrorType.TIMEOUT:
-      return "La solicitud tomó demasiado tiempo. Por favor, intenta nuevamente";
+      return "La solicitud tardo demasiado tiempo. Intenta nuevamente";
     default:
-      return "Ocurrió un error inesperado";
+      return "Ocurrio un error inesperado";
   }
 }
 
 /**
- * Extrae errores de validación formateados para mostrar en formularios
+ * Extrae errores de validacion formateados para mostrar en formularios
  */
 export function extractValidationErrors(
   apiError: ApiErrorDetail,
@@ -168,7 +184,7 @@ export function extractValidationErrors(
   if (typeof apiError.errors === "object") {
     Object.entries(apiError.errors).forEach(([field, messages]) => {
       if (Array.isArray(messages)) {
-        formatted[field] = messages[0] || "Error de validación";
+        formatted[field] = messages[0] || "Error de validacion";
       } else if (typeof messages === "string") {
         formatted[field] = messages;
       }

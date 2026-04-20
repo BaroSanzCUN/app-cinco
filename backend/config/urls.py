@@ -33,4 +33,5 @@ urlpatterns = [
     path("security/", include("apps.security.urls")),
     path("operaciones/", include("apps.operaciones.urls")),
     path("empleados/", include("apps.empleados.urls")),
+    path("ia-dev/", include("apps.ia_dev.urls")),
 ]

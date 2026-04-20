@@ -25,3 +25,7 @@
 
 - Si se crea un PR hacia `main` desde cualquier rama distinta de `develop`, el check de CI fallara.
 - Si necesitas una excepcion, solicita ayuda a un administrador del repositorio.
+- Todos los archivos de texto deben guardarse en UTF-8 para evitar mojibake.
+- Regla de datos IA: toda tabla `ia_dev_*` debe existir solo en `ai_dictionary` (nunca en `db_cincosas`).
+- Antes de abrir PR, valida texto con:
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\check_mojibake.ps1`

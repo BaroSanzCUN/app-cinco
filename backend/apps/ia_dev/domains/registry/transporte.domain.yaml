@@ -1,0 +1,33 @@
+dominio: transporte
+nombre_dominio: Transporte
+objetivo_negocio: Consolidar volumen de salidas y comportamiento operativo de flota.
+entidad_principal: salida
+estado_dominio: partial
+nivel_madurez: growing
+nivel_confianza_esquema: 0.75
+tablas_asociadas:
+  - schema_name: ""
+    table_name: IA_DEV_TRANSPORT_TABLE
+    nombre_tabla_logico: transporte_salidas
+    rol: hechos
+columnas_clave:
+  - table_name: IA_DEV_TRANSPORT_TABLE
+    column_name: fecha_salida
+    nombre_columna_logico: fecha_salida
+filtros_soportados:
+  - fecha
+group_by_soportados:
+  - fecha
+metricas_soportadas:
+  - total_salidas
+sensitividades:
+  - low
+  - medium
+capacidades:
+  - capability_id: transport.departures.summary.v1
+    nombre: resumen_salidas
+    tipo: summary
+skills_metadata: []
+flags:
+  delegation_enabled: true
+  sql_asistido_permitido: true
