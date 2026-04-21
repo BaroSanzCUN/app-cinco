@@ -214,7 +214,7 @@ class SemanticNormalizationServiceTests(SimpleTestCase):
             captured.update(kwargs)
             return {
                 "ok": True,
-                "domain_code": "attendance",
+                "domain_code": "ausentismo",
                 "intent_code": "aggregate",
                 "filters": {},
                 "aliases_detected": [],
@@ -252,7 +252,7 @@ class SemanticNormalizationServiceTests(SimpleTestCase):
         payload = output.as_dict()
         mini_context = dict(captured.get("mini_context") or {})
         self.assertTrue(bool(payload.get("llm_invoked")))
-        self.assertEqual(str(payload.get("domain_code") or ""), "attendance")
+        self.assertEqual(str(payload.get("domain_code") or ""), "ausentismo")
         self.assertIn("area", list(mini_context.get("candidate_group_dimensions") or []))
         self.assertTrue(
             any(str(item.get("table_name") or "") == "cinco_base_de_personal" for item in list(mini_context.get("candidate_tables") or []))
@@ -284,6 +284,6 @@ class SemanticNormalizationServiceTests(SimpleTestCase):
             base_classification={"domain": "empleados", "intent": "empleados_query"},
         )
         payload = output.as_dict()
-        self.assertEqual(str(payload.get("domain_code") or ""), "attendance")
+        self.assertEqual(str(payload.get("domain_code") or ""), "ausentismo")
         self.assertEqual(str(payload.get("intent_code") or ""), "detail")
         self.assertEqual(str((payload.get("normalized_filters") or {}).get("justificacion") or ""), "VACACIONES")

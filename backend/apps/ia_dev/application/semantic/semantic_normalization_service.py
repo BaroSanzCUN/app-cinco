@@ -10,6 +10,10 @@ from apps.ia_dev.application.context.run_context import RunContext
 from apps.ia_dev.application.contracts.query_intelligence_contracts import (
     SemanticNormalizationOutput,
 )
+from apps.ia_dev.application.taxonomia_dominios import (
+    dominio_desde_capacidad,
+    normalizar_codigo_dominio,
+)
 
 
 class SemanticNormalizationService:
@@ -54,8 +58,10 @@ class SemanticNormalizationService:
     _DOMAIN_ALIASES = {
         "rrhh": "empleados",
         "human_resources": "empleados",
-        "ausentismo": "attendance",
-        "transporte": "transport",
+        "attendance": "ausentismo",
+        "ausentismo": "ausentismo",
+        "transport": "transporte",
+        "transporte": "transporte",
     }
 
     _IMPLICIT_FILTER_SIGNALS = {
@@ -425,7 +431,7 @@ class SemanticNormalizationService:
         classification: dict[str, Any],
         capability_hints: list[dict[str, Any]] | None,
     ) -> list[dict[str, Any]]:
-        score = {"empleados": 0.0, "attendance": 0.0, "transport": 0.0, "general": 0.1}
+        score = {"empleados": 0.0, "ausentismo": 0.0, "general": 0.1}
         if any(
             token in query
             for token in (
@@ -465,13 +471,11 @@ class SemanticNormalizationService:
             token in query for token in ("vacacion", "vacaciones", "incapacidad", "licencia", "permiso", "calamidad")
         )
         if any(token in query for token in ("ausent", "asistencia", "injustific", "supervisor", "jefe")):
-            score["attendance"] += 0.45
+            score["ausentismo"] += 0.45
         if has_attendance_reason:
-            score["attendance"] += 0.55
+            score["ausentismo"] += 0.55
         if has_people_scope and has_attendance_reason:
-            score["attendance"] += 0.35
-        if any(token in query for token in ("transporte", "ruta", "movilidad", "vehiculo")):
-            score["transport"] += 0.55
+            score["ausentismo"] += 0.35
         base_domain = cls._normalize_domain_code(classification.get("domain"))
         if base_domain in score:
             score[base_domain] += 0.2
@@ -480,9 +484,7 @@ class SemanticNormalizationService:
             if capability_id.startswith("empleados."):
                 score["empleados"] += 0.25
             elif capability_id.startswith("attendance."):
-                score["attendance"] += 0.2
-            elif capability_id.startswith("transport."):
-                score["transport"] += 0.2
+                score["ausentismo"] += 0.2
         ranked = sorted(score.items(), key=lambda item: item[1], reverse=True)
         return [
             {
@@ -662,13 +664,13 @@ class SemanticNormalizationService:
         candidate_domains: list[dict[str, Any]],
         normalized_capability_hints: list[dict[str, Any]],
     ) -> bool:
-        legacy_domain = str(classification.get("domain") or "").strip().lower()
-        top_domain = str((candidate_domains[0] if candidate_domains else {}).get("domain") or "").strip().lower()
+        legacy_domain = normalizar_codigo_dominio(classification.get("domain"))
+        top_domain = normalizar_codigo_dominio((candidate_domains[0] if candidate_domains else {}).get("domain"))
         if legacy_domain and top_domain and legacy_domain != top_domain:
             return True
         if normalized_capability_hints:
             first_capability = str(normalized_capability_hints[0].get("capability_id") or "")
-            capability_domain = first_capability.split(".", 1)[0] if "." in first_capability else ""
+            capability_domain = dominio_desde_capacidad(first_capability)
             if capability_domain and top_domain and capability_domain != top_domain:
                 return True
         return False
@@ -1088,7 +1090,7 @@ class SemanticNormalizationService:
         )
         if domain_candidate == "empleados":
             dimensions.extend(["supervisor", "area", "cargo", "carpeta", "tipo_labor", "sede"])
-        if domain_candidate in {"attendance", "ausentismo"}:
+        if domain_candidate == "ausentismo":
             dimensions.extend(["justificacion", "estado_justificacion"])
             if has_personal_join:
                 dimensions.extend(["supervisor", "area", "cargo", "carpeta", "tipo_labor", "sede"])
@@ -1141,7 +1143,7 @@ class SemanticNormalizationService:
         rules = ["si la consulta usa 'por <dimension>', interpretar aggregate/group_by"]
         if domain_candidate == "empleados":
             rules.append("si no se especifica estado en empleados, usar estado=ACTIVO")
-        if domain_candidate in {"attendance", "ausentismo"} and any(
+        if domain_candidate == "ausentismo" and any(
             str(item.get("table_name") or "").strip().lower() == "cinco_base_de_personal"
             for item in list(candidate_tables or [])
             if isinstance(item, dict)
@@ -1375,7 +1377,7 @@ class SemanticNormalizationService:
 
     @staticmethod
     def _top_domain_code(*, candidate_domains: list[dict[str, Any]]) -> str:
-        return str((candidate_domains[0] if candidate_domains else {}).get("domain") or "").strip().lower()
+        return normalizar_codigo_dominio((candidate_domains[0] if candidate_domains else {}).get("domain"))
 
     @staticmethod
     def _top_intent_code(*, candidate_intents: list[dict[str, Any]]) -> str:
@@ -1393,10 +1395,7 @@ class SemanticNormalizationService:
 
     @classmethod
     def _normalize_domain_code(cls, value: Any) -> str:
-        normalized = str(value or "").strip().lower()
-        if not normalized:
-            return ""
-        return str(cls._DOMAIN_ALIASES.get(normalized) or normalized)
+        return normalizar_codigo_dominio(value)
 
     @staticmethod
     def _merge_ranked(

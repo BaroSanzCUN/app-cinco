@@ -27,8 +27,8 @@ class SemanticBusinessResolver:
     """
 
     DOMAIN_TO_DICTIONARY_CODE = {
-        "ausentismo": "attendance",
-        "attendance": "attendance",
+        "ausentismo": "ausentismo",
+        "attendance": "ausentismo",
         "empleados": "empleados",
         "rrhh": "empleados",
         "transporte": "transport",

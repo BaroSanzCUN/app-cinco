@@ -8,6 +8,10 @@ from datetime import date
 from typing import Any
 
 from apps.ia_dev.application.contracts.query_intelligence_contracts import StructuredQueryIntent
+from apps.ia_dev.application.taxonomia_dominios import (
+    normalizar_codigo_dominio,
+    normalizar_dominio_operativo,
+)
 from apps.ia_dev.services.period_service import resolve_period_from_text
 
 
@@ -232,8 +236,8 @@ class QueryIntentResolver:
         llm_group_by = [str(item).strip().lower() for item in list(llm.group_by or []) if str(item).strip()]
         fallback_group_by = [str(item).strip().lower() for item in list(fallback.group_by or []) if str(item).strip()]
         merged_group_by = list(dict.fromkeys([*llm_group_by, *fallback_group_by]))
-        llm_domain = str(llm.domain_code or "").strip().lower()
-        fallback_domain = str(fallback.domain_code or "").strip().lower()
+        llm_domain = normalizar_codigo_dominio(llm.domain_code)
+        fallback_domain = normalizar_codigo_dominio(fallback.domain_code)
         normalized_raw_query = QueryIntentResolver._normalize_text(fallback.raw_query)
 
         operation = str(llm.operation or fallback.operation or "summary").strip().lower()
@@ -250,7 +254,7 @@ class QueryIntentResolver:
         if template_id == "detail_by_entity_and_period" and not has_entity and str(fallback.template_id or "").strip():
             template_id = str(fallback.template_id or "").strip().lower()
         if (
-            fallback_domain in {"ausentismo", "attendance"}
+            fallback_domain == "ausentismo"
             and str(fallback.operation or "").strip().lower() == "detail"
             and QueryIntentResolver._looks_like_attendance_person_detail(
                 normalized=normalized_raw_query,
@@ -300,7 +304,7 @@ class QueryIntentResolver:
     def _resolve_template_id(*, normalized: str, domain_code: str, operation: str) -> str:
         if domain_code in {"empleados", "rrhh"} and operation == "count" and "activo" in normalized:
             return "count_entities_by_status"
-        if domain_code in {"ausentismo", "attendance"} and operation == "detail":
+        if normalizar_codigo_dominio(domain_code) == "ausentismo" and operation == "detail":
             return "detail_by_entity_and_period"
         if operation == "trend":
             return "trend_by_period"
@@ -658,7 +662,7 @@ class QueryIntentResolver:
 
     @staticmethod
     def _resolve_domain(*, normalized: str, base_domain: str, semantic_context: dict[str, Any] | None = None) -> str:
-        domain = str(base_domain or "").strip().lower()
+        domain = normalizar_codigo_dominio(base_domain)
         rrhh_match = bool(
             re.search(
                 r"\b(colaborador(?:es)?|personal|emplead\w*|cedula|rrhh|movil|tipo_labor|tipo\s+labor|tipo\s+de\s+labor|labor(?:es)?|area(?:s)?|cargo(?:s)?|supervisor(?:es)?|jefe(?:s)?|lider(?:es)?|carpeta(?:s)?|sede(?:s)?)\b",
@@ -671,11 +675,11 @@ class QueryIntentResolver:
         )
         attendance_reason_match = bool(QueryIntentResolver._extract_attendance_reason_filter(normalized=normalized))
         attendance_match = any(token in normalized for token in ("ausent", "asistencia", "injustific")) or attendance_reason_match
-        if domain in {"ausentismo", "attendance"}:
+        if domain == "ausentismo":
             return domain
         if domain in {"empleados", "rrhh"} and attendance_match:
             return "ausentismo"
-        if domain in {"empleados", "rrhh", "transporte", "transport"}:
+        if domain == "empleados":
             return domain
         if attendance_match and (rrhh_match or generic_employee_lookup) and domain in {"", "general"}:
             return "ausentismo"
@@ -699,8 +703,8 @@ class QueryIntentResolver:
         if rrhh_match or generic_employee_lookup:
             return "empleados"
         if any(token in normalized for token in ("transporte", "ruta", "movilidad", "vehicul")):
-            return "transport"
-        return domain or "general"
+            return "general"
+        return normalizar_dominio_operativo(domain, fallback="general")
 
     @classmethod
     def _extract_attendance_reason_filter(cls, *, normalized: str) -> str:
@@ -712,7 +716,7 @@ class QueryIntentResolver:
 
     @classmethod
     def _looks_like_attendance_person_detail(cls, *, normalized: str, domain: str) -> bool:
-        if domain not in {"ausentismo", "attendance"}:
+        if normalizar_codigo_dominio(domain) != "ausentismo":
             return False
         if cls._has_explicit_grouping_phrase(normalized) or cls._has_aggregate_signal(normalized):
             return False

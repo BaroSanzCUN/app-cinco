@@ -46,6 +46,13 @@ from apps.ia_dev.application.semantic.satisfaction_review_gate import (
     SatisfactionReviewGate,
 )
 from apps.ia_dev.application.semantic.semantic_business_resolver import SemanticBusinessResolver
+from apps.ia_dev.application.taxonomia_dominios import (
+    agente_desde_dominio,
+    dominio_desde_capacidad,
+    es_capacidad_de_dominio_operativo,
+    normalizar_codigo_dominio,
+    normalizar_dominio_operativo,
+)
 from apps.ia_dev.services.memory_service import SessionMemoryStore
 
 
@@ -942,9 +949,9 @@ class ChatApplicationService:
             query_intelligence=query_intelligence,
             threshold=self._legacy_bridge_alignment_confidence_threshold(),
         )
-        legacy_domain = str(base.get("domain") or "").strip().lower()
+        legacy_domain = normalizar_codigo_dominio(base.get("domain"))
         legacy_intent = str(base.get("intent") or "").strip().lower()
-        aligned_domain = str(target.get("domain_code") or "").strip().lower()
+        aligned_domain = normalizar_codigo_dominio(target.get("domain_code"))
         aligned_intent = str(target.get("intent_code") or "").strip().lower()
         aligned_capability = str(target.get("capability_code") or "").strip()
         confidence = float(target.get("confidence") or 0.0)
@@ -964,12 +971,10 @@ class ChatApplicationService:
                 operation=aligned_intent,
             )
             updated["needs_database"] = aligned_domain not in {"", "general", "legacy"}
-            if aligned_domain in {"empleados", "rrhh"}:
-                updated["selected_agent"] = "empleados_agent"
-            elif aligned_domain == "attendance":
-                updated["selected_agent"] = "attendance_agent"
-            elif aligned_domain == "transport":
-                updated["selected_agent"] = "transport_agent"
+            updated["selected_agent"] = agente_desde_dominio(
+                aligned_domain,
+                fallback=str(updated.get("selected_agent") or "analista_agent"),
+            )
             updated["classifier_source"] = "legacy_bridge_alignment_canonical"
 
         updated["canonical_alignment"] = {
@@ -1144,7 +1149,7 @@ class ChatApplicationService:
                 "source": "dictionary_alias_rules",
                 "safe": True,
                 "safety_reason": "safe_alias_match",
-                "domain_code": "attendance",
+                "domain_code": "ausentismo",
                 "intent_code": "aggregate",
                 "capability_code": "attendance.summary.by_supervisor.v1",
                 "confidence": max(0.8, float(threshold)),
@@ -1511,9 +1516,9 @@ class ChatApplicationService:
         canonical_intent: str,
         fallback_classification: dict[str, Any],
     ) -> dict[str, Any]:
-        domain = str(canonical_domain or "").strip().lower() or str(
+        domain = normalizar_codigo_dominio(canonical_domain) or normalizar_codigo_dominio(
             fallback_classification.get("domain") or "general"
-        ).strip().lower()
+        )
         operation = str(canonical_intent or "").strip().lower()
         intent = ChatApplicationService._canonical_intent_to_legacy_intent(
             domain=domain,
@@ -1525,7 +1530,10 @@ class ChatApplicationService:
         return {
             "intent": intent,
             "domain": domain or "general",
-            "selected_agent": str(fallback_classification.get("selected_agent") or "analista_agent"),
+            "selected_agent": agente_desde_dominio(
+                domain,
+                fallback=str(fallback_classification.get("selected_agent") or "analista_agent"),
+            ),
             "classifier_source": "canonical_routing_classification",
             "needs_database": domain not in {"", "general", "legacy"},
             "output_mode": output_mode,
@@ -1536,11 +1544,11 @@ class ChatApplicationService:
 
     @staticmethod
     def _canonical_default_capability(*, canonical_domain: str, canonical_intent: str) -> str:
-        domain = str(canonical_domain or "").strip().lower()
+        domain = normalizar_codigo_dominio(canonical_domain)
         operation = str(canonical_intent or "").strip().lower()
         if domain in {"empleados", "rrhh"}:
             return "empleados.count.active.v1"
-        if domain == "attendance":
+        if domain == "ausentismo":
             if operation in {"detail", "list", "table"}:
                 return "attendance.unjustified.table_with_personal.v1"
             if operation in {"trend", "timeseries"}:
@@ -1548,8 +1556,6 @@ class ChatApplicationService:
             if operation in {"aggregate", "group"}:
                 return "attendance.summary.by_attribute.v1"
             return "attendance.unjustified.summary.v1"
-        if domain == "transport":
-            return "transport.departures.summary.v1"
         if domain == "knowledge":
             return "knowledge.proposal.create.v1"
         if domain == "general":
@@ -1558,16 +1564,14 @@ class ChatApplicationService:
 
     @staticmethod
     def _canonical_intent_to_legacy_intent(*, domain: str, operation: str) -> str:
-        normalized_domain = str(domain or "").strip().lower()
+        normalized_domain = normalizar_codigo_dominio(domain)
         normalized_operation = str(operation or "").strip().lower()
         if normalized_domain in {"empleados", "rrhh"}:
             return "empleados_query"
-        if normalized_domain == "transport":
-            return "transport_query"
-        if normalized_domain == "attendance":
+        if normalized_domain == "ausentismo":
             if normalized_operation in {"recurrence", "recurrent"}:
-                return "attendance_recurrence"
-            return "attendance_query"
+                return "ausentismo_recurrencia"
+            return "ausentismo_query"
         if normalized_domain == "knowledge":
             return "knowledge_change_request"
         if normalized_operation in {"general_question", "summary"}:
@@ -1589,12 +1593,7 @@ class ChatApplicationService:
 
     @staticmethod
     def _capability_domain(capability_id: str) -> str:
-        capability = str(capability_id or "").strip().lower()
-        if not capability:
-            return ""
-        if "." in capability:
-            return capability.split(".", 1)[0]
-        return capability
+        return dominio_desde_capacidad(capability_id)
 
     @staticmethod
     def _is_general_or_legacy_capability(capability_id: str) -> bool:
@@ -1666,7 +1665,7 @@ class ChatApplicationService:
         *,
         resolved_query: ResolvedQuerySpec,
     ) -> dict[str, Any]:
-        domain = str(resolved_query.intent.domain_code or "").strip().lower()
+        domain = normalizar_codigo_dominio(resolved_query.intent.domain_code)
         company_scope = dict((resolved_query.semantic_context or {}).get("company_operational_scope") or {})
         if (
             bool(company_scope.get("domain_known"))
@@ -1684,29 +1683,16 @@ class ChatApplicationService:
                 "contextual_domain": domain,
                 "supported_domains": list(company_scope.get("supported_domains") or []),
             }
-        routing_domain = domain
-        if domain == "ausentismo":
-            routing_domain = "attendance"
-        elif domain == "transporte":
-            routing_domain = "transport"
-        elif domain == "rrhh":
-            routing_domain = "empleados"
+        routing_domain = normalizar_dominio_operativo(domain, fallback="general")
         output_mode = "summary"
         if resolved_query.intent.operation in {"detail", "aggregate", "trend"}:
             output_mode = "table"
         if resolved_query.intent.operation == "count":
             output_mode = "summary"
-        agent = "analista_agent"
-        if routing_domain in {"ausentismo", "attendance"}:
-            agent = "attendance_agent"
-        elif routing_domain in {"empleados", "rrhh"}:
-            agent = "empleados_agent"
-        elif routing_domain in {"transporte", "transport"}:
-            agent = "transport_agent"
         return {
             "intent": str(resolved_query.intent.operation or "query"),
             "domain": routing_domain,
-            "selected_agent": agent,
+            "selected_agent": agente_desde_dominio(routing_domain),
             "classifier_source": f"query_intelligence_{resolved_query.intent.source}",
             "needs_database": routing_domain not in {"general", ""},
             "output_mode": output_mode,
@@ -2752,8 +2738,8 @@ class ChatApplicationService:
             )
         elif runtime_execution_plan is not None and plan_constraints and not dict(runtime_execution_plan.constraints or {}):
             runtime_execution_plan.constraints = plan_constraints
-        capability_domain = capability_id.split(".", 1)[0] if "." in capability_id else ""
-        is_domain_capability = capability_domain in {"attendance", "transport", "empleados"}
+        capability_domain = dominio_desde_capacidad(capability_id)
+        is_domain_capability = es_capacidad_de_dominio_operativo(capability_id)
         selected_event_type = f"{capability_domain}_capability_selected"
         executed_event_type = f"{capability_domain}_handler_executed"
         fallback_event_type = f"{capability_domain}_fallback_legacy"
@@ -3135,17 +3121,17 @@ class ChatApplicationService:
     ) -> dict[str, Any]:
         normalized = ChatApplicationService._normalize_text(message)
         context = dict(session_context or {})
-        last_domain = str(context.get("last_domain") or "").strip().lower()
+        last_domain = normalizar_codigo_dominio(context.get("last_domain"))
         last_needs_db = bool(context.get("last_needs_database"))
         if (
-            last_domain == "attendance"
+            last_domain == "ausentismo"
             and last_needs_db
             and ChatApplicationService._is_chart_request(normalized)
         ):
             return {
-                "intent": "attendance_query",
-                "domain": "attendance",
-                "selected_agent": "attendance_agent",
+                "intent": "ausentismo_query",
+                "domain": "ausentismo",
+                "selected_agent": "ausentismo_agent",
                 "classifier_source": "bootstrap_context_followup",
                 "needs_database": True,
                 "output_mode": "summary",
@@ -3159,7 +3145,7 @@ class ChatApplicationService:
                 "dictionary_context": {},
             }
         if any(token in normalized for token in ("ausent", "asistenc", "injustificad")):
-            intent = "attendance_recurrence" if "reincid" in normalized else "attendance_query"
+            intent = "ausentismo_recurrencia" if "reincid" in normalized else "ausentismo_query"
             wants_table = any(token in normalized for token in ("tabla", "detalle", "lista", "mostrar"))
             wants_count = any(token in normalized for token in ("cantidad", "cuantos", "cuantas", "total", "resumen"))
             wants_group = any(
@@ -3179,11 +3165,11 @@ class ChatApplicationService:
             needs_personal_join = any(
                 token in normalized
                 for token in ("empleado", "personal", "supervisor", "area", "cargo", "nombre", "apellido")
-            ) or intent == "attendance_recurrence"
+            ) or intent == "ausentismo_recurrencia"
             return {
                 "intent": intent,
-                "domain": "attendance",
-                "selected_agent": "attendance_agent",
+                "domain": "ausentismo",
+                "selected_agent": "ausentismo_agent",
                 "classifier_source": "bootstrap_rules",
                 "needs_database": True,
                 "output_mode": output_mode,
@@ -3201,18 +3187,6 @@ class ChatApplicationService:
                 "output_mode": "summary" if any(
                     token in normalized for token in ("cantidad", "cuantos", "cuantas", "total", "numero")
                 ) else "table",
-                "needs_personal_join": False,
-                "used_tools": [],
-                "dictionary_context": {},
-            }
-        if any(token in normalized for token in ("transporte", "ruta", "movilidad", "vehicul", "salieron", "salidas")):
-            return {
-                "intent": "transport_query",
-                "domain": "transport",
-                "selected_agent": "transport_agent",
-                "classifier_source": "bootstrap_rules",
-                "needs_database": True,
-                "output_mode": "summary",
                 "needs_personal_join": False,
                 "used_tools": [],
                 "dictionary_context": {},
@@ -3311,7 +3285,8 @@ class ChatApplicationService:
         capability_id = str(planned_capability.get("capability_id") or "").strip()
         if not capability_id:
             return None
-        return capability_id.split(".", 1)[0].upper()
+        domain = dominio_desde_capacidad(capability_id)
+        return str(domain or "").upper() or None
 
     @staticmethod
     def _extract_classification(response: dict[str, Any]) -> dict[str, Any]:
