@@ -4,6 +4,11 @@ import re
 import unicodedata
 from typing import Any
 
+from apps.ia_dev.application.taxonomia_dominios import (
+    dominio_desde_capacidad,
+    normalizar_codigo_dominio,
+)
+
 
 class IntentToCapabilityBridge:
     _ITEMIZED_TOKENS = (
@@ -194,7 +199,7 @@ class IntentToCapabilityBridge:
     ) -> dict[str, Any]:
         msg = self._normalize(message)
         intent = str(classification.get("intent") or "general_question")
-        domain = str(classification.get("domain") or "general")
+        domain = normalizar_codigo_dominio(classification.get("domain") or "general")
         output_mode = str(classification.get("output_mode") or "summary")
         needs_database = bool(classification.get("needs_database"))
         used_tools = list(classification.get("used_tools") or [])
@@ -217,7 +222,7 @@ class IntentToCapabilityBridge:
                 "needs_database": needs_database,
             }
         if canonical_safe and canonical_domain_hint and canonical_domain_hint not in {"general", "legacy"}:
-            domain = canonical_domain_hint
+            domain = normalizar_codigo_dominio(canonical_domain_hint)
             if canonical_intent_hint:
                 intent = canonical_intent_hint
 
@@ -230,7 +235,7 @@ class IntentToCapabilityBridge:
         elif intent == "knowledge_change_request":
             capability_id = "knowledge.proposal.create.v1"
             reason = "legacy_intent_match_knowledge_change_request"
-        elif domain == "attendance" or mentions_attendance:
+        elif domain == "ausentismo" or mentions_attendance:
             wants_itemized = any(token in msg for token in self._ITEMIZED_TOKENS)
             wants_grouped = any(token in msg for token in self._GROUPED_TOKENS)
             wants_summary = any(token in msg for token in self._SUMMARY_TOKENS)
@@ -267,7 +272,7 @@ class IntentToCapabilityBridge:
             )
             is_recurrence = (
                 "get_attendance_recurrent_unjustified_with_supervisor" in used_tools
-                or intent == "attendance_recurrence"
+                or intent in {"attendance_recurrence", "ausentismo_recurrencia"}
                 or "reincid" in msg
             )
 
@@ -388,11 +393,6 @@ class IntentToCapabilityBridge:
         elif not needs_database:
             capability_id = "general.answer.v1"
             reason = "legacy_general_no_database"
-        elif domain == "transport" or intent == "transport_query" or any(
-            token in msg for token in self._TRANSPORT_TOKENS
-        ):
-            capability_id = "transport.departures.summary.v1"
-            reason = "transport_departures_detected"
         elif domain == "general":
             capability_id = "general.answer.v1"
             reason = "legacy_general_domain"
@@ -413,9 +413,9 @@ class IntentToCapabilityBridge:
         planned_capability: dict[str, Any],
     ) -> dict[str, Any]:
         intent = str(classification.get("intent") or "")
-        domain = str(classification.get("domain") or "general")
+        domain = normalizar_codigo_dominio(classification.get("domain") or "general")
         capability_id = str(planned_capability.get("capability_id") or "legacy.passthrough.v1")
-        capability_domain = capability_id.split(".", 1)[0] if "." in capability_id else "legacy"
+        capability_domain = dominio_desde_capacidad(capability_id) or "legacy"
 
         if capability_domain == "legacy":
             diverged = False
@@ -423,12 +423,9 @@ class IntentToCapabilityBridge:
         elif intent == "knowledge_change_request":
             diverged = capability_domain != "knowledge"
             reason = "knowledge_capability_expected"
-        elif domain == "attendance":
-            diverged = capability_domain != "attendance"
-            reason = "attendance_capability_expected"
-        elif domain == "transport":
-            diverged = capability_domain != "transport"
-            reason = "transport_capability_expected"
+        elif domain == "ausentismo":
+            diverged = capability_domain != "ausentismo"
+            reason = "ausentismo_capability_expected"
         elif domain in {"empleados", "rrhh"}:
             diverged = capability_domain != "empleados"
             reason = "empleados_capability_expected"
@@ -479,7 +476,7 @@ class IntentToCapabilityBridge:
                 },
             )
 
-        domain = str(classification.get("domain") or "").strip().lower()
+        domain = normalizar_codigo_dominio(classification.get("domain"))
         needs_database = bool(classification.get("needs_database"))
         contextual_reference = bool(classification.get("contextual_reference"))
         last_group_dimension_key = str(
@@ -501,7 +498,7 @@ class IntentToCapabilityBridge:
                 }
             )
 
-        if domain == "attendance":
+        if domain == "ausentismo":
             if (
                 signals["wants_chart"]
                 and contextual_reference
@@ -561,14 +558,11 @@ class IntentToCapabilityBridge:
         if domain in {"general", "rrhh"} and needs_database and (
             signals["mentions_attendance"] or signals["wants_trend"] or signals["wants_chart"]
         ):
-            # Reduce fallback erratico a general/rrhh cuando semantica sugiere attendance analytics.
+            # Reduce fallback erratico a general/rrhh cuando semantica sugiere ausentismo analytics.
             add("attendance.summary.by_supervisor.v1", "semantic_recovery_from_general_or_rrhh")
             if signals["wants_group_dimension"]:
                 add("attendance.summary.by_attribute.v1", "semantic_recovery_attendance_group_attribute")
             add("attendance.trend.daily.v1", "semantic_recovery_attendance_trend")
-
-        if domain == "general" and signals["mentions_transport"] and needs_database:
-            add("transport.departures.summary.v1", "semantic_recovery_transport")
 
         deduped: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
@@ -630,12 +624,8 @@ class IntentToCapabilityBridge:
         group_by = [str(item).strip().lower() for item in list(intent.get("group_by") or []) if str(item).strip()]
         metrics = [str(item).strip().lower() for item in list(intent.get("metrics") or []) if str(item).strip()]
 
-        if domain == "ausentismo":
-            domain = "attendance"
-        elif domain == "rrhh":
+        if domain == "rrhh":
             domain = "empleados"
-        elif domain == "transporte":
-            domain = "transport"
 
         strategy = str((execution_plan or {}).get("strategy") or "").strip().lower()
         selected_capability = str((execution_plan or {}).get("capability_id") or "").strip()
@@ -689,7 +679,7 @@ class IntentToCapabilityBridge:
             elif operation == "count":
                 add("empleados.count.active.v1", "semantic_empleados_count_fallback")
 
-        elif domain == "attendance":
+        elif domain == "ausentismo":
             if template_id == "detail_by_entity_and_period":
                 add("attendance.unjustified.table_with_personal.v1", "semantic_attendance_detail_by_entity")
             elif template_id == "count_records_by_period":
@@ -711,9 +701,6 @@ class IntentToCapabilityBridge:
                     add("attendance.trend.daily.v1", "semantic_attendance_trend_daily")
             else:
                 add("attendance.unjustified.summary.v1", "semantic_attendance_default")
-
-        elif domain == "transport":
-            add("transport.departures.summary.v1", "semantic_transport_default")
 
         if not candidates:
             add("legacy.passthrough.v1", "semantic_fallback_legacy")
