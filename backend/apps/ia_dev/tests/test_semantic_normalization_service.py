@@ -134,6 +134,34 @@ class SemanticNormalizationServiceTests(SimpleTestCase):
                 estado = str((payload.get("normalized_filters") or {}).get("estado") or "")
                 self.assertEqual(estado, "ACTIVO")
 
+    def test_employee_egresos_this_month_normalizes_to_inactive_count(self):
+        service = SemanticNormalizationService()
+        output = service.normalize(
+            raw_query="Egresos de este mes?",
+            semantic_context=self.semantic_context,
+            runtime_flags={"llm_enabled": False, "llm_mode": "never"},
+            capability_hints=[],
+            base_classification={"domain": "general", "intent": "general_question"},
+        )
+        payload = output.as_dict()
+        self.assertEqual(str(payload.get("domain_code") or ""), "empleados")
+        self.assertEqual(str(payload.get("intent_code") or ""), "count")
+        self.assertEqual(str((payload.get("normalized_filters") or {}).get("estado") or ""), "INACTIVO")
+
+    def test_employee_turnover_normalizes_to_inactive_count(self):
+        service = SemanticNormalizationService()
+        output = service.normalize(
+            raw_query="rotacion de personal ultimo mes?",
+            semantic_context=self.semantic_context,
+            runtime_flags={"llm_enabled": False, "llm_mode": "never"},
+            capability_hints=[],
+            base_classification={"domain": "general", "intent": "general_question"},
+        )
+        payload = output.as_dict()
+        self.assertEqual(str(payload.get("domain_code") or ""), "empleados")
+        self.assertEqual(str(payload.get("intent_code") or ""), "count")
+        self.assertEqual(str((payload.get("normalized_filters") or {}).get("estado") or ""), "INACTIVO")
+
     def test_ab_comparison_reports_required_delta_indicators(self):
         def _fake_llm(**kwargs):
             baseline = dict(kwargs.get("baseline_snapshot") or {})
@@ -273,6 +301,19 @@ class SemanticNormalizationServiceTests(SimpleTestCase):
         payload = output.as_dict()
         entities = list(payload.get("candidate_entities") or [])
         self.assertTrue(any(str(item.get("entity_type") or "") == "movil" for item in entities))
+
+    def test_candidate_entities_detects_movil_lookup_token_with_space(self):
+        service = SemanticNormalizationService()
+        output = service.normalize(
+            raw_query="info de TIRAN 462",
+            semantic_context=self.semantic_context,
+            runtime_flags={"llm_enabled": False, "llm_mode": "never"},
+            capability_hints=[],
+            base_classification={"domain": "general", "intent": "general_question"},
+        )
+        payload = output.as_dict()
+        entities = list(payload.get("candidate_entities") or [])
+        self.assertTrue(any(str(item.get("entity_value") or "") == "TIRAN462" for item in entities))
 
     def test_semantic_normalization_detects_vacaciones_as_attendance_reason_filter(self):
         service = SemanticNormalizationService()

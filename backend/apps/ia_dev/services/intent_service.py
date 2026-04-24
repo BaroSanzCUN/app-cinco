@@ -4,6 +4,8 @@ import os
 import re
 import unicodedata
 
+from apps.ia_dev.services.employee_identifier_service import EmployeeIdentifierService
+
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +90,7 @@ class IntentClassifierService:
             return False
         if any(token in msg for token in ("transporte", "ruta", "movilidad", "vehicul")):
             return False
-        if re.search(r"\bmovil(?:\s+(?:de|del|la|el))?\s+[a-z0-9_-]{3,40}\b", msg):
+        if EmployeeIdentifierService.has_movil_identifier(msg):
             return True
         match = re.search(
             r"\b(?:info|informacion|detalle|datos|ficha)\s+de\s+([a-z0-9_-]{3,40})\b",

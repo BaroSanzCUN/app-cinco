@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-DOMINIOS_OPERATIVOS_CANONICOS = frozenset({"empleados", "ausentismo"})
+DOMINIOS_OPERATIVOS_CANONICOS = frozenset({"empleados", "ausentismo", "transporte"})
 DOMINIOS_META = frozenset({"general", "legacy", "knowledge"})
 
 _ALIAS_DOMINIOS = {
@@ -26,6 +26,7 @@ _ALIAS_DOMINIOS = {
 _AGENTES_POR_DOMINIO = {
     "ausentismo": "ausentismo_agent",
     "empleados": "empleados_agent",
+    "transporte": "transport_agent",
     "knowledge": "analista_agent",
     "general": "analista_agent",
     "legacy": "analista_agent",

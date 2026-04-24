@@ -14,6 +14,7 @@ from apps.ia_dev.application.taxonomia_dominios import (
     dominio_desde_capacidad,
     normalizar_codigo_dominio,
 )
+from apps.ia_dev.services.employee_identifier_service import EmployeeIdentifierService
 
 
 class SemanticNormalizationService:
@@ -21,6 +22,25 @@ class SemanticNormalizationService:
     Normalizacion semantica incremental.
     Esta capa no decide estrategia final ni altera el runtime por defecto.
     """
+
+    _EMPLOYEE_INACTIVE_SIGNAL_RE = re.compile(
+        r"\b("
+        r"inactivo|inactivos|"
+        r"egreso|egresos|egresado|egresados|"
+        r"retiro|retiros|retirado|retirados|"
+        r"desvinculacion|desvinculaciones|desvinculado|desvinculados|"
+        r"baja|bajas|rotacion|rotaciones"
+        r")\b"
+    )
+    _EMPLOYEE_ACTIVE_SIGNAL_RE = re.compile(
+        r"\b(activo|activa|activos|activas|vigente|vigentes|habilitado|habilitados|vinculado|vinculados)\b"
+    )
+    _TEMPORAL_REFERENCE_RE = re.compile(
+        r"\b(hoy|ayer|esta\s+semana|semana\s+actual|semana\s+pasad[ao]|semana\s+anterior|"
+        r"ultima\s+semana|ultim[oa]s?\s+\d+\s+(?:dias|semanas|meses)|rolling(?:\s+de)?\s+\d+\s+"
+        r"(?:dias|semanas|meses)|este\s+mes|mes\s+actual|mes\s+pasado|mes\s+anterior|"
+        r"este\s+ano|ano\s+actual|ano\s+pasado|\d{4}-\d{2}-\d{2})\b"
+    )
 
     _LOCAL_EQUIVALENCES = {
         "personal": "empleados",
@@ -75,6 +95,22 @@ class SemanticNormalizationService:
         "vigentes": ("estado", "ACTIVO"),
         "inactivo": ("estado", "INACTIVO"),
         "inactivos": ("estado", "INACTIVO"),
+        "egreso": ("estado", "INACTIVO"),
+        "egresos": ("estado", "INACTIVO"),
+        "egresado": ("estado", "INACTIVO"),
+        "egresados": ("estado", "INACTIVO"),
+        "retiro": ("estado", "INACTIVO"),
+        "retiros": ("estado", "INACTIVO"),
+        "retirado": ("estado", "INACTIVO"),
+        "retirados": ("estado", "INACTIVO"),
+        "desvinculacion": ("estado", "INACTIVO"),
+        "desvinculaciones": ("estado", "INACTIVO"),
+        "desvinculado": ("estado", "INACTIVO"),
+        "desvinculados": ("estado", "INACTIVO"),
+        "baja": ("estado", "INACTIVO"),
+        "bajas": ("estado", "INACTIVO"),
+        "rotacion": ("estado", "INACTIVO"),
+        "rotaciones": ("estado", "INACTIVO"),
     }
 
     def __init__(
@@ -432,6 +468,7 @@ class SemanticNormalizationService:
         capability_hints: list[dict[str, Any]] | None,
     ) -> list[dict[str, Any]]:
         score = {"empleados": 0.0, "ausentismo": 0.0, "general": 0.1}
+        has_employee_inactive_signal = cls._has_employee_inactive_signal(query)
         if any(
             token in query
             for token in (
@@ -446,10 +483,14 @@ class SemanticNormalizationService:
                 "cedula",
                 "habilitad",
                 "vigent",
+                "rotacion",
+                "rotaciones",
             )
         ):
             score["empleados"] += 0.65
-        if re.search(r"\bmovil(?:\s+(?:de|del|la|el))?\s+[a-z0-9_-]{3,40}\b", query):
+        if has_employee_inactive_signal:
+            score["empleados"] += 0.65
+        if EmployeeIdentifierService.has_movil_identifier(query):
             score["empleados"] += 0.65
         if re.search(
             r"\b(tipo_labor|tipo\s+labor|tipo\s+de\s+labor|labor(?:es)?|area(?:s)?|cargo(?:s)?|supervisor(?:es)?|jefe(?:s)?|lider(?:es)?|carpeta(?:s)?|sede(?:s)?)\b",
@@ -496,8 +537,9 @@ class SemanticNormalizationService:
             if conf > 0
         ]
 
-    @staticmethod
+    @classmethod
     def _candidate_intents(
+        cls,
         *,
         query: str,
         classification: dict[str, Any],
@@ -507,8 +549,12 @@ class SemanticNormalizationService:
             re.search(r"\bcantid[a-z]*\b", query)
         ):
             intent_scores["count"] += 0.7
+        if cls._has_employee_status_metric_signal(query):
+            intent_scores["count"] += 0.62
         if any(token in query for token in ("detalle", "tabla", "listar", "lista", "informacion", "info", "ficha", "datos")):
             intent_scores["detail"] += 0.6
+        if EmployeeIdentifierService.has_movil_identifier(query) or bool(re.search(r"\b\d{6,13}\b", query)):
+            intent_scores["detail"] += 0.55
         if any(token in query for token in ("vacacion", "vacaciones", "incapacidad", "licencia", "permiso", "calamidad")) and any(
             token in query for token in ("empleado", "empleados", "colaborador", "colaboradores", "personal", "persona", "personas")
         ):
@@ -543,28 +589,15 @@ class SemanticNormalizationService:
                     "confidence": 0.95,
                 }
             )
-        movil_match = re.search(r"\bmovil(?:\s+(?:de|del|la|el))?\s+([a-z0-9_-]{3,40})\b", query)
+        movil_match = EmployeeIdentifierService.extract_movil_identifier(query)
         if movil_match:
             entities.append(
                 {
                     "entity_type": "movil",
-                    "entity_value": str(movil_match.group(1) or "").strip(),
+                    "entity_value": movil_match,
                     "confidence": 0.93,
                 }
             )
-        generic_lookup = re.search(r"\b(?:info|informacion|detalle|datos|ficha)\s+de\s+([a-z0-9_-]{3,40})\b", query)
-        if not generic_lookup:
-            generic_lookup = re.search(r"^\s*(?:info|informacion|detalle|datos|ficha)\s+([a-z0-9_-]{3,40})\s*$", query)
-        if generic_lookup:
-            token = str(generic_lookup.group(1) or "").strip()
-            if re.search(r"[a-z]", token) and re.search(r"\d", token):
-                entities.append(
-                    {
-                        "entity_type": "movil",
-                        "entity_value": token,
-                        "confidence": 0.81,
-                    }
-                )
         if any(token in query for token in ("empleado", "empleados", "colaborador", "colaboradores", "personal", "persona", "personas")):
             entities.append(
                 {
@@ -587,7 +620,7 @@ class SemanticNormalizationService:
         canonical_aliases = {str(item.get("alias") or ""): str(item.get("canonical") or "") for item in list(semantic_aliases or [])}
         if any(token in query for token in ("activo", "activa", "activos", "activas", "habilitado", "habilitados", "vigente", "vigentes")):
             filters.append({"filter": "estado", "value": "ACTIVO", "confidence": 0.9, "source": "deterministic"})
-        elif any(token in query for token in ("inactivo", "inactivos")):
+        elif cls._has_employee_inactive_signal(query):
             filters.append({"filter": "estado", "value": "INACTIVO", "confidence": 0.9, "source": "deterministic"})
         elif (
             canonical_aliases.get("habilitado") == "activo"
@@ -872,6 +905,8 @@ class SemanticNormalizationService:
                     "colaborador=empleado",
                     "vigente=activo",
                     "habilitado=activo",
+                    "egresos=inactivo",
+                    "retiros=inactivo",
                 ]
             )
         frequent_capabilities: list[str] = []
@@ -919,6 +954,8 @@ class SemanticNormalizationService:
                 [
                     "si consulta de cantidad + estado activo, priorizar intent_code=count",
                     "si aparece vigente/habilitado, normalizar filter estado=ACTIVO",
+                    "si aparece egreso/retiro/desvinculacion, normalizar filter estado=INACTIVO",
+                    "si hay periodo y estado=INACTIVO, priorizar fecha_egreso como columna temporal",
                 ]
             )
 
@@ -1485,6 +1522,29 @@ class SemanticNormalizationService:
         except Exception:
             pass
         return {}
+
+    @classmethod
+    def _has_employee_inactive_signal(cls, query: str) -> bool:
+        return bool(cls._EMPLOYEE_INACTIVE_SIGNAL_RE.search(str(query or "")))
+
+    @classmethod
+    def _has_employee_active_signal(cls, query: str) -> bool:
+        return bool(cls._EMPLOYEE_ACTIVE_SIGNAL_RE.search(str(query or "")))
+
+    @classmethod
+    def _has_temporal_reference(cls, query: str) -> bool:
+        return bool(cls._TEMPORAL_REFERENCE_RE.search(str(query or "")))
+
+    @classmethod
+    def _has_employee_status_metric_signal(cls, query: str) -> bool:
+        text = str(query or "")
+        if re.search(r"\b(egresos|retiros|desvinculaciones|bajas|rotacion|rotaciones)\b", text):
+            return True
+        if cls._has_employee_inactive_signal(text) and cls._has_temporal_reference(text):
+            return True
+        if cls._has_employee_active_signal(text) and cls._has_temporal_reference(text):
+            return True
+        return False
 
     @staticmethod
     def _normalize_text(value: Any) -> str:
