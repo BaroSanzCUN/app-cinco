@@ -71,6 +71,11 @@ class IntentToCapabilityBridge:
         "recursos humanos",
         "movil",
     )
+    _TURNOVER_TOKENS = (
+        "rotacion",
+        "rotaciones",
+        "turnover",
+    )
     _ACTIVE_STATUS_TOKENS = (
         "activo",
         "activos",
@@ -151,6 +156,15 @@ class IntentToCapabilityBridge:
         "tipo labor",
         "por tipo de labor",
         "tipo de labor",
+    )
+    _BY_CENTRO_COSTO_TOKENS = (
+        "por centro de costo",
+        "centro de costo",
+        "centros de costo",
+        "por centro costo",
+        "centro costo",
+        "por cc",
+        " cc",
     )
     _BY_JUSTIFICACION_TOKENS = (
         "por justificacion",
@@ -252,6 +266,7 @@ class IntentToCapabilityBridge:
             wants_by_cargo = any(token in msg for token in self._BY_CARGO_TOKENS)
             wants_by_carpeta = any(token in msg for token in self._BY_CARPETA_TOKENS)
             wants_by_tipo_labor = any(token in msg for token in self._BY_TIPO_LABOR_TOKENS)
+            wants_by_centro_costo = any(token in msg for token in self._BY_CENTRO_COSTO_TOKENS)
             wants_by_justificacion = any(token in msg for token in self._BY_JUSTIFICACION_TOKENS)
             wants_by_tipo = any(token in msg for token in self._BY_TIPO_TOKENS)
             wants_group_dimension = any(
@@ -261,6 +276,7 @@ class IntentToCapabilityBridge:
                     wants_by_cargo,
                     wants_by_carpeta,
                     wants_by_tipo_labor,
+                    wants_by_centro_costo,
                     wants_by_justificacion,
                     wants_by_tipo,
                 )
@@ -358,6 +374,7 @@ class IntentToCapabilityBridge:
         ):
             wants_count = any(token in msg for token in self._SUMMARY_TOKENS)
             wants_active = any(token in msg for token in self._ACTIVE_STATUS_TOKENS)
+            wants_turnover = any(token in msg for token in self._TURNOVER_TOKENS)
             wants_detail = any(token in msg for token in ("detalle", "info", "informacion", "ficha", "datos"))
             has_identifier_hint = bool(
                 any(token in msg for token in ("cedula", "movil", "codigo sap", "codigo_sap"))
@@ -373,9 +390,13 @@ class IntentToCapabilityBridge:
                     *self._BY_CARGO_TOKENS,
                     *self._BY_CARPETA_TOKENS,
                     *self._BY_TIPO_LABOR_TOKENS,
+                    *self._BY_CENTRO_COSTO_TOKENS,
                 )
             )
-            if wants_active and (wants_count or wants_group_dimension or output_mode == "summary"):
+            if wants_turnover:
+                capability_id = "empleados.count.active.v1"
+                reason = "empleados_turnover_detected"
+            elif wants_active and (wants_count or wants_group_dimension or output_mode == "summary"):
                 capability_id = "empleados.count.active.v1"
                 reason = "empleados_active_summary_detected"
             elif wants_detail and has_identifier_hint:
@@ -550,7 +571,9 @@ class IntentToCapabilityBridge:
         if domain in {"empleados", "rrhh"} or (
             signals["mentions_empleados"] and domain in {"general", "rrhh", ""}
         ):
-            if signals["wants_group_dimension"]:
+            if signals["wants_turnover"]:
+                add("empleados.count.active.v1", "semantic_empleados_turnover")
+            elif signals["wants_group_dimension"]:
                 add("empleados.count.active.v1", "semantic_empleados_grouped_default_active")
             elif signals["wants_count"] or signals["wants_active"]:
                 add("empleados.count.active.v1", "semantic_empleados_count_active")
@@ -588,6 +611,7 @@ class IntentToCapabilityBridge:
             "wants_distribution": any(token in msg for token in self._DISTRIBUTION_TOKENS),
             "wants_top": any(token in msg for token in self._TOP_TOKENS),
             "wants_active": any(token in msg for token in self._ACTIVE_STATUS_TOKENS),
+            "wants_turnover": any(token in msg for token in self._TURNOVER_TOKENS),
             "wants_by_supervisor": any(token in msg for token in self._BY_SUPERVISOR_TOKENS),
             "wants_by_area": any(token in msg for token in self._BY_AREA_TOKENS),
             "wants_by_cargo": any(token in msg for token in self._BY_CARGO_TOKENS),
@@ -600,6 +624,7 @@ class IntentToCapabilityBridge:
                     *self._BY_CARPETA_TOKENS,
                     *self._BY_JUSTIFICACION_TOKENS,
                     *self._BY_TIPO_TOKENS,
+                    *self._BY_CENTRO_COSTO_TOKENS,
                 )
             ),
             "mentions_attendance": any(token in msg for token in ("ausent", "asistencia", "injustific", "reincid")),
@@ -662,13 +687,16 @@ class IntentToCapabilityBridge:
 
         if domain == "empleados":
             estado = self._resolve_employee_status(normalized_filters)
+            raw_query = str(intent.get("raw_query") or "").lower()
             has_identifier = bool(
                 str((normalized_filters or {}).get("cedula") or "").strip()
                 or str((normalized_filters or {}).get("movil") or "").strip()
                 or str((normalized_filters or {}).get("codigo_sap") or "").strip()
                 or str((normalized_filters or {}).get("search") or "").strip()
             )
-            if template_id == "count_entities_by_status" and estado in {"ACTIVO", "INACTIVO"}:
+            if "turnover_rate" in metrics or re.search(r"\b(rotacion|rotaciones|turnover)\b", raw_query):
+                add("empleados.count.active.v1", "semantic_empleados_turnover")
+            elif template_id == "count_entities_by_status" and estado in {"ACTIVO", "INACTIVO"}:
                 add("empleados.count.active.v1", "semantic_empleados_count_by_status")
             elif template_id == "detail_by_entity_and_period" and has_identifier:
                 add("empleados.detail.v1", "semantic_empleados_detail_by_identifier")
@@ -680,7 +708,10 @@ class IntentToCapabilityBridge:
                 add("empleados.count.active.v1", "semantic_empleados_count_fallback")
 
         elif domain == "ausentismo":
-            if template_id == "detail_by_entity_and_period":
+            raw_query = str(intent.get("raw_query") or "").lower()
+            if re.search(r"\b(reincid\w*|recurrent\w*|recurren\w*)\b", raw_query):
+                add("attendance.recurrence.grouped.v1", "semantic_attendance_recurrence")
+            elif template_id == "detail_by_entity_and_period":
                 add("attendance.unjustified.table_with_personal.v1", "semantic_attendance_detail_by_entity")
             elif template_id == "count_records_by_period":
                 add("attendance.unjustified.summary.v1", "semantic_attendance_count_by_period")

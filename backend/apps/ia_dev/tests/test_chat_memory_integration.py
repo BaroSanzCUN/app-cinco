@@ -131,10 +131,14 @@ class ChatMemoryIntegrationTests(SimpleTestCase):
 
         self.assertIn("memory_candidates", response)
         self.assertIn("pending_proposals", response)
+        self.assertIn("working_updates", response)
+        self.assertIn("reasoning", response)
         self.assertEqual(len(response.get("memory_candidates") or []), 1)
         self.assertEqual(len(response.get("pending_proposals") or []), 1)
         self.assertEqual((response.get("pending_proposals") or [])[0].get("proposal_id"), "MPRO-001")
         self.assertTrue(any(action.get("type") == "memory_review" for action in (response.get("actions") or [])))
+        self.assertIsInstance(response.get("working_updates"), list)
+        self.assertIsInstance(response.get("reasoning"), dict)
 
     def test_chat_uses_session_user_key_fallback_when_actor_not_provided(self):
         fake_runtime = _FakeMemoryRuntime()

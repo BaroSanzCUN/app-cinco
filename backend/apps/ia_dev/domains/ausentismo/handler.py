@@ -19,6 +19,7 @@ from apps.ia_dev.application.contracts.query_intelligence_contracts import (
 )
 from apps.ia_dev.application.semantic.cause_diagnostics_service import CauseDiagnosticsService
 from apps.ia_dev.services.memory_service import SessionMemoryStore
+from apps.ia_dev.services.organizational_context_service import OrganizationalContextService
 from apps.ia_dev.services.period_service import resolve_period_from_text
 
 
@@ -75,9 +76,11 @@ class AusentismoHandler:
         *,
         tool: AusentismoBusinessTool | None = None,
         cause_diagnostics_service: CauseDiagnosticsService | None = None,
+        org_context: OrganizationalContextService | None = None,
     ):
         self.tool = tool or AusentismoBusinessTool()
         self.cause_diagnostics_service = cause_diagnostics_service or CauseDiagnosticsService()
+        self.org_context = org_context or OrganizationalContextService()
 
     def handle(
         self,
@@ -167,6 +170,8 @@ class AusentismoHandler:
                 constraints=constraints,
                 resolved_query=resolved_query,
             )
+            org_resolution = self._safe_resolve_org_reference(message=message)
+            personal_filters = dict(org_resolution.get("filters") or {}) if org_resolution.get("resolved") else {}
             _push_trace(
                 "period_resolver",
                 "ok",
@@ -178,6 +183,7 @@ class AusentismoHandler:
                     "personal_status": personal_status,
                     "target_cedula": target_cedula,
                     "attendance_reason_filter": attendance_reason_filter,
+                    "personal_filters": personal_filters,
                 },
                 ["q", "route", "rules", "aus"],
             )
@@ -310,11 +316,12 @@ class AusentismoHandler:
                 grouped = _measure_tool(
                     "attendance_get_recurrence_grouped",
                     self.tool.get_recurrence_grouped,
-                    period=period,
-                    threshold=3,
-                    personal_status=personal_status,
-                    limit=150,
-                )
+                        period=period,
+                        threshold=3,
+                        personal_status=personal_status,
+                        limit=150,
+                        personal_filters=personal_filters,
+                    )
                 used_tools.append("get_attendance_recurrent_unjustified_with_supervisor")
                 wants_itemized = capability_id.endswith("itemized.v1")
                 if capability_id.endswith("grouped.v1"):
@@ -338,6 +345,7 @@ class AusentismoHandler:
                         grouped_result=grouped,
                         personal_status=personal_status,
                         detail_limit=500,
+                        personal_filters=personal_filters,
                     )
                     used_tools.append("get_attendance_unjustified_with_personal")
                     rows_for_response = list(itemized.get("rows") or [])
@@ -431,6 +439,7 @@ class AusentismoHandler:
                     cedula=target_cedula,
                     focus=aggregation_focus,
                     justificacion_filter=attendance_reason_filter,
+                    personal_filters=personal_filters,
                 )
                 used_tools.append(
                     "get_attendance_unjustified_with_personal"
@@ -1031,6 +1040,8 @@ class AusentismoHandler:
                 return "carpeta" if first == "carpeta" else "justificacion", "Carpeta" if first == "carpeta" else "Justificacion"
             if first in {"tipo_labor", "tipo labor", "tipo de labor", "labor"}:
                 return "tipo_labor", "Tipo Labor"
+            if first in {"centro_costo", "centro costo", "centro de costo", "cc"}:
+                return "centro_costo", "Centro de costo"
             if first in {"estado", "estado_justificacion", "tipo_ausentismo", "tipo de ausentismo", "tipo de ausencia"}:
                 return "estado_justificacion", "Estado"
             return first, first.replace("_", " ").strip().title()
@@ -1056,6 +1067,11 @@ class AusentismoHandler:
             ("tipo labor", "tipo_labor", "Tipo Labor"),
             ("por labor", "tipo_labor", "Tipo Labor"),
             ("labor", "tipo_labor", "Tipo Labor"),
+            ("por centro de costo", "centro_costo", "Centro de costo"),
+            ("centro de costo", "centro_costo", "Centro de costo"),
+            ("por centro costo", "centro_costo", "Centro de costo"),
+            ("centro costo", "centro_costo", "Centro de costo"),
+            ("por cc", "centro_costo", "Centro de costo"),
             ("por carpeta", "carpeta", "Carpeta"),
             ("carpeta", "carpeta", "Carpeta"),
             ("por justificacion", "justificacion", "Justificacion"),
@@ -1332,6 +1348,13 @@ class AusentismoHandler:
                 "reason": hint.get("reason"),
             },
         )
+
+    def _safe_resolve_org_reference(self, *, message: str) -> dict[str, Any]:
+        try:
+            resolved = self.org_context.resolve_reference(message=message)
+            return dict(resolved or {})
+        except Exception:
+            return {"resolved": False, "reference": "", "filters": {}, "candidates": []}
 
 
 AttendanceHandleResult = AusentismoHandleResult

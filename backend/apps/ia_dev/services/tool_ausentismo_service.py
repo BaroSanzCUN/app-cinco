@@ -926,7 +926,7 @@ class AusentismoToolService:
 
         cedulas = [str(row[0] or "") for row in base_rows]
         employer_catalog = self.get_data_employers(
-            ["cedula", "nombre", "apellido", "supervisor"],
+            ["cedula", "nombre", "apellido", "supervisor", "area", "cargo", "carpeta"],
             cedulas,
             status=personal_status,
         )
@@ -973,6 +973,9 @@ class AusentismoToolService:
                     "supervisor_cedula": supervisor_cedula_raw,
                     "empleado": empleado,
                     "supervisor": supervisor,
+                    "area": str((emp or {}).get("area") or ""),
+                    "cargo": str((emp or {}).get("cargo") or ""),
+                    "carpeta": str((emp or {}).get("carpeta") or ""),
                     "cantidad_incidencias": int(cantidad_incidencias or 0),
                     "fechas": str(fechas or ""),
                 }
