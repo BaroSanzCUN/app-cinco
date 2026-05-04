@@ -23,7 +23,7 @@ class QueryExecutionPlanner:
     CLEANUP_PHASE = "phase_7"
     PILOT_PHASE = "phase_9"
     ANALYTICS_ROUTER_DOMAINS = {"ausentismo", "attendance", "empleados", "rrhh"}
-    COVERED_ANALYTICS_DOMAINS = {"ausentismo", "attendance"}
+    COVERED_ANALYTICS_DOMAINS = {"ausentismo", "attendance", "empleados", "rrhh"}
     MODERN_HANDLER_CAPABILITY_PREFIXES = ("empleados.",)
     PRODUCTIVE_PILOT_DOMAINS = {"ausentismo", "attendance", "empleados", "rrhh"}
 
@@ -789,6 +789,16 @@ class QueryExecutionPlanner:
         table = self._resolve_primary_table(context=context)
         if not table:
             return "", "sql_missing_primary_table", {}
+        if str(resolved_query.intent.domain_code or "").strip().lower() in {"empleados", "rrhh"}:
+            employee_query, employee_reason, employee_metadata = self._build_employee_sql_query(
+                resolved_query=resolved_query,
+                context=context,
+                table=table,
+            )
+            if employee_query:
+                return employee_query, employee_reason, employee_metadata
+            if employee_reason not in {"employee_sql_not_applicable", ""}:
+                return "", employee_reason, employee_metadata
 
         date_column = self._resolve_date_column(context=context)
         entity_column = self._resolve_entity_column(context=context)
@@ -847,8 +857,9 @@ class QueryExecutionPlanner:
                 return "", "sql_missing_date_column", {}
             where_parts = self._build_date_where(date_column=date_column, start_date=start_date, end_date=end_date)
             where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+            group_alias = str((resolved_query.intent.group_by or ["grupo"])[0] or "grupo").strip().lower() or "grupo"
             query = (
-                f"SELECT {group_column} AS grupo, COUNT(*) AS total_registros "
+                f"SELECT {group_column} AS {group_alias}, COUNT(*) AS total_registros "
                 f"FROM {table}{where_sql} "
                 f"GROUP BY {group_column} ORDER BY total_registros DESC LIMIT {limit}"
             )
@@ -872,6 +883,217 @@ class QueryExecutionPlanner:
             )
 
         return "", "sql_template_not_supported", {}
+
+    def _build_employee_sql_query(
+        self,
+        *,
+        resolved_query: ResolvedQuerySpec,
+        context: dict[str, Any],
+        table: str,
+    ) -> tuple[str, str, dict[str, Any]]:
+        filters = dict(resolved_query.normalized_filters or {})
+        group_by = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or []) if str(item).strip()]
+        operation = str(resolved_query.intent.operation or "").strip().lower()
+        template_id = str(resolved_query.intent.template_id or "").strip().lower()
+        status_column = self._resolve_status_column(context=context)
+        birthday_column = self._resolve_named_column(
+            context=context,
+            preferred_terms=("fecha_nacimiento", "fnacimiento", "birth_date"),
+        )
+        is_birthday_query = bool(
+            birthday_column
+            and (
+                self._resolve_month_filter(filters=filters)
+                or "birth_month" in group_by
+                or str(((context.get("semantic_field_match") or {}).get("logical_name") or "")).strip().lower() == "fecha_nacimiento"
+                or "birthday" in {
+                    str(item or "").strip().lower()
+                    for item in list(((context.get("resolved_semantic") or {}).get("field_match") or {}).get("business_concepts") or [])
+                    if str(item or "").strip()
+                }
+            )
+        )
+        if is_birthday_query and not birthday_column:
+            return "", "employee_birthday_column_missing", {}
+
+        where_parts: list[str] = []
+        month_value = self._resolve_month_filter(filters=filters)
+        if month_value and birthday_column:
+            where_parts.append(self._build_month_filter_sql(column=birthday_column, month_value=month_value))
+        if status_column and self._resolve_status_filter(filters=filters):
+            where_parts.append(
+                f"{status_column} = '{self._escape_literal(self._resolve_status_filter(filters=filters))}'"
+            )
+        for logical_name in ("area", "cargo", "sede", "supervisor", "carpeta", "tipo_labor"):
+            value = str(filters.get(logical_name) or "").strip()
+            if not value:
+                continue
+            physical = self._resolve_named_column(context=context, preferred_terms=(logical_name,))
+            if physical:
+                where_parts.append(f"{physical} = '{self._escape_literal(value)}'")
+
+        detail_columns = self._resolve_employee_detail_columns(context=context)
+        where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+        limit = self._max_sql_limit()
+        used_columns = [birthday_column, status_column, *detail_columns]
+
+        if template_id == "detail_by_entity_and_period" or operation == "detail":
+            order_sql = ""
+            if birthday_column and is_birthday_query:
+                order_sql = f" ORDER BY MONTH({birthday_column}) ASC, DAY({birthday_column}) ASC"
+            query = f"SELECT {', '.join(detail_columns)} FROM {table}{where_sql}{order_sql} LIMIT {limit}"
+            return query, "employee_birthdays_detail", self._employee_sql_metadata(
+                table=table,
+                columns=used_columns,
+                metric_used="employees",
+                aggregation_used="list",
+                dimensions_used=[],
+                concept_field="fecha_nacimiento" if is_birthday_query else "employees",
+            )
+
+        if template_id in {"count_records_by_period", "count_entities_by_status"} or operation == "count":
+            query = f"SELECT COUNT(*) AS total_registros FROM {table}{where_sql} LIMIT 1"
+            return query, "employee_birthdays_count", self._employee_sql_metadata(
+                table=table,
+                columns=[birthday_column, status_column],
+                metric_used="employees",
+                aggregation_used="count",
+                dimensions_used=[],
+                concept_field="fecha_nacimiento" if is_birthday_query else "employees",
+            )
+
+        if template_id == "aggregate_by_group_and_period" or operation in {"aggregate", "compare", "summary"}:
+            group_dimension = self._resolve_employee_group_dimension(
+                resolved_query=resolved_query,
+                context=context,
+            )
+            if not group_dimension:
+                return "", "employee_group_column_missing", {}
+            group_sql = str(group_dimension.get("group_sql") or "")
+            select_sql = str(group_dimension.get("select_sql") or "")
+            dimension_alias = str(group_dimension.get("alias") or "grupo").strip().lower() or "grupo"
+            query = (
+                f"SELECT {select_sql}, COUNT(*) AS total_registros "
+                f"FROM {table}{where_sql} GROUP BY {group_sql} "
+                f"ORDER BY total_registros DESC LIMIT {limit}"
+            )
+            return query, "employee_birthdays_aggregate", self._employee_sql_metadata(
+                table=table,
+                columns=[birthday_column, status_column, *list(group_dimension.get("physical_columns") or [])],
+                metric_used="employees",
+                aggregation_used="count",
+                dimensions_used=[dimension_alias],
+                concept_field="fecha_nacimiento" if is_birthday_query else "employees",
+            )
+
+        return "", "employee_sql_not_applicable", {}
+
+    def _resolve_employee_group_dimension(self, *, resolved_query: ResolvedQuerySpec, context: dict[str, Any]) -> dict[str, Any]:
+        group_by = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or []) if str(item).strip()]
+        if not group_by:
+            return {}
+        target = group_by[0]
+        if target == "birth_month":
+            birthday_column = self._resolve_named_column(
+                context=context,
+                preferred_terms=("fecha_nacimiento", "fnacimiento", "birth_date"),
+            )
+            if birthday_column:
+                return {
+                    "alias": "birth_month",
+                    "group_sql": f"MONTH({birthday_column})",
+                    "select_sql": f"MONTH({birthday_column}) AS birth_month",
+                    "physical_columns": [birthday_column],
+                }
+        physical = self._resolve_group_column(resolved_query=resolved_query, context=context)
+        if not physical:
+            return {}
+        return {
+            "alias": target,
+            "group_sql": physical,
+            "select_sql": f"{physical} AS {target}",
+            "physical_columns": [physical],
+        }
+
+    def _resolve_named_column(self, *, context: dict[str, Any], preferred_terms: tuple[str, ...]) -> str:
+        preferred = {str(item or "").strip().lower() for item in preferred_terms if str(item or "").strip()}
+        for profile in list(context.get("column_profiles") or []):
+            if not isinstance(profile, dict):
+                continue
+            logical = str(profile.get("logical_name") or "").strip().lower()
+            column = str(profile.get("column_name") or "").strip()
+            if logical in preferred or str(column).strip().lower() in preferred:
+                if self._is_safe_identifier(column):
+                    return column
+        for item in list(context.get("columns") or []):
+            if not isinstance(item, dict):
+                continue
+            logical = str(item.get("nombre_columna_logico") or "").strip().lower()
+            column = str(item.get("column_name") or "").strip()
+            if logical in preferred or str(column).strip().lower() in preferred:
+                if self._is_safe_identifier(column):
+                    return column
+        return ""
+
+    @staticmethod
+    def _resolve_month_filter(*, filters: dict[str, Any]) -> str:
+        for key in ("fnacimiento_month", "birth_month", "month_of_birth", "mes_cumpleanos"):
+            value = str((filters or {}).get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    @staticmethod
+    def _build_month_filter_sql(*, column: str, month_value: str) -> str:
+        return f"MONTH({column}) = {int(month_value)}"
+
+    def _resolve_employee_detail_columns(self, *, context: dict[str, Any]) -> list[str]:
+        preferred = (
+            "cedula",
+            "nombre",
+            "apellido",
+            "fnacimiento",
+            "estado",
+            "area",
+            "cargo",
+            "zona_nodo",
+            "supervisor",
+        )
+        selected: list[str] = []
+        for token in preferred:
+            physical = self._resolve_named_column(context=context, preferred_terms=(token,))
+            if physical and physical not in selected:
+                selected.append(physical)
+        return selected[:10] or self._resolve_detail_columns(context=context)
+
+    def _employee_sql_metadata(
+        self,
+        *,
+        table: str,
+        columns: list[str],
+        metric_used: str,
+        aggregation_used: str,
+        dimensions_used: list[str],
+        concept_field: str,
+    ) -> dict[str, Any]:
+        physical_columns = [item for item in columns if item and "(" not in str(item)]
+        metadata = self._default_sql_metadata(table=table, columns=physical_columns)
+        metadata.update(
+            {
+                "compiler": "employee_semantic_sql",
+                "compiler_used": "employee_semantic_sql",
+                "metric_used": metric_used,
+                "aggregation_used": aggregation_used,
+                "dimensions_used": list(dimensions_used or []),
+                "concept_field": concept_field,
+                "declared_metric_source": "ai_dictionary.dd_campos",
+                "declared_dimensions_source": "ai_dictionary.dd_campos",
+                "insights": [
+                    "La consulta se resolvio por inferencia semantica validada contra ai_dictionary.",
+                ],
+            }
+        )
+        return metadata
 
     @staticmethod
     def _build_date_where(*, date_column: str, start_date: str, end_date: str) -> list[str]:
@@ -1157,13 +1379,23 @@ class QueryExecutionPlanner:
         series: list[dict[str, Any]] = []
         if rows and len(columns) >= 2:
             first_dimension = str(columns[0] or "")
-            first_metric = next((str(name) for name in columns[1:] if str(name).lower().startswith("total")), str(columns[1] or "valor"))
-            labels = [str((row or {}).get(first_dimension) or "N/D") for row in rows[:20]]
-            values = [int((row or {}).get(first_metric) or 0) for row in rows[:20]]
-            if any(labels) and values:
-                series = [{"name": first_metric, "data": values}]
+            first_metric = next(
+                (
+                    str(name)
+                    for name in columns[1:]
+                    if str(name).lower().startswith("total")
+                    and all(isinstance((row or {}).get(str(name)), (int, float)) for row in rows[:20])
+                ),
+                "",
+            )
+            if first_metric:
+                labels = [str((row or {}).get(first_dimension) or "N/D") for row in rows[:20]]
+                values = [int((row or {}).get(first_metric) or 0) for row in rows[:20]]
+                if any(labels) and values:
+                    series = [{"name": first_metric, "data": values}]
 
         period = dict(resolved_query.normalized_period or {})
+        domain_code = str(resolved_query.intent.domain_code or "").strip().lower()
         reply = (
             f"Consulta analitica ejecutada en modo SQL asistido restringido para {resolved_query.intent.domain_code}: "
             f"{len(rows)} filas."
@@ -1173,6 +1405,13 @@ class QueryExecutionPlanner:
                 f"Consulta analitica ejecutada en modo SQL asistido restringido para {resolved_query.intent.domain_code} "
                 f"en el periodo {period.get('start_date')} al {period.get('end_date')}: {len(rows)} filas."
             )
+        month_value = self._resolve_month_filter(filters=dict(resolved_query.normalized_filters or {}))
+        if domain_code in {"empleados", "rrhh"} and month_value:
+            if str(resolved_query.intent.operation or "").strip().lower() == "count":
+                total = int(kpis.get("total") or kpis.get("rowcount") or 0)
+                reply = f"Se encontraron {total} empleados que cumplen anos en el mes {month_value}."
+            else:
+                reply = f"Se listan {len(rows)} empleados con cumpleanos en el mes {month_value}."
         return {
             "session_id": str(run_context.session_id or ""),
             "reply": reply,
@@ -1211,7 +1450,11 @@ class QueryExecutionPlanner:
                 "findings": [
                     {
                         "title": "Top hallazgo",
-                        "detail": f"Se obtuvieron {len(rows)} filas usando {compiler}.",
+                        "detail": (
+                            f"Se obtuvieron {len(rows)} filas usando {compiler}."
+                            if domain_code not in {"empleados", "rrhh"} or not month_value
+                            else f"El campo semantico fecha_nacimiento permitio resolver cumpleanos del mes {month_value}."
+                        ),
                     }
                 ],
             },

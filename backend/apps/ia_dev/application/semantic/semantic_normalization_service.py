@@ -507,6 +507,8 @@ class SemanticNormalizationService:
             score["empleados"] += 0.65
         if EmployeeIdentifierService.has_movil_identifier(query):
             score["empleados"] += 0.65
+        if cls._birthday_month_filter(query) or any(token in query for token in ("cumple", "cumpleanos", "nacimiento", "edad", "antiguedad", "retiro")):
+            score["empleados"] += 0.8
         if re.search(
             r"\b(tipo_labor|tipo\s+labor|tipo\s+de\s+labor|labor(?:es)?|area(?:s)?|cargo(?:s)?|supervisor(?:es)?|jefe(?:s)?|lider(?:es)?|carpeta(?:s)?|sede(?:s)?)\b",
             query,
@@ -532,6 +534,8 @@ class SemanticNormalizationService:
             score["ausentismo"] += 0.55
         if has_people_scope and has_attendance_reason:
             score["ausentismo"] += 0.35
+        if cls._birthday_month_filter(query):
+            score["ausentismo"] = max(0.0, score["ausentismo"] - 0.35)
         base_domain = cls._normalize_domain_code(classification.get("domain"))
         if base_domain in score:
             score[base_domain] += 0.2

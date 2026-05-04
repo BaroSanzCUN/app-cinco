@@ -12,7 +12,7 @@ Este backend esta pensado para operar en entornos controlados, donde la base de 
 
 1. Ubicate en la carpeta `backend`.
 2. Crea entorno virtual:
-   - Windows: `python -m venv .venv`
+   - Windows: `py -3.11 -m venv .venv`
    - Linux/macOS: `python3 -m venv .venv`
 3. Activa el entorno:
    - Windows: `.\.venv\Scripts\activate`
@@ -31,6 +31,8 @@ Este backend esta pensado para operar en entornos controlados, donde la base de 
 Para evitar errores por entorno no activo (por ejemplo `ModuleNotFoundError: django`), usa:
 
 - `powershell -ExecutionPolicy Bypass -File .\scripts\dj.ps1 check`
+
+Si antes activaste un `.venv` en la raiz del repo, cierralo o desactivalo y trabaja dentro de `backend/.venv`.
 
 Este script:
 

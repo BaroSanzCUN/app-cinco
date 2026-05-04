@@ -120,6 +120,55 @@ def _sql_response() -> dict:
     }
 
 
+def _birthday_sql_response() -> dict:
+    return {
+        "session_id": "birthday-session",
+        "reply": "Se listan 2 empleados con cumpleanos en el mes 5.",
+        "orchestrator": {
+            "intent": "detail",
+            "domain": "empleados",
+            "selected_agent": "analista_agent",
+            "classifier_source": "query_intelligence_sql_assisted",
+            "needs_database": True,
+            "output_mode": "table",
+            "used_tools": ["query_sql_assisted_executor"],
+            "runtime_flow": "sql_assisted",
+        },
+        "data": {
+            "kpis": {"rowcount": 2},
+            "series": [],
+            "labels": [],
+            "insights": ["Analisis resuelto con SQL assisted sobre fecha_nacimiento."],
+            "table": {
+                "columns": ["cedula", "nombre", "fnacimiento", "area"],
+                "rows": [
+                    {"cedula": "201", "nombre": "Diana", "fnacimiento": "1992-05-10", "area": "OPERACIONES"},
+                    {"cedula": "202", "nombre": "Carlos", "fnacimiento": "1988-05-22", "area": "LOGISTICA"},
+                ],
+                "rowcount": 2,
+            },
+        },
+        "actions": [],
+        "memory_candidates": [],
+        "pending_proposals": [],
+        "data_sources": {
+            "query_intelligence": {
+                "ok": True,
+                "compiler": "employee_semantic_sql",
+                "metric_used": "employees",
+            },
+            "runtime": {
+                "runtime_authority": "query_execution_planner",
+                "planner_was_authority": True,
+            },
+        },
+        "trace": [],
+        "memory": {"used_messages": 0, "capacity_messages": 20, "usage_ratio": 0.0, "trim_events": 0, "saturated": False},
+        "observability": {"enabled": False, "duration_ms": 0, "tool_latencies_ms": {}, "tokens_in": 0, "tokens_out": 0, "estimated_cost_usd": 0.0},
+        "active_nodes": [],
+    }
+
+
 class _CapabilityRuntimeStub:
     def __init__(self):
         self.classifications_seen: list[dict] = []
@@ -518,6 +567,39 @@ class SimulateIADevChatCommandTests(SimpleTestCase):
         self.assertEqual(str(orchestrator.get("analytics_router_decision") or ""), "join_aware_sql")
         self.assertEqual(str(orchestrator.get("arbitrated_intent") or ""), "analytics_query")
 
+    def test_management_command_raw_output_exposes_employee_birthday_sql_runtime(self):
+        stdout = StringIO()
+
+        class _BirthdayChatApplicationService:
+            def run(self, **kwargs):
+                del kwargs
+                return _birthday_sql_response()
+
+        with patch(
+            "apps.ia_dev.management.commands.simulate_ia_dev_chat.ChatApplicationService",
+            _BirthdayChatApplicationService,
+        ):
+            call_command(
+                "simulate_ia_dev_chat",
+                "--message",
+                "Cumpleaños de mayo",
+                "--session-id",
+                "birthday-session",
+                "--raw",
+                stdout=stdout,
+            )
+
+        payload = json.loads(stdout.getvalue())
+        orchestrator = dict(payload.get("orchestrator") or {})
+        runtime = dict((payload.get("data_sources") or {}).get("runtime") or {})
+        table = dict((payload.get("data") or {}).get("table") or {})
+
+        self.assertEqual(str(orchestrator.get("domain") or ""), "empleados")
+        self.assertEqual(str(orchestrator.get("runtime_flow") or ""), "sql_assisted")
+        self.assertEqual(str(runtime.get("runtime_authority") or ""), "query_execution_planner")
+        self.assertTrue(bool(runtime.get("planner_was_authority")))
+        self.assertEqual(int(table.get("rowcount") or 0), 2)
+
     def test_management_command_module_does_not_import_legacy_adapter(self):
         import apps.ia_dev.management.commands.simulate_ia_dev_chat as command_module
 
@@ -569,3 +651,174 @@ class SimulateIADevChatCommandTests(SimpleTestCase):
 
         self.assertEqual(str(SERVICE_RUNTIME_DEFAULTS.get("IA_DEV_QUERY_SQL_ASSISTED_ENABLED") or ""), "1")
         self.assertEqual(str(SERVICE_RUNTIME_DEFAULTS.get("IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED") or ""), "1")
+
+    def test_interactive_live_human_command_is_accepted(self):
+        stdout = StringIO()
+
+        with patch("builtins.input", side_effect=["/live human", "/exit"]):
+            call_command(
+                "simulate_ia_dev_chat",
+                "--interactive",
+                "--session-id",
+                "demo-ia",
+                stdout=stdout,
+            )
+
+        output = stdout.getvalue()
+        self.assertIn("live_mode=human", output)
+        self.assertNotIn("live invalido", output)
+
+    def test_interactive_auto_live_defaults_to_human(self):
+        stdout = StringIO()
+
+        with patch("builtins.input", side_effect=["/exit"]):
+            call_command(
+                "simulate_ia_dev_chat",
+                "--interactive",
+                "--session-id",
+                "demo-ia",
+                stdout=stdout,
+            )
+
+        output = stdout.getvalue()
+        self.assertIn("live_mode=human", output)
+
+    def test_runtime_event_humanizer_translates_memory_event(self):
+        from apps.ia_dev.management.commands.simulate_ia_dev_chat import RuntimeEventHumanizer
+
+        rendered = RuntimeEventHumanizer(message="ausentismos de hoy").humanize_event(
+            {
+                "event_type": "memory_used_in_chat",
+                "meta": {
+                    "user_memory_count": 1,
+                    "business_memory_count": 2,
+                },
+            }
+        )
+
+        self.assertIsNotNone(rendered)
+        self.assertIn("memoria y contexto del negocio", str(rendered.get("message") or "").lower())
+
+    def test_query_intelligence_error_is_explained_in_spanish(self):
+        from apps.ia_dev.management.commands.simulate_ia_dev_chat import RuntimeEventHumanizer
+
+        rendered = RuntimeEventHumanizer().humanize_event(
+            {
+                "event_type": "query_intelligence_error",
+                "meta": {"error": "planner failed"},
+            }
+        )
+
+        message = str(rendered.get("message") or "")
+        self.assertIn("ruta inteligente de consulta", message)
+        self.assertIn("ruta segura alternativa", message)
+
+    def test_sql_assisted_event_is_described_as_intelligent_data_query(self):
+        from apps.ia_dev.management.commands.simulate_ia_dev_chat import RuntimeEventHumanizer
+
+        rendered = RuntimeEventHumanizer().humanize_event(
+            {
+                "event_type": "query_sql_assisted_executed",
+                "meta": {"domain_code": "ausentismo", "rowcount": 53},
+            }
+        )
+
+        message = str(rendered.get("message") or "").lower()
+        self.assertIn("consulta inteligente sobre datos reales", message)
+        self.assertIn("ausentismo", message)
+
+    def test_handler_event_is_described_as_modern_safe_route(self):
+        from apps.ia_dev.management.commands.simulate_ia_dev_chat import RuntimeEventHumanizer
+
+        rendered = RuntimeEventHumanizer().humanize_event(
+            {
+                "event_type": "ausentismo_handler_executed",
+                "meta": {
+                    "capability_domain": "ausentismo",
+                    "capability_id": "attendance.summary.by_attribute.v1",
+                },
+            }
+        )
+
+        message = str(rendered.get("message") or "").lower()
+        self.assertIn("handler moderno seguro", message)
+        self.assertIn("ruta moderna segura", message)
+
+    def test_fallback_event_is_soft_and_non_alarmist(self):
+        from apps.ia_dev.management.commands.simulate_ia_dev_chat import RuntimeEventHumanizer
+
+        rendered = RuntimeEventHumanizer().humanize_event(
+            {
+                "event_type": "runtime_fallback_used",
+                "meta": {"fallback_reason": "missing_metadata"},
+            }
+        )
+
+        message = str(rendered.get("message") or "").lower()
+        self.assertIn("fallback seguro", message)
+        self.assertIn("metadata", message)
+        self.assertNotIn("fatal", message)
+
+    def test_compact_and_full_live_modes_keep_technical_rendering(self):
+        from apps.ia_dev.management.commands.simulate_ia_dev_chat import Command
+
+        command = Command()
+        command.stdout = StringIO()
+        event = {
+            "event_type": "query_sql_assisted_executed",
+            "source": "QueryExecutionPlanner",
+            "duration_ms": 12,
+            "meta": {
+                "domain_code": "ausentismo",
+                "strategy": "sql_assisted",
+                "reply_preview": "53 hallazgos",
+            },
+        }
+
+        command._emit_live_event(event=event, live_mode="compact")
+        compact_output = command.stdout.getvalue()
+        self.assertIn("live>", compact_output)
+        self.assertIn("query_sql_assisted_executed", compact_output)
+
+        command.stdout = StringIO()
+        command._emit_live_event(event=event, live_mode="full")
+        full_output = command.stdout.getvalue()
+        self.assertIn("live>", full_output)
+        self.assertIn("meta=", full_output)
+
+    def test_print_payload_human_adds_executive_summary(self):
+        from apps.ia_dev.management.commands.simulate_ia_dev_chat import Command, RuntimeEventHumanizer
+
+        payload = {
+            "reply": "Hoy se registran 53 ausentismos injustificados.",
+            "session_id": "demo-ia",
+            "orchestrator": {
+                "domain": "ausentismo",
+                "runtime_flow": "handler",
+            },
+            "data": {
+                "kpis": {"total_ausentismos_injustificados": 53},
+                "insights": ["Se concentran en una misma franja operativa."],
+            },
+            "data_sources": {
+                "query_intelligence": {
+                    "resolved_query": {
+                        "intent": {"domain_code": "ausentismo"},
+                        "normalized_period": {"start_date": "2026-05-04", "end_date": "2026-05-04"},
+                    },
+                    "execution_plan": {"strategy": "handler"},
+                },
+                "runtime": {"runtime_authority": "query_execution_planner"},
+            },
+            "actions": [],
+        }
+        command = Command()
+        command.stdout = StringIO()
+        command._active_humanizer = RuntimeEventHumanizer(message="ausentismos de hoy")
+
+        command._print_payload(payload, raw=False, flow_mode="off", live_mode="human")
+        output = command.stdout.getvalue()
+
+        self.assertIn("Dato principal:", output)
+        self.assertIn("Flujo explicado:", output)
+        self.assertIn("Se identifico el dominio: ausentismo.", output)

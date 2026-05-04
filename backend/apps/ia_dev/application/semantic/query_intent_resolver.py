@@ -137,7 +137,10 @@ class QueryIntentResolver:
         has_grouping_signal = self._has_explicit_grouping_phrase(normalized) or self._has_aggregate_signal(normalized)
         if any(token in normalized for token in ("cantidad", "cuantos", "cuantas", "total", "numero")):
             operation = "count"
-        elif self._has_employee_status_metric_signal(normalized) and not has_grouping_signal:
+        elif (
+            self._has_employee_population_status_signal(normalized=normalized, domain=domain)
+            or self._has_employee_status_metric_signal(normalized)
+        ) and not has_grouping_signal:
             operation = "count"
         elif any(token in normalized for token in ("compar", "vs", "versus")):
             operation = "compare"
@@ -156,11 +159,6 @@ class QueryIntentResolver:
         elif any(token in normalized for token in ("detalle", "tabla", "mostrar", "lista", "informacion", "info", "ficha", "datos")):
             operation = "detail"
 
-        template_id = self._resolve_template_id(
-            normalized=normalized,
-            domain_code=domain,
-            operation=operation,
-        )
         entity_type, entity_value = self._extract_entity(message=message, normalized=normalized)
         filters = self._extract_filters(normalized=normalized)
         if entity_type == "cedula" and entity_value:
@@ -168,8 +166,39 @@ class QueryIntentResolver:
         elif entity_type == "movil" and entity_value:
             filters.setdefault("movil", entity_value)
 
+        group_by = self._extract_group_by(
+            normalized=normalized,
+            semantic_context=semantic_context or {},
+        )
+        if (
+            domain in {"empleados", "rrhh"}
+            and self._is_general_employee_population_query(
+                normalized=normalized,
+                entity_type=entity_type,
+                filters=filters,
+                group_by=group_by,
+            )
+        ):
+            operation = "aggregate" if group_by else "count"
+
+        template_id = self._resolve_template_id(
+            normalized=normalized,
+            domain_code=domain,
+            operation=operation,
+        )
+
         period = self._resolve_period_payload(message=message)
-        if self._is_turnover_query(normalized) and str(period.get("label") or "") == "hoy" and not self._has_temporal_reference(normalized):
+        if self._should_ignore_employee_current_status_period(
+            normalized=normalized,
+            domain=domain,
+            operation=operation,
+            entity_type=entity_type,
+            filters=filters,
+            group_by=group_by,
+            period=period,
+        ):
+            period = {}
+        elif self._is_turnover_query(normalized) and str(period.get("label") or "") == "hoy" and not self._has_temporal_reference(normalized):
             from datetime import timedelta
 
             end = date.today()
@@ -179,7 +208,6 @@ class QueryIntentResolver:
                 "start_date": start.isoformat(),
                 "end_date": end.isoformat(),
             }
-        group_by = self._extract_group_by(normalized=normalized)
         metrics = self._extract_metrics(normalized=normalized, operation=operation)
 
         return StructuredQueryIntent(
@@ -449,16 +477,24 @@ class QueryIntentResolver:
         for month_name, month_number in months.items():
             if re.search(rf"\b{re.escape(month_name)}\b", text):
                 return month_number
+        if re.search(r"\b(este mes|mes actual)\b", text):
+            return str(date.today().month)
         return ""
 
-    @staticmethod
-    def _extract_group_by(*, normalized: str) -> list[str]:
+    @classmethod
+    def _extract_group_by(
+        cls,
+        *,
+        normalized: str,
+        semantic_context: dict[str, Any] | None = None,
+    ) -> list[str]:
         values: list[tuple[int, str]] = []
         variants = {
             "supervisor": ("supervisor", "supervisores", "jefe", "jefes", "lider", "lideres"),
             "area": ("area", "areas"),
             "cargo": ("cargo", "cargos"),
             "sede": ("sede", "sedes"),
+            "birth_month": ("mes", "meses"),
             "carpeta": ("carpeta", "carpetas"),
             "tipo_labor": ("labor", "labores", "tipo_labor", "tipo labor", "tipo de labor"),
             "centro_costo": ("centro costo", "centro de costo", "centros de costo", "cc"),
@@ -476,8 +512,80 @@ class QueryIntentResolver:
                     first_pos = pos
             if first_pos is not None:
                 values.append((first_pos, canonical))
+        for canonical, tokens in cls._semantic_group_dimension_variants(
+            semantic_context=semantic_context or {},
+        ).items():
+            first_pos = None
+            for token in tokens:
+                explicit_match = re.search(rf"\bpor\s+{re.escape(token)}\b", normalized)
+                generic_match = re.search(rf"\b{re.escape(token)}\b", normalized)
+                match = explicit_match or generic_match
+                if match is None:
+                    continue
+                pos = int(match.start())
+                if first_pos is None or pos < first_pos:
+                    first_pos = pos
+            if first_pos is not None:
+                values.append((first_pos, canonical))
         ordered = [canonical for _, canonical in sorted(values, key=lambda item: (item[0], item[1]))]
+        if "birth_month" in ordered:
+            birthday_scope = bool(re.search(r"\b(cumple\w*|nacimiento|edad)\b", str(normalized or "")))
+            if not birthday_scope:
+                ordered = [item for item in ordered if item != "birth_month"]
         return list(dict.fromkeys(ordered))
+
+    @classmethod
+    def _semantic_group_dimension_variants(
+        cls,
+        *,
+        semantic_context: dict[str, Any],
+    ) -> dict[str, tuple[str, ...]]:
+        variants: dict[str, set[str]] = {}
+        candidate_dimensions = {
+            str(item or "").strip().lower()
+            for item in list((semantic_context.get("query_hints") or {}).get("candidate_group_dimensions") or [])
+            if str(item or "").strip()
+        }
+        for profile in list(semantic_context.get("column_profiles") or []):
+            if not isinstance(profile, dict):
+                continue
+            if not bool(profile.get("supports_group_by") or profile.get("supports_dimension")):
+                continue
+            logical_name = str(profile.get("logical_name") or profile.get("column_name") or "").strip().lower()
+            if logical_name:
+                candidate_dimensions.add(logical_name)
+
+        synonym_index = {
+            cls._normalize_text(key): cls._normalize_text(value)
+            for key, value in dict(semantic_context.get("synonym_index") or {}).items()
+            if str(key or "").strip() and str(value or "").strip()
+        }
+        aliases = {
+            cls._normalize_text(key): cls._normalize_text(value)
+            for key, value in dict(semantic_context.get("aliases") or {}).items()
+            if str(key or "").strip() and str(value or "").strip()
+        }
+        for dimension in candidate_dimensions:
+            normalized_dimension = cls._normalize_text(dimension)
+            if not normalized_dimension:
+                continue
+            bucket = variants.setdefault(normalized_dimension, set())
+            bucket.add(normalized_dimension)
+            bucket.add(normalized_dimension.replace("_", " "))
+            if normalized_dimension.endswith("a"):
+                bucket.add(f"{normalized_dimension}s")
+            if normalized_dimension.endswith("or"):
+                bucket.add(f"{normalized_dimension}es")
+            if normalized_dimension == "birth_month":
+                bucket.update({"mes", "meses", "mes de cumpleanos", "mes de nacimiento"})
+            for alias, canonical in {**aliases, **synonym_index}.items():
+                if canonical == normalized_dimension:
+                    bucket.add(alias)
+        return {
+            key: tuple(sorted(value, key=len, reverse=True))
+            for key, value in variants.items()
+            if value
+        }
 
     @staticmethod
     def _extract_metrics(*, normalized: str, operation: str) -> list[str]:
@@ -722,6 +830,12 @@ class QueryIntentResolver:
     @staticmethod
     def _build_query_shape_key(value: str) -> str:
         normalized = QueryIntentResolver._normalize_text(value)
+        normalized = re.sub(
+            r"\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b",
+            "<mes>",
+            normalized,
+        )
+        normalized = re.sub(r"\b(este mes|mes actual)\b", "<mes_actual>", normalized)
         normalized = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "<fecha>", normalized)
         normalized = re.sub(r"\b\d{6,13}\b", "<cedula>", normalized)
         normalized = re.sub(r"\b[a-z][a-z0-9_-]*\d+[a-z0-9_-]*\b", "<codigo>", normalized)
@@ -752,7 +866,7 @@ class QueryIntentResolver:
         domain = normalizar_codigo_dominio(base_domain)
         rrhh_match = bool(
             re.search(
-                r"\b(colaborador(?:es)?|personal|emplead\w*|cedula|rrhh|movil|tipo_labor|tipo\s+labor|tipo\s+de\s+labor|labor(?:es)?|area(?:s)?|cargo(?:s)?|supervisor(?:es)?|jefe(?:s)?|lider(?:es)?|carpeta(?:s)?|sede(?:s)?|egreso(?:s)?|retiro(?:s)?|retirad\w*|desvinculad\w*|baja(?:s)?|rotacion(?:es)?)\b",
+                r"\b(colaborador(?:es)?|personal|emplead\w*|cedula|rrhh|movil|tipo_labor|tipo\s+labor|tipo\s+de\s+labor|labor(?:es)?|area(?:s)?|cargo(?:s)?|supervisor(?:es)?|jefe(?:s)?|lider(?:es)?|carpeta(?:s)?|sede(?:s)?|cumple\w*|nacimiento|edad|antiguedad|egreso(?:s)?|retiro(?:s)?|retirad\w*|desvinculad\w*|baja(?:s)?|rotacion(?:es)?)\b",
                 str(normalized or ""),
             )
         )
@@ -816,6 +930,20 @@ class QueryIntentResolver:
         return bool(cls._TEMPORAL_REFERENCE_RE.search(str(normalized or "")))
 
     @classmethod
+    def _has_employee_population_status_signal(cls, *, normalized: str, domain: str) -> bool:
+        if normalizar_codigo_dominio(domain) not in {"empleados", "rrhh"}:
+            return False
+        text = str(normalized or "")
+        has_people_scope = bool(
+            re.search(r"\b(emplead\w*|colaborador(?:es)?|personal|persona(?:s)?)\b", text)
+        )
+        if not has_people_scope:
+            return False
+        if cls._has_identifier_signal(text) or cls._extract_birthday_month_filter(text):
+            return False
+        return cls._has_employee_active_signal(text) or cls._has_employee_inactive_signal(text)
+
+    @classmethod
     def _has_employee_status_metric_signal(cls, normalized: str) -> bool:
         text = str(normalized or "")
         if re.search(r"\b(egresos|retiros|desvinculaciones|bajas|rotacion|rotaciones)\b", text):
@@ -825,6 +953,63 @@ class QueryIntentResolver:
         if cls._has_employee_active_signal(text) and cls._has_temporal_reference(text):
             return True
         return False
+
+    @classmethod
+    def _is_general_employee_population_query(
+        cls,
+        *,
+        normalized: str,
+        entity_type: str,
+        filters: dict[str, Any],
+        group_by: list[str],
+    ) -> bool:
+        text = str(normalized or "")
+        if not re.search(r"\b(emplead\w*|colaborador(?:es)?|personal|persona(?:s)?)\b", text):
+            return False
+        if entity_type or any(
+            str((filters or {}).get(key) or "").strip()
+            for key in ("cedula", "movil", "codigo_sap", "nombre")
+        ):
+            return False
+        if cls._extract_birthday_month_filter(text):
+            return False
+        if any(token in text for token in ("detalle", "informacion", "info", "ficha", "datos")):
+            return False
+        if group_by:
+            return True
+        return cls._has_employee_active_signal(text) or cls._has_employee_inactive_signal(text)
+
+    @classmethod
+    def _should_ignore_employee_current_status_period(
+        cls,
+        *,
+        normalized: str,
+        domain: str,
+        operation: str,
+        entity_type: str,
+        filters: dict[str, Any],
+        group_by: list[str],
+        period: dict[str, Any],
+    ) -> bool:
+        if normalizar_codigo_dominio(domain) not in {"empleados", "rrhh"}:
+            return False
+        if str(period.get("label") or "").strip().lower() != "hoy":
+            return False
+        if entity_type:
+            return False
+        if not cls._is_general_employee_population_query(
+            normalized=normalized,
+            entity_type=entity_type,
+            filters=filters,
+            group_by=group_by,
+        ):
+            return False
+        if operation not in {"count", "aggregate", "summary"}:
+            return False
+        return bool(
+            cls._has_employee_active_signal(normalized)
+            or cls._has_employee_inactive_signal(normalized)
+        )
 
     @classmethod
     def _is_turnover_query(cls, normalized: str) -> bool:

@@ -306,6 +306,7 @@ class ResultSatisfactionValidator:
             "supervisor": {"supervisor"},
             "area": {"area"},
             "cargo": {"cargo"},
+            "birth_month": {"birth_month", "mes", "month"},
             "carpeta": {"carpeta"},
             "justificacion": {"justificacion", "motivo", "causa"},
             "estado": {"estado", "estado_justificacion"},

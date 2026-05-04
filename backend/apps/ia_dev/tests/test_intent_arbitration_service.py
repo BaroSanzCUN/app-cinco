@@ -16,9 +16,14 @@ class IntentArbitrationServiceTests(SimpleTestCase):
     @staticmethod
     def _dictionary_context() -> dict:
         return {
-            "fields": [{"logical_name": "area"}, {"logical_name": "cargo"}],
+            "fields": [
+                {"logical_name": "area", "table_name": "cinco_base_de_personal"},
+                {"logical_name": "cargo", "table_name": "cinco_base_de_personal"},
+                {"logical_name": "fecha_nacimiento", "table_name": "cinco_base_de_personal", "column_name": "fnacimiento", "is_date": True},
+            ],
             "relations": [{"nombre_relacion": "ausentismo_empleado"}],
             "rules": [],
+            "synonyms": [{"termino": "fecha_nacimiento", "sinonimo": "cumpleanos"}],
         }
 
     def test_analytics_questions_do_not_create_kpro(self):
@@ -185,6 +190,63 @@ class IntentArbitrationServiceTests(SimpleTestCase):
                 self.assertFalse(bool(result.get("should_create_kpro")))
                 self.assertTrue(bool(result.get("should_execute_query")))
                 self.assertTrue(bool(result.get("should_use_sql_assisted")))
+
+    def test_employee_population_queries_stay_in_analytics_count_lane(self):
+        service = self._service()
+
+        result = service.arbitrate(
+            original_question="personal activo hoy",
+            candidate_domain="empleados",
+            heuristic_intent={"intent": "empleados_query", "domain": "empleados", "confidence": 0.64},
+            llm_intent=StructuredQueryIntent(
+                raw_query="personal activo hoy",
+                domain_code="empleados",
+                operation="count",
+                template_id="count_entities_by_status",
+                confidence=0.82,
+                source="rules",
+                filters={"estado": "ACTIVO"},
+            ),
+            candidate_capabilities=[{"capability_id": "empleados.count.active.v1"}],
+            ai_dictionary_context=self._dictionary_context(),
+            action_risk={"level": "low"},
+            knowledge_governance_signals={"explicit_change_request": False, "explicit_apply_request": False},
+        )
+
+        self.assertEqual(str(result.get("final_intent") or ""), "analytics_query")
+        self.assertEqual(str(result.get("final_domain") or ""), "empleados")
+        self.assertTrue(bool(result.get("should_execute_query")))
+        self.assertTrue(bool(result.get("should_use_sql_assisted")))
+        self.assertFalse(bool(result.get("should_fallback")))
+
+    def test_birthday_queries_expose_structural_semantic_inference(self):
+        service = self._service()
+
+        result = service.arbitrate(
+            original_question="Cumpleaños de mayo",
+            candidate_domain="empleados",
+            heuristic_intent={"intent": "general_question", "domain": "general", "confidence": 0.31},
+            llm_intent=StructuredQueryIntent(
+                raw_query="Cumpleaños de mayo",
+                domain_code="empleados",
+                operation="detail",
+                template_id="detail_by_entity_and_period",
+                filters={"fnacimiento_month": "5"},
+                confidence=0.88,
+                source="rules",
+            ),
+            candidate_capabilities=[{"capability_id": "empleados.detail.v1"}],
+            ai_dictionary_context=self._dictionary_context(),
+            action_risk={"level": "low"},
+            knowledge_governance_signals={"explicit_change_request": False, "explicit_apply_request": False},
+        )
+
+        self.assertEqual(str(result.get("final_intent") or ""), "analytics_query")
+        self.assertEqual(str(result.get("candidate_domain") or ""), "empleados")
+        self.assertEqual(str(result.get("candidate_table") or ""), "cinco_base_de_personal")
+        self.assertEqual(str(result.get("candidate_field") or ""), "fecha_nacimiento")
+        self.assertEqual(str(result.get("inferred_business_concept") or ""), "birthday")
+        self.assertEqual(str((result.get("temporal_filter") or {}).get("value") or ""), "5")
 
     def test_explicit_knowledge_change_requests_still_require_kpro(self):
         service = self._service()

@@ -160,13 +160,25 @@ class SemanticBusinessResolver:
             company_context=company_context,
         )
         pilot_sql_assisted_enabled = bool(
-            normalized_domain in {"ausentismo", "attendance"}
-            and dictionary_fields
-            and dictionary_relations
-            and any(
-                str(item.get("table_name") or "").strip().lower() == "cinco_base_de_personal"
-                for item in dictionary_fields
-                if isinstance(item, dict)
+            dictionary_fields
+            and (
+                (
+                    normalized_domain in {"ausentismo", "attendance"}
+                    and dictionary_relations
+                    and any(
+                        str(item.get("table_name") or "").strip().lower() == "cinco_base_de_personal"
+                        for item in dictionary_fields
+                        if isinstance(item, dict)
+                    )
+                )
+                or (
+                    normalized_domain in {"empleados", "rrhh"}
+                    and any(
+                        str(item.get("table_name") or "").strip().lower() == "cinco_base_de_personal"
+                        for item in dictionary_fields
+                        if isinstance(item, dict)
+                    )
+                )
             )
         )
         query_hints = self._build_query_hints(
@@ -444,6 +456,23 @@ class SemanticBusinessResolver:
         )
         if inferred_group_by:
             resolved_group_by = list(dict.fromkeys([*list(resolved_group_by or []), *list(inferred_group_by or [])]))
+        if (
+            domain_code in {"empleados", "rrhh"}
+            and self._is_birthday_query(message=message, filters=normalized_filters)
+            and (
+                "birth_month" in list(intent.group_by or [])
+                or "birth_month" in list(inferred_group_by or [])
+                or "por mes" in self._normalize_text(message)
+            )
+        ):
+            resolved_group_by = list(dict.fromkeys([*list(resolved_group_by or []), "birth_month"]))
+        if (
+            domain_code in {"empleados", "rrhh"}
+            and str(normalized_filters.get("fnacimiento_month") or "").strip()
+            and list(resolved_group_by or []) == ["birth_month"]
+            and "por mes" not in self._normalize_text(message)
+        ):
+            resolved_group_by = []
         resolved_metrics, metric_resolutions = self.column_resolver.resolve_metrics(
             requested_metrics=list(intent.metrics or []),
             operation=intent.operation,
@@ -460,6 +489,13 @@ class SemanticBusinessResolver:
             message=message,
             normalized_filters=normalized_filters,
             normalized_period=normalized_period,
+        )
+        semantic_field_match = self._match_business_concept_field(
+            message=message,
+            domain_code=domain_code,
+            semantic_context=semantic_context,
+            normalized_filters=normalized_filters,
+            resolved_group_by=resolved_group_by,
         )
         mapped_columns = self._map_filter_columns(
             filters=normalized_filters,
@@ -480,25 +516,48 @@ class SemanticBusinessResolver:
             filters=normalized_filters,
         )
         if is_birthday_query:
-            resolved_operation = "detail"
-            resolved_template_id = "detail_by_entity_and_period"
+            if resolved_group_by:
+                resolved_operation = "aggregate"
+                resolved_template_id = "aggregate_by_group_and_period"
+            elif str(intent.operation or "").strip().lower() == "count":
+                resolved_operation = "count"
+                resolved_template_id = "count_records_by_period"
+            else:
+                resolved_operation = "detail"
+                resolved_template_id = "detail_by_entity_and_period"
         if (
             domain_code in {"empleados", "rrhh"}
             and not is_birthday_query
-            and str(intent.operation or "").strip().lower() == "count"
             and status_value
+            and (
+                str(intent.operation or "").strip().lower() == "count"
+                or self._is_general_employee_population_request(
+                    message=message,
+                    filters=normalized_filters,
+                    group_by=resolved_group_by,
+                )
+            )
         ):
+            resolved_operation = "aggregate" if resolved_group_by else "count"
             resolved_template_id = "count_entities_by_status"
 
         resolution_payload = {
             "filters": [item.as_dict() for item in filter_resolutions],
             "group_by": [item.as_dict() for item in group_resolutions],
+            "group_by_candidates": self._build_group_by_candidates(
+                resolved_group_by=resolved_group_by,
+                group_resolutions=group_resolutions,
+                semantic_context=semantic_context,
+            ),
             "metrics": [item.as_dict() for item in metric_resolutions],
             "relations": [item.as_dict() for item in relation_resolutions],
             "temporal_scope": dict(temporal_scope or {}),
+            "field_match": dict(semantic_field_match or {}),
         }
         semantic_context["resolved_semantic"] = resolution_payload
         semantic_context["temporal_scope"] = dict(temporal_scope or {})
+        if semantic_field_match:
+            semantic_context["semantic_field_match"] = dict(semantic_field_match)
         if (
             operational_scope
             and bool(operational_scope.get("domain_known"))
@@ -1231,6 +1290,7 @@ class SemanticBusinessResolver:
             "area": ("area", "areas"),
             "cargo": ("cargo", "cargos"),
             "carpeta": ("carpeta", "carpetas"),
+            "birth_month": ("mes", "meses", "mes de cumpleanos", "mes de nacimiento"),
             "justificacion": ("justificacion", "motivo", "causa"),
             "estado_justificacion": ("estado", "estado de justificacion", "tipo de ausentismo", "tipo de ausencia"),
             "centro_costo": ("centro costo", "centro de costo", "centros de costo", "cc"),
@@ -1246,9 +1306,13 @@ class SemanticBusinessResolver:
                 resolved.append(canonical)
                 continue
             if any(f"por {token}" in normalized_message for token in tokens):
+                if canonical == "birth_month" and not self._is_birthday_query(message=message, filters=dict(intent.filters or {})):
+                    continue
                 resolved.append(canonical)
                 continue
             if any(re.search(rf"\b{re.escape(token)}\b", normalized_message) for token in tokens):
+                if canonical == "birth_month" and not self._is_birthday_query(message=message, filters=dict(intent.filters or {})):
+                    continue
                 resolved.append(canonical)
         return list(dict.fromkeys(resolved))
 
@@ -1281,13 +1345,80 @@ class SemanticBusinessResolver:
 
         default_dimensions: list[str] = []
         if normalized_domain in {"empleados", "rrhh"}:
-            default_dimensions.extend(["supervisor", "area", "cargo", "carpeta", "tipo_labor", "sede", "centro_costo"])
+            default_dimensions.extend(["supervisor", "area", "cargo", "carpeta", "tipo_labor", "sede", "centro_costo", "birth_month"])
         if normalized_domain in {"ausentismo", "attendance"}:
             default_dimensions.extend(["justificacion", "estado_justificacion"])
             if has_personal_join:
                 default_dimensions.extend(["supervisor", "area", "cargo", "carpeta", "tipo_labor", "sede", "centro_costo"])
 
         return list(dict.fromkeys([item for item in [*dimensions, *default_dimensions] if item]))
+
+    def _build_group_by_candidates(
+        self,
+        *,
+        resolved_group_by: list[str],
+        group_resolutions: list[Any],
+        semantic_context: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        if not resolved_group_by:
+            return []
+        profile_index: dict[str, dict[str, Any]] = {}
+        for profile in list(semantic_context.get("column_profiles") or []):
+            if not isinstance(profile, dict):
+                continue
+            logical_name = str(profile.get("logical_name") or profile.get("column_name") or "").strip().lower()
+            if logical_name:
+                profile_index[logical_name] = profile
+
+        requested_index = {
+            str(item.canonical_term or "").strip().lower(): str(item.requested_term or "").strip()
+            for item in list(group_resolutions or [])
+            if getattr(item, "canonical_term", None)
+        }
+        results: list[dict[str, Any]] = []
+        for logical_name in list(resolved_group_by or []):
+            normalized = str(logical_name or "").strip().lower()
+            if not normalized:
+                continue
+            if normalized == "birth_month":
+                results.append(
+                    {
+                        "business_name": "birth_month",
+                        "physical_column": "fnacimiento",
+                        "table": "cinco_base_de_personal",
+                        "semantic_role": "calendar_dimension",
+                        "allowed_operation": "group_by",
+                        "allowed_operations": ["group_by", "date_part"],
+                        "requested_term": requested_index.get(normalized, "mes"),
+                        "confidence": 0.95,
+                    }
+                )
+                continue
+            profile = dict(profile_index.get(normalized) or {})
+            semantic_role = str(profile.get("semantic_role") or "").strip().lower() or self._semantic_role_for_profile(
+                logical_name=normalized,
+                column_name=str(profile.get("column_name") or normalized).strip().lower(),
+            )
+            allowed_operations = [
+                str(item or "").strip().lower()
+                for item in list(profile.get("allowed_operations") or [])
+                if str(item or "").strip()
+            ]
+            if "group_by" not in allowed_operations:
+                allowed_operations.append("group_by")
+            results.append(
+                {
+                    "business_name": normalized,
+                    "physical_column": str(profile.get("column_name") or normalized).strip().lower(),
+                    "table": str(profile.get("table_name") or "").strip().lower(),
+                    "semantic_role": semantic_role or "organizational_dimension",
+                    "allowed_operation": "group_by",
+                    "allowed_operations": list(dict.fromkeys(allowed_operations)),
+                    "requested_term": requested_index.get(normalized, normalized),
+                    "confidence": round(float(profile.get("confidence") or 0.95), 4),
+                }
+            )
+        return results
 
     @classmethod
     def _normalize_period(cls, *, message: str, intent: StructuredQueryIntent) -> dict[str, Any]:
@@ -1338,6 +1469,16 @@ class SemanticBusinessResolver:
         if normalized_domain not in {"empleados", "rrhh"}:
             return {}
         if self._is_birthday_query(message=message, filters=normalized_filters):
+            return {}
+        if (
+            str((normalized_period or {}).get("label") or "").strip().lower() == "hoy"
+            and self._is_general_employee_population_request(
+                message=message,
+                filters=normalized_filters,
+                group_by=[],
+            )
+            and self._extract_status_value(normalized_filters) == "ACTIVO"
+        ):
             return {}
         if not self._has_explicit_period(message):
             return {}
@@ -1402,7 +1543,14 @@ class SemanticBusinessResolver:
             warnings.append("domain_known_but_not_operational")
         if intent.operation in {"count", "aggregate", "trend", "detail"} and not semantic_context.get("tables"):
             warnings.append("semantic_tables_not_available")
-        if intent.operation in {"count", "detail", "aggregate", "trend"} and not normalized_period.get("start_date"):
+        birthday_month_resolved = bool(
+            str((normalized_filters or {}).get("fnacimiento_month") or "").strip()
+        )
+        if (
+            intent.operation in {"count", "detail", "aggregate", "trend"}
+            and not normalized_period.get("start_date")
+            and not birthday_month_resolved
+        ):
             warnings.append("period_not_resolved")
         if "cedula" in normalized_filters and not str(normalized_filters.get("cedula") or "").isdigit():
             warnings.append("cedula_filter_not_normalized")
@@ -1426,7 +1574,10 @@ class SemanticBusinessResolver:
 
     @classmethod
     def _is_birthday_query(cls, *, message: str, filters: dict[str, Any]) -> bool:
-        return bool(cls._resolve_birthday_filter(message=message, filters=filters))
+        if cls._resolve_birthday_filter(message=message, filters=filters):
+            return True
+        normalized = cls._normalize_text(message)
+        return bool(re.search(r"\b(cumple\w*|nacimiento|edad)\b", normalized))
 
     @classmethod
     def _resolve_birthday_filter(cls, *, message: str, filters: dict[str, Any]) -> str:
@@ -1464,7 +1615,114 @@ class SemanticBusinessResolver:
         for name, number in months.items():
             if re.search(rf"\b{re.escape(name)}\b", raw):
                 return number
+        if re.search(r"\b(este mes|mes actual)\b", raw):
+            return str(date.today().month)
         return ""
+
+    def _match_business_concept_field(
+        self,
+        *,
+        message: str,
+        domain_code: str,
+        semantic_context: dict[str, Any],
+        normalized_filters: dict[str, Any],
+        resolved_group_by: list[str],
+    ) -> dict[str, Any]:
+        normalized_domain = str(domain_code or "").strip().lower()
+        if normalized_domain not in {"empleados", "rrhh"}:
+            return {}
+        normalized_message = self._normalize_text(message)
+        synonym_index = {
+            self._normalize_text(key): self._normalize_text(value)
+            for key, value in dict(semantic_context.get("synonym_index") or {}).items()
+            if str(key or "").strip() and str(value or "").strip()
+        }
+        best: dict[str, Any] = {}
+        best_score = 0.0
+        for profile in list(semantic_context.get("column_profiles") or []):
+            if not isinstance(profile, dict):
+                continue
+            logical_name = self._normalize_text(profile.get("logical_name") or profile.get("column_name"))
+            column_name = self._normalize_text(profile.get("column_name"))
+            if not logical_name:
+                continue
+            semantic_role = self._semantic_role_for_profile(
+                logical_name=logical_name,
+                column_name=column_name,
+            )
+            aliases = {logical_name, column_name, logical_name.replace("_", " "), column_name.replace("_", " ")}
+            aliases.update(
+                alias
+                for alias, canonical in synonym_index.items()
+                if canonical in {logical_name, column_name}
+            )
+            score = 0.0
+            matched_aliases: list[str] = []
+            for alias in aliases:
+                clean_alias = self._normalize_text(alias)
+                if not clean_alias:
+                    continue
+                if re.search(rf"\b{re.escape(clean_alias)}\b", normalized_message):
+                    score += 0.55 + min(len(clean_alias) / 100.0, 0.15)
+                    matched_aliases.append(clean_alias)
+            if logical_name == "fecha_nacimiento" and str(normalized_filters.get("fnacimiento_month") or "").strip():
+                score += 0.65
+            if "birth_month" in list(resolved_group_by or []) and logical_name == "fecha_nacimiento":
+                score += 0.5
+            if semantic_role in {"person_birth_date", "employment_start_date", "employment_end_date"}:
+                score += 0.08
+            if score <= best_score:
+                continue
+            best_score = score
+            canonical_logical_name = logical_name
+            if semantic_role == "person_birth_date":
+                canonical_logical_name = "fecha_nacimiento"
+            elif semantic_role == "employment_start_date":
+                canonical_logical_name = "fecha_ingreso"
+            elif semantic_role == "employment_end_date":
+                canonical_logical_name = "fecha_egreso"
+            best = {
+                "matched": True,
+                "logical_name": canonical_logical_name,
+                "column_name": column_name,
+                "table_name": self._normalize_text(profile.get("table_name")),
+                "semantic_role": semantic_role,
+                "business_concepts": self._business_concepts_for_role(semantic_role),
+                "matched_aliases": sorted(dict.fromkeys(matched_aliases)),
+                "confidence": round(min(score, 0.98), 4),
+                "allowed_operations": self._allowed_operations_for_role(semantic_role),
+                "date_granularities": ["month", "day", "year"] if bool(profile.get("is_date")) else [],
+            }
+        return best
+
+    @staticmethod
+    def _semantic_role_for_profile(*, logical_name: str, column_name: str) -> str:
+        key = str(logical_name or column_name or "").strip().lower()
+        if key in {"fecha_nacimiento", "fnacimiento"}:
+            return "person_birth_date"
+        if key in {"fecha_ingreso", "fingreso"}:
+            return "employment_start_date"
+        if key in {"fecha_egreso", "fecha_retiro", "fretiro"}:
+            return "employment_end_date"
+        return ""
+
+    @staticmethod
+    def _business_concepts_for_role(role: str) -> list[str]:
+        mapping = {
+            "person_birth_date": ["birthday", "age"],
+            "employment_start_date": ["tenure"],
+            "employment_end_date": ["turnover"],
+        }
+        return list(mapping.get(str(role or ""), []))
+
+    @staticmethod
+    def _allowed_operations_for_role(role: str) -> list[str]:
+        mapping = {
+            "person_birth_date": ["list", "count", "group_by_month", "filter_by_month"],
+            "employment_start_date": ["list", "count", "group_by_month", "filter_by_month"],
+            "employment_end_date": ["list", "count", "group_by_month", "filter_by_month"],
+        }
+        return list(mapping.get(str(role or ""), []))
 
     @classmethod
     def _resolve_attendance_reason_from_message(cls, *, message: str) -> str:
@@ -1604,6 +1862,40 @@ class SemanticBusinessResolver:
             return "ACTIVO"
         return ""
 
+    @classmethod
+    def _is_general_employee_population_request(
+        cls,
+        *,
+        message: str,
+        filters: dict[str, Any],
+        group_by: list[str],
+    ) -> bool:
+        normalized = cls._normalize_text(message)
+        if not re.search(r"\b(emplead\w*|colaborador(?:es)?|personal|persona(?:s)?)\b", normalized):
+            return False
+        if cls._extract_status_value(filters) not in {"ACTIVO", "INACTIVO"}:
+            return False
+        if any(
+            str((filters or {}).get(key) or "").strip()
+            for key in (
+                "cedula",
+                "cedula_empleado",
+                "identificacion",
+                "documento",
+                "id_empleado",
+                "movil",
+                "codigo_sap",
+                "nombre",
+                "search",
+            )
+        ):
+            return False
+        if cls._is_birthday_query(message=message, filters=filters):
+            return False
+        if any(token in normalized for token in ("detalle", "informacion", "info", "ficha", "datos")):
+            return False
+        return bool(group_by) or bool(cls._resolve_status_from_message(message=message))
+
     @staticmethod
     def _apply_executable_filter_aliases(*, normalized_filters: dict[str, Any]) -> None:
         alias_pairs = (
@@ -1621,6 +1913,8 @@ class SemanticBusinessResolver:
             value = str(normalized_filters.get(source) or "").strip()
             if value and not str(normalized_filters.get(target) or "").strip():
                 normalized_filters[target] = value
+            if value and str(normalized_filters.get(target) or "").strip():
+                normalized_filters.pop(source, None)
 
     @classmethod
     def _has_explicit_period(cls, message: str) -> bool:
