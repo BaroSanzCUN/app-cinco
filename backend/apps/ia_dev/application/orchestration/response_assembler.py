@@ -238,12 +238,20 @@ class LegacyResponseAssembler:
         kpis = dict(data.get("kpis") or {})
 
         dato = ""
-        if int(table.get("rowcount") or 0) > 0:
+        if kpis:
+            if "total_empleados" in kpis:
+                first_row = (list(table.get("rows") or []) or [{}])[0]
+                status_value = str((first_row or {}).get("estado") or "").strip().upper()
+                if status_value == "ACTIVO":
+                    dato = f"Actualmente hay {kpis.get('total_empleados')} empleados activos."
+                elif status_value == "INACTIVO":
+                    dato = f"Actualmente hay {kpis.get('total_empleados')} empleados inactivos."
+            if not dato:
+                first_key = next(iter(kpis.keys()), "")
+                if first_key:
+                    dato = f"{first_key}: {kpis.get(first_key)}"
+        elif int(table.get("rowcount") or 0) > 0:
             dato = f"{int(table.get('rowcount') or 0)} filas disponibles."
-        elif kpis:
-            first_key = next(iter(kpis.keys()), "")
-            if first_key:
-                dato = f"{first_key}: {kpis.get(first_key)}"
 
         hallazgo = ""
         if findings:

@@ -73,6 +73,77 @@ class DictionaryToolService:
         parsed = [item.strip().upper() for item in text.split(",") if item.strip()]
         return sorted(dict.fromkeys(parsed))
 
+    @staticmethod
+    def _semantic_role_for_field(*, logical_name: str, column_name: str) -> str:
+        key = str(logical_name or column_name or "").strip().lower()
+        if key in {"fecha_nacimiento", "fnacimiento"}:
+            return "person_birth_date"
+        if key in {"fecha_ingreso", "fingreso"}:
+            return "employment_start_date"
+        if key in {"fecha_egreso", "fecha_retiro", "fretiro"}:
+            return "employment_end_date"
+        if key in {
+            "area",
+            "cargo",
+            "supervisor",
+            "sede",
+            "zona_nodo",
+            "carpeta",
+            "tipo_labor",
+            "tipo",
+            "centro_costo",
+        }:
+            return "organizational_dimension"
+        return ""
+
+    @classmethod
+    def _business_concepts_for_role(cls, role: str, *, logical_name: str) -> list[str]:
+        normalized_role = str(role or "").strip().lower()
+        normalized_logical = str(logical_name or "").strip().lower()
+        if normalized_role == "person_birth_date":
+            return ["birthday", "age"]
+        if normalized_role == "employment_start_date":
+            return ["tenure"]
+        if normalized_role == "employment_end_date":
+            return ["turnover"]
+        if normalized_role == "organizational_dimension":
+            return [normalized_logical] if normalized_logical else ["organizational_dimension"]
+        return []
+
+    @classmethod
+    def _allowed_operations_for_profile(
+        cls,
+        *,
+        logical_name: str,
+        column_name: str,
+        supports_filter: bool,
+        supports_group_by: bool,
+        supports_metric: bool,
+        is_date: bool,
+    ) -> list[str]:
+        role = cls._semantic_role_for_field(logical_name=logical_name, column_name=column_name)
+        if role == "person_birth_date":
+            operations = ["list", "count", "filter_by_month", "group_by_month"]
+            if supports_filter:
+                operations.append("filter")
+            return operations
+        if role in {"employment_start_date", "employment_end_date"}:
+            operations = ["list", "count", "filter_by_month", "group_by_month"]
+            if supports_filter:
+                operations.append("filter")
+            return operations
+        operations: list[str] = []
+        if supports_filter:
+            operations.append("filter")
+            operations.append("select")
+        if supports_group_by:
+            operations.append("group_by")
+        if supports_metric:
+            operations.extend(["aggregate", "metric"])
+        if is_date:
+            operations.append("date_part")
+        return list(dict.fromkeys(operations))
+
     def _table_exists(self, *, cursor, schema: str, table_name: str) -> bool:
         cursor.execute(
             """
@@ -427,11 +498,17 @@ class DictionaryToolService:
             supports_filter = self._to_bool(row[12]) or self._to_bool(row[9]) or bool(allowed_values)
             supports_group_by = self._to_bool(row[13]) or self._to_bool(row[10])
             supports_metric = self._to_bool(row[14]) or self._to_bool(row[11])
+            logical_name = str(row[2] or "")
+            column_name = str(row[3] or "")
+            semantic_role = self._semantic_role_for_field(
+                logical_name=logical_name,
+                column_name=column_name,
+            )
             profile = {
                 "table_name": str(row[0] or ""),
                 "campo_id": int(row[1] or 0),
-                "campo_logico": str(row[2] or ""),
-                "column_name": str(row[3] or ""),
+                "campo_logico": logical_name,
+                "column_name": column_name,
                 "tipo_campo": str(row[4] or ""),
                 "tipo_dato_tecnico": str(row[5] or ""),
                 "definicion_negocio": str(row[6] or ""),
@@ -453,6 +530,19 @@ class DictionaryToolService:
                 "allowed_aggregations": self._to_json(row[21], []),
                 "normalization_strategy": str(row[22] or ""),
                 "priority": int(row[23] or 0),
+                "semantic_role": semantic_role,
+                "business_concepts": self._business_concepts_for_role(
+                    semantic_role,
+                    logical_name=logical_name,
+                ),
+                "allowed_operations": self._allowed_operations_for_profile(
+                    logical_name=logical_name,
+                    column_name=column_name,
+                    supports_filter=supports_filter,
+                    supports_group_by=supports_group_by,
+                    supports_metric=supports_metric,
+                    is_date=self._to_bool(row[16]),
+                ),
             }
             fields.append(profile)
             field_profiles.append(profile)
@@ -603,12 +693,18 @@ class DictionaryToolService:
             supports_filter = self._to_bool(row[12]) or self._to_bool(row[9]) or bool(allowed_values)
             supports_group_by = self._to_bool(row[13]) or self._to_bool(row[10])
             supports_metric = self._to_bool(row[14]) or self._to_bool(row[11])
+            logical_name = str(row[2] or "")
+            column_name = str(row[3] or "")
+            semantic_role = self._semantic_role_for_field(
+                logical_name=logical_name,
+                column_name=column_name,
+            )
             profiles.append(
                 {
                     "table_name": str(row[0] or ""),
                     "campo_id": int(row[1] or 0),
-                    "campo_logico": str(row[2] or ""),
-                    "column_name": str(row[3] or ""),
+                    "campo_logico": logical_name,
+                    "column_name": column_name,
                     "tipo_campo": str(row[4] or ""),
                     "tipo_dato_tecnico": str(row[5] or ""),
                     "definicion_negocio": str(row[6] or ""),
@@ -630,6 +726,19 @@ class DictionaryToolService:
                     "allowed_aggregations": self._to_json(row[21], []),
                     "normalization_strategy": str(row[22] or ""),
                     "priority": int(row[23] or 0),
+                    "semantic_role": semantic_role,
+                    "business_concepts": self._business_concepts_for_role(
+                        semantic_role,
+                        logical_name=logical_name,
+                    ),
+                    "allowed_operations": self._allowed_operations_for_profile(
+                        logical_name=logical_name,
+                        column_name=column_name,
+                        supports_filter=supports_filter,
+                        supports_group_by=supports_group_by,
+                        supports_metric=supports_metric,
+                        is_date=self._to_bool(row[16]),
+                    ),
                 }
             )
         return profiles
@@ -641,14 +750,46 @@ class DictionaryToolService:
         """
         schema = self._safe_schema()
         synonyms_seed = [
+            ("empleados", "personal"),
+            ("empleado", "colaborador"),
+            ("empleados", "colaboradores"),
+            ("empleados", "personas"),
+            ("empleado", "persona"),
+            ("empleado", "trabajador"),
+            ("empleados", "trabajadores"),
             ("activo", "habilitado"),
             ("activo", "habilitados"),
             ("activo", "habilitada"),
             ("activo", "habilitadas"),
+            ("activo", "vigente"),
+            ("activo", "vigentes"),
             ("inactivo", "deshabilitado"),
             ("inactivo", "deshabilitados"),
             ("inactivo", "deshabilitada"),
             ("inactivo", "deshabilitadas"),
+            ("fecha_nacimiento", "nacimiento"),
+            ("fecha_nacimiento", "fecha de nacimiento"),
+            ("fecha_nacimiento", "cumpleanos"),
+            ("fecha_nacimiento", "cumpleanos de empleados"),
+            ("fecha_nacimiento", "cumple"),
+            ("fecha_nacimiento", "cumple anos"),
+            ("fecha_nacimiento", "cumpleaneros"),
+            ("fecha_ingreso", "antiguedad"),
+            ("fecha_ingreso", "fecha de ingreso"),
+            ("fecha_egreso", "retiro"),
+            ("fecha_egreso", "salida"),
+            ("fecha_egreso", "fecha de retiro"),
+            ("area", "dependencia"),
+            ("area", "dependencias"),
+            ("area", "departamento"),
+            ("area", "departamentos"),
+            ("area", "unidad"),
+            ("area", "unidades"),
+            ("cargo", "puesto"),
+            ("cargo", "puestos"),
+            ("cargo", "rol"),
+            ("supervisor", "jefe"),
+            ("supervisor", "lider"),
         ]
         result: dict[str, Any] = {
             "ok": True,

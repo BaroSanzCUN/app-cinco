@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+from datetime import date
 from typing import Any
 
 from apps.ia_dev.application.contracts.query_intelligence_contracts import StructuredQueryIntent
@@ -71,6 +72,12 @@ class IntentArbitrationService:
         dictionary_payload = self._compact_dictionary_context(ai_dictionary_context)
         action_payload = dict(action_risk or {})
         governance_payload = dict(knowledge_governance_signals or {})
+        semantic_inference = self._infer_business_semantics(
+            original_question=original_question,
+            candidate_domain=candidate_domain,
+            llm_payload=llm_payload,
+            dictionary_context=dict(ai_dictionary_context or {}),
+        )
         fallback = self._build_deterministic_fallback(
             original_question=original_question,
             candidate_domain=candidate_domain,
@@ -80,6 +87,7 @@ class IntentArbitrationService:
             dictionary_payload=dictionary_payload,
             action_payload=action_payload,
             governance_payload=governance_payload,
+            semantic_inference=semantic_inference,
         )
 
         decision = dict(fallback)
@@ -95,6 +103,7 @@ class IntentArbitrationService:
                     dictionary_payload=dictionary_payload,
                     action_payload=action_payload,
                     governance_payload=governance_payload,
+                    semantic_inference=semantic_inference,
                 )
                 decision.update(
                     {
@@ -115,7 +124,9 @@ class IntentArbitrationService:
             dictionary_payload=dictionary_payload,
             action_payload=action_payload,
             governance_payload=governance_payload,
+            semantic_inference=semantic_inference,
         )
+        final.update(semantic_inference)
         final["source"] = source
         final["heuristic_intent"] = heuristic_payload.get("intent")
         final["llm_intent"] = llm_payload.get("intent")
@@ -132,6 +143,7 @@ class IntentArbitrationService:
         dictionary_payload: dict[str, Any],
         action_payload: dict[str, Any],
         governance_payload: dict[str, Any],
+        semantic_inference: dict[str, Any],
     ) -> dict[str, Any]:
         from openai import OpenAI
 
@@ -178,12 +190,13 @@ class IntentArbitrationService:
                             "candidate_domain": candidate_domain,
                             "heuristic_intent": heuristic_payload,
                             "llm_intent": llm_payload,
-                            "candidate_capabilities": capabilities_payload,
-                            "ai_dictionary_context": dictionary_payload,
-                            "action_risk": action_payload,
-                            "knowledge_governance_signals": governance_payload,
-                        },
-                        ensure_ascii=False,
+            "candidate_capabilities": capabilities_payload,
+            "ai_dictionary_context": dictionary_payload,
+            "action_risk": action_payload,
+            "knowledge_governance_signals": governance_payload,
+            "semantic_inference": semantic_inference,
+        },
+        ensure_ascii=False,
                     ),
                 },
             ],
@@ -203,9 +216,11 @@ class IntentArbitrationService:
         dictionary_payload: dict[str, Any],
         action_payload: dict[str, Any],
         governance_payload: dict[str, Any],
+        semantic_inference: dict[str, Any],
     ) -> dict[str, Any]:
         normalized_domain = normalizar_codigo_dominio(
             llm_payload.get("domain")
+            or semantic_inference.get("candidate_domain")
             or candidate_domain
             or heuristic_payload.get("domain")
             or "general"
@@ -220,7 +235,9 @@ class IntentArbitrationService:
         explicit_apply = bool(governance_payload.get("explicit_apply_request"))
         llm_intent = str(llm_payload.get("intent") or "").strip().lower()
         heuristic_intent = str(heuristic_payload.get("intent") or "").strip().lower()
-        llm_operation = str(llm_payload.get("operation") or "").strip().lower()
+        llm_operation = str(
+            semantic_inference.get("operation") or llm_payload.get("operation") or ""
+        ).strip().lower()
 
         if explicit_kpro or explicit_apply or llm_intent == "knowledge_change_request":
             final_intent = "knowledge_change_request"
@@ -256,7 +273,7 @@ class IntentArbitrationService:
             "should_use_sql_assisted": (
                 final_intent == "analytics_query"
                 and bool(dictionary_payload.get("has_real_data"))
-                and normalized_domain in {"ausentismo", "attendance"}
+                and normalized_domain in {"ausentismo", "attendance", "empleados", "rrhh"}
             ),
             "should_use_handler": (
                 final_intent == "analytics_query"
@@ -283,6 +300,7 @@ class IntentArbitrationService:
         dictionary_payload: dict[str, Any],
         action_payload: dict[str, Any],
         governance_payload: dict[str, Any],
+        semantic_inference: dict[str, Any],
     ) -> dict[str, Any]:
         final_intent = str(decision.get("final_intent") or fallback.get("final_intent") or "fallback").strip().lower()
         if final_intent not in self.SUPPORTED_INTENTS:
@@ -318,7 +336,7 @@ class IntentArbitrationService:
             should_use_sql_assisted = (
                 should_execute_query
                 and has_real_data
-                and final_domain in {"ausentismo", "attendance"}
+                and final_domain in {"ausentismo", "attendance", "empleados", "rrhh"}
             )
             should_use_handler = (
                 should_execute_query
@@ -443,6 +461,7 @@ class IntentArbitrationService:
                 "source": str(llm_intent.source or "").strip().lower(),
                 "group_by": list(llm_intent.group_by or []),
                 "metrics": list(llm_intent.metrics or []),
+                "filters": dict(llm_intent.filters or {}),
             }
         if isinstance(llm_intent, dict):
             return {
@@ -454,6 +473,7 @@ class IntentArbitrationService:
                 "source": str(llm_intent.get("source") or "").strip().lower(),
                 "group_by": list(llm_intent.get("group_by") or []),
                 "metrics": list(llm_intent.get("metrics") or []),
+                "filters": dict(llm_intent.get("filters") or {}),
             }
         return {
             "intent": str(llm_intent or "").strip().lower(),
@@ -464,6 +484,7 @@ class IntentArbitrationService:
             "source": "",
             "group_by": [],
             "metrics": [],
+            "filters": {},
         }
 
     @staticmethod
@@ -488,14 +509,254 @@ class IntentArbitrationService:
     def _compact_dictionary_context(ai_dictionary_context: dict[str, Any] | None) -> dict[str, Any]:
         context = dict(ai_dictionary_context or {})
         fields = list(context.get("fields") or [])
+        tables = list(context.get("tables") or [])
         relations = list(context.get("relations") or [])
         rules = list(context.get("rules") or [])
+        synonyms = list(context.get("synonyms") or [])
         return {
             "fields_count": len(fields),
+            "tables_count": len(tables),
             "relations_count": len(relations),
             "rules_count": len(rules),
+            "synonyms_count": len(synonyms),
             "has_real_data": bool(fields or relations),
+            "candidate_tables": [
+                {
+                    "table_name": str(item.get("table_name") or "").strip().lower(),
+                    "alias_negocio": str(item.get("alias_negocio") or "").strip().lower(),
+                }
+                for item in tables[:8]
+                if isinstance(item, dict)
+            ],
+            "candidate_fields": [
+                {
+                    "table_name": str(item.get("table_name") or "").strip().lower(),
+                    "logical_name": str(
+                        item.get("campo_logico") or item.get("logical_name") or ""
+                    ).strip().lower(),
+                    "column_name": str(item.get("column_name") or "").strip().lower(),
+                    "is_date": bool(item.get("is_date")),
+                    "supports_filter": bool(item.get("supports_filter") or item.get("es_filtro")),
+                    "supports_group_by": bool(item.get("supports_group_by") or item.get("es_group_by")),
+                }
+                for item in fields[:20]
+                if isinstance(item, dict)
+            ],
+            "candidate_synonyms": [
+                {
+                    "termino": str(item.get("termino") or "").strip().lower(),
+                    "sinonimo": str(item.get("sinonimo") or "").strip().lower(),
+                }
+                for item in synonyms[:24]
+                if isinstance(item, dict)
+            ],
         }
+
+    @classmethod
+    def _infer_business_semantics(
+        cls,
+        *,
+        original_question: str,
+        candidate_domain: str,
+        llm_payload: dict[str, Any],
+        dictionary_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized_query = cls._normalize_text(original_question)
+        fields = [item for item in list(dictionary_context.get("fields") or []) if isinstance(item, dict)]
+        tables = [item for item in list(dictionary_context.get("tables") or []) if isinstance(item, dict)]
+        synonyms = [item for item in list(dictionary_context.get("synonyms") or []) if isinstance(item, dict)]
+        filters = dict(llm_payload.get("filters") or {})
+        operation = str(llm_payload.get("operation") or "").strip().lower()
+        inferred_operation = cls._map_operation_label(operation=operation)
+        if not inferred_operation:
+            inferred_operation = "count" if any(
+                token in normalized_query for token in ("cuantos", "cuantas", "cantidad", "total", "numero")
+            ) else "list"
+
+        concept_aliases = cls._concept_aliases_from_dictionary(
+            fields=fields,
+            synonyms=synonyms,
+        )
+        matched_concept = cls._match_business_concept(
+            normalized_query=normalized_query,
+            concept_aliases=concept_aliases,
+        )
+        matched_field = dict(matched_concept.get("field") or {})
+        matched_table = cls._find_matching_table(
+            tables=tables,
+            table_name=str(matched_field.get("table_name") or ""),
+        )
+        temporal_filter = cls._resolve_temporal_filter(
+            normalized_query=normalized_query,
+            filters=filters,
+        )
+        inferred_domain = normalizar_codigo_dominio(
+            llm_payload.get("domain")
+            or matched_concept.get("domain")
+            or candidate_domain
+            or ""
+        )
+        confidence = 0.0
+        if matched_concept:
+            confidence += 0.58
+        if inferred_domain in {"empleados", "rrhh", "ausentismo", "attendance"}:
+            confidence += 0.17
+        if temporal_filter:
+            confidence += 0.12
+        if inferred_operation in {"list", "count", "group"}:
+            confidence += 0.08
+        confidence = max(float(llm_payload.get("confidence") or 0.0), min(confidence, 0.97))
+        explanation = ""
+        if matched_concept:
+            explanation = (
+                f"El concepto '{matched_concept.get('concept')}' coincide con metadata declarada "
+                f"en ai_dictionary para {matched_field.get('table_name')}.{matched_field.get('logical_name')}."
+            )
+
+        return {
+            "inferred_business_concept": str(matched_concept.get("concept") or ""),
+            "candidate_domain": inferred_domain or "",
+            "candidate_table": str(matched_field.get("table_name") or matched_table.get("table_name") or ""),
+            "candidate_field": str(matched_field.get("logical_name") or ""),
+            "operation": inferred_operation,
+            "temporal_filter": temporal_filter,
+            "confidence": round(float(confidence), 4),
+            "explanation": explanation[:280],
+        }
+
+    @staticmethod
+    def _normalize_text(value: str) -> str:
+        lowered = str(value or "").strip().lower()
+        normalized = re.sub(r"\s+", " ", lowered)
+        normalized = normalized.replace("cumpleaños", "cumpleanos")
+        return normalized
+
+    @classmethod
+    def _concept_aliases_from_dictionary(
+        cls,
+        *,
+        fields: list[dict[str, Any]],
+        synonyms: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        supported_concepts = {
+            "fecha_nacimiento": "birthday",
+            "fnacimiento": "birthday",
+            "fecha_ingreso": "tenure",
+            "fecha_egreso": "turnover",
+            "fecha_retiro": "turnover",
+        }
+        field_index: dict[str, dict[str, Any]] = {}
+        for row in fields:
+            logical_name = str(row.get("campo_logico") or row.get("logical_name") or "").strip().lower()
+            column_name = str(row.get("column_name") or "").strip().lower()
+            concept = supported_concepts.get(logical_name) or supported_concepts.get(column_name)
+            if not concept:
+                continue
+            field_index[logical_name or column_name] = {
+                "concept": concept,
+                "field": {
+                    "table_name": str(row.get("table_name") or "").strip().lower(),
+                    "logical_name": logical_name or column_name,
+                    "column_name": column_name,
+                },
+            }
+        aliases: list[dict[str, Any]] = []
+        for canonical_key, payload in field_index.items():
+            aliases.append({**payload, "alias": canonical_key})
+            aliases.append({**payload, "alias": str(payload["field"].get("column_name") or "")})
+        for row in synonyms:
+            termino = str(row.get("termino") or "").strip().lower()
+            sinonimo = str(row.get("sinonimo") or "").strip().lower()
+            payload = field_index.get(termino)
+            if payload and sinonimo:
+                aliases.append({**payload, "alias": sinonimo})
+        return aliases
+
+    @classmethod
+    def _match_business_concept(
+        cls,
+        *,
+        normalized_query: str,
+        concept_aliases: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        best: dict[str, Any] = {}
+        best_score = 0
+        for row in concept_aliases:
+            alias = str(row.get("alias") or "").strip().lower()
+            if not alias:
+                continue
+            if re.search(rf"\b{re.escape(alias)}\b", normalized_query):
+                score = len(alias)
+                if score > best_score:
+                    best_score = score
+                    best = dict(row)
+        return best
+
+    @staticmethod
+    def _find_matching_table(*, tables: list[dict[str, Any]], table_name: str) -> dict[str, Any]:
+        expected = str(table_name or "").strip().lower()
+        if not expected:
+            return {}
+        for row in tables:
+            if str(row.get("table_name") or "").strip().lower() == expected:
+                return row
+        return {}
+
+    @classmethod
+    def _resolve_temporal_filter(
+        cls,
+        *,
+        normalized_query: str,
+        filters: dict[str, Any],
+    ) -> dict[str, Any]:
+        month_value = ""
+        for key in ("fnacimiento_month", "birth_month", "month_of_birth", "mes_cumpleanos"):
+            raw_value = str((filters or {}).get(key) or "").strip()
+            if raw_value:
+                month_value = raw_value
+                break
+        months = {
+            "enero": 1,
+            "febrero": 2,
+            "marzo": 3,
+            "abril": 4,
+            "mayo": 5,
+            "junio": 6,
+            "julio": 7,
+            "agosto": 8,
+            "septiembre": 9,
+            "setiembre": 9,
+            "octubre": 10,
+            "noviembre": 11,
+            "diciembre": 12,
+        }
+        if not month_value:
+            for name, number in months.items():
+                if re.search(rf"\b{re.escape(name)}\b", normalized_query):
+                    month_value = str(number)
+                    break
+        if not month_value and re.search(r"\b(este mes|mes actual)\b", normalized_query):
+            month_value = str(date.today().month)
+        if not month_value:
+            return {}
+        try:
+            month_number = int(month_value)
+        except ValueError:
+            return {}
+        return {"type": "month", "value": month_number}
+
+    @staticmethod
+    def _map_operation_label(*, operation: str) -> str:
+        normalized = str(operation or "").strip().lower()
+        mapping = {
+            "detail": "list",
+            "count": "count",
+            "aggregate": "group",
+            "compare": "group",
+            "trend": "trend",
+            "summary": "summary",
+        }
+        return mapping.get(normalized, normalized)
 
     @staticmethod
     def _default_reasoning_summary(

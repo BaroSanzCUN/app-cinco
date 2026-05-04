@@ -53,6 +53,39 @@ class QueryIntelligenceLayerTests(SimpleTestCase):
         # El estado se resuelve en la capa semantica (dd_campos/dd_sinonimos), no en intent resolver.
         self.assertEqual(str(intent.filters.get("estado") or ""), "")
 
+    def test_query_intent_resolver_treats_personal_activo_hoy_as_employee_count(self):
+        resolver = QueryIntentResolver()
+        with patch.dict(os.environ, {"IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0"}, clear=False):
+            intent = resolver.resolve(
+                message="personal activo hoy",
+                base_classification={
+                    "domain": "empleados",
+                    "intent": "empleados_query",
+                    "needs_database": True,
+                },
+                semantic_context={},
+            )
+        self.assertEqual(intent.domain_code, "empleados")
+        self.assertEqual(intent.operation, "count")
+        self.assertEqual(intent.template_id, "count_entities_by_status")
+        self.assertEqual(dict(intent.period or {}), {})
+
+    def test_query_intent_resolver_treats_colaboradores_activos_as_employee_count(self):
+        resolver = QueryIntentResolver()
+        with patch.dict(os.environ, {"IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0"}, clear=False):
+            intent = resolver.resolve(
+                message="colaboradores activos",
+                base_classification={
+                    "domain": "general",
+                    "intent": "general_question",
+                    "needs_database": False,
+                },
+                semantic_context={},
+            )
+        self.assertEqual(intent.domain_code, "empleados")
+        self.assertEqual(intent.operation, "count")
+        self.assertEqual(intent.template_id, "count_entities_by_status")
+
     def test_query_intent_resolver_inferrs_employee_egresos_this_month_as_inactive_count(self):
         resolver = QueryIntentResolver()
         with patch.dict(os.environ, {"IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0"}, clear=False):
@@ -144,6 +177,32 @@ class QueryIntelligenceLayerTests(SimpleTestCase):
         self.assertEqual(intent.template_id, "aggregate_by_group_and_period")
         self.assertEqual(list(intent.group_by or []), ["area"])
         self.assertIn("count", list(intent.metrics or []))
+
+    def test_query_intent_resolver_treats_birthday_by_area_as_grouped_employee_aggregate(self):
+        resolver = QueryIntentResolver()
+        with patch.dict(os.environ, {"IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0"}, clear=False):
+            intent = resolver.resolve(
+                message="cumpleanos de mayo por area",
+                base_classification={
+                    "domain": "general",
+                    "intent": "general_question",
+                    "needs_database": False,
+                },
+                semantic_context={
+                    "query_hints": {
+                        "candidate_group_dimensions": ["area", "cargo", "birth_month"],
+                    },
+                    "synonym_index": {
+                        "cumpleanos": "fecha_nacimiento",
+                        "cumpleanos de empleados": "fecha_nacimiento",
+                    },
+                },
+            )
+        self.assertEqual(intent.domain_code, "empleados")
+        self.assertEqual(intent.operation, "aggregate")
+        self.assertEqual(intent.template_id, "aggregate_by_group_and_period")
+        self.assertEqual(str((intent.filters or {}).get("fnacimiento_month") or ""), "5")
+        self.assertEqual(list(intent.group_by or []), ["area"])
 
     def test_query_intent_resolver_treats_por_labor_as_grouped_employee_aggregate(self):
         resolver = QueryIntentResolver()
@@ -455,6 +514,50 @@ class QueryIntelligenceLayerTests(SimpleTestCase):
             )
         self.assertEqual(plan.strategy, "capability")
         self.assertEqual(plan.capability_id, "empleados.count.active.v1")
+
+    def test_query_execution_planner_selects_count_capability_for_personal_activo_hoy_without_search_literal(self):
+        planner = QueryExecutionPlanner()
+        intent = StructuredQueryIntent(
+            raw_query="personal activo hoy",
+            domain_code="empleados",
+            operation="count",
+            template_id="count_entities_by_status",
+            filters={"estado": "ACTIVO"},
+            period={},
+            group_by=[],
+            metrics=["count"],
+            confidence=0.9,
+            source="rules",
+        )
+        resolved_query = ResolvedQuerySpec(
+            intent=intent,
+            semantic_context={
+                "domain_status": "active",
+                "supports_sql_assisted": False,
+                "tables": [{"table_fqn": "bd_c3nc4s1s.cinco_base_de_personal", "table_name": "cinco_base_de_personal"}],
+                "allowed_tables": ["cinco_base_de_personal", "bd_c3nc4s1s.cinco_base_de_personal"],
+                "allowed_columns": ["estado", "cedula"],
+            },
+            normalized_filters={"estado": "ACTIVO"},
+            normalized_period={},
+            mapped_columns={"estado": "estado"},
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "IA_DEV_CAP_EMPLEADOS_ENABLED": "1",
+                "IA_DEV_CAP_EMPLEADOS_COUNT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            plan = planner.plan(
+                run_context=RunContext.create(message=intent.raw_query),
+                resolved_query=resolved_query,
+            )
+        self.assertEqual(plan.strategy, "capability")
+        self.assertEqual(plan.capability_id, "empleados.count.active.v1")
+        self.assertFalse(bool(((plan.constraints or {}).get("entity_scope") or {}).get("has_entity_filter")))
+        self.assertNotIn("search", dict((plan.constraints or {}).get("filters") or {}))
 
     def test_query_execution_planner_selects_rrhh_capability_even_with_generic_template(self):
         planner = QueryExecutionPlanner()
@@ -987,3 +1090,9 @@ class QueryIntelligenceLayerTests(SimpleTestCase):
         )
         self.assertFalse(validation.satisfied)
         self.assertEqual(validation.reason, "group_count_requested_but_result_is_not_aggregated")
+
+    def test_query_shape_key_generalizes_birthday_month_queries(self):
+        first = QueryIntentResolver._build_query_shape_key("Cumpleaños de mayo")
+        second = QueryIntentResolver._build_query_shape_key("Cumpleaños de junio")
+        self.assertEqual(first, second)
+        self.assertIn("<mes>", first)

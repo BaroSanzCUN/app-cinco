@@ -7,6 +7,11 @@ from unittest.mock import patch
 from django.test import SimpleTestCase
 
 from apps.ia_dev.application.context.run_context import RunContext
+from apps.ia_dev.application.contracts.query_intelligence_contracts import (
+    QueryExecutionPlan,
+    ResolvedQuerySpec,
+    StructuredQueryIntent,
+)
 from apps.ia_dev.application.orchestration.chat_application_service import ChatApplicationService
 
 
@@ -19,6 +24,93 @@ class _ObservabilityStub:
 
 
 class ChatRuntimeMetadataTests(SimpleTestCase):
+    def test_resolve_query_intelligence_keeps_planner_payload_for_personal_activo_hoy(self):
+        service = ChatApplicationService()
+        run_context = RunContext.create(message="personal activo hoy", session_id="sess-qi", reset_memory=False)
+        intent = StructuredQueryIntent(
+            raw_query="personal activo hoy",
+            domain_code="empleados",
+            operation="count",
+            template_id="count_entities_by_status",
+            filters={},
+            period={},
+            group_by=[],
+            metrics=["count"],
+            confidence=0.9,
+            source="rules",
+        )
+        resolved_query = ResolvedQuerySpec(
+            intent=StructuredQueryIntent(
+                raw_query="personal activo hoy",
+                domain_code="empleados",
+                operation="count",
+                template_id="count_entities_by_status",
+                filters={"estado": "ACTIVO"},
+                period={},
+                group_by=[],
+                metrics=["count"],
+                confidence=0.92,
+                source="rules_arbitrated",
+            ),
+            semantic_context={"source_of_truth": {"used_dictionary": True, "used_yaml": True}},
+            normalized_filters={"estado": "ACTIVO"},
+            normalized_period={},
+            mapped_columns={"estado": "estado"},
+        )
+        execution_plan = QueryExecutionPlan(
+            strategy="capability",
+            reason="capability_selected_from_query_intelligence",
+            domain_code="empleados",
+            capability_id="empleados.count.active.v1",
+            constraints={"filters": {"estado": "ACTIVO"}, "group_by": [], "result_shape": "kpi"},
+            metadata={"analytics_router_decision": "handler_modern"},
+        )
+
+        with patch.object(service.semantic_business_resolver, "build_semantic_context", return_value={}), patch.object(
+            service.capability_runtime,
+            "build_candidate_hints",
+            return_value=[{"capability_id": "empleados.count.active.v1", "reason": "bootstrap"}],
+        ), patch.object(service.query_intent_resolver, "match_query_pattern", return_value=None), patch.object(
+            service.query_intent_resolver,
+            "resolve",
+            return_value=intent,
+        ), patch.object(
+            service.intent_arbitration_service,
+            "arbitrate",
+            return_value={
+                "final_intent": "analytics_query",
+                "final_domain": "empleados",
+                "should_execute_query": True,
+                "should_use_handler": True,
+                "should_use_sql_assisted": False,
+                "should_fallback": False,
+                "confidence": 0.91,
+                "reasoning_summary": "Consulta analitica de empleados activos.",
+            },
+        ), patch.object(
+            service.semantic_business_resolver,
+            "resolve_query",
+            return_value=resolved_query,
+        ), patch.object(
+            service.query_execution_planner,
+            "plan",
+            return_value=execution_plan,
+        ):
+            payload = service._resolve_query_intelligence(
+                message="personal activo hoy",
+                base_classification={"domain": "empleados", "intent": "empleados_query", "needs_database": True},
+                session_context={},
+                run_context=run_context,
+                observability=_ObservabilityStub(),
+            )
+
+        self.assertEqual(str(payload.get("error") or ""), "")
+        self.assertEqual(str(((payload.get("execution_plan") or {}).get("strategy") or "")), "capability")
+        self.assertEqual(
+            str(((payload.get("execution_plan") or {}).get("capability_id") or "")),
+            "empleados.count.active.v1",
+        )
+
     def test_attach_runtime_metadata_includes_task_state_and_flow(self):
         run_context = RunContext.create(message="x", session_id="sess-1", reset_memory=False)
         run_context.metadata["task_state"] = {

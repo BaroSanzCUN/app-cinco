@@ -830,7 +830,7 @@ class ChatApplicationService:
             capability_hints = self.capability_runtime.build_candidate_hints(
                 message=message,
                 classification=classification_for_qi,
-                query_intelligence=query_intelligence,
+                query_intelligence={},
                 max_candidates=4,
             )
 
@@ -2410,7 +2410,7 @@ class ChatApplicationService:
         )
         return bool(
             re.search(
-                r"\b(colaborador(?:es)?|personal|emplead\w*|cedula|rrhh|habilitad\w*|vigent\w*|tipo_labor|tipo\s+labor|tipo\s+de\s+labor|labor(?:es)?|area(?:s)?|cargo(?:s)?|supervisor(?:es)?|jefe(?:s)?|lider(?:es)?|carpeta(?:s)?|sede(?:s)?)\b",
+                r"\b(colaborador(?:es)?|personal|emplead\w*|cedula|rrhh|habilitad\w*|vigent\w*|tipo_labor|tipo\s+labor|tipo\s+de\s+labor|labor(?:es)?|area(?:s)?|cargo(?:s)?|supervisor(?:es)?|jefe(?:s)?|lider(?:es)?|carpeta(?:s)?|sede(?:s)?|cumple\w*|nacimiento|edad|antiguedad|egreso(?:s)?|retiro(?:s)?|retirad\w*|salida(?:s)?)\b",
                 clean,
             )
         ) and not has_attendance_signal

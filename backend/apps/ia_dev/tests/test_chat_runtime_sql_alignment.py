@@ -60,6 +60,28 @@ def _pilot_context() -> dict:
     }
 
 
+def _employee_birthday_context() -> dict:
+    return {
+        "tables": [
+            {"schema_name": "cincosas_cincosas", "table_name": "cinco_base_de_personal", "table_fqn": "cincosas_cincosas.cinco_base_de_personal"},
+        ],
+        "column_profiles": [
+            {"table_name": "cinco_base_de_personal", "logical_name": "fecha_nacimiento", "column_name": "fnacimiento", "supports_filter": True, "supports_group_by": True, "is_date": True},
+            {"table_name": "cinco_base_de_personal", "logical_name": "cedula", "column_name": "cedula", "is_identifier": True},
+            {"table_name": "cinco_base_de_personal", "logical_name": "estado_empleado", "column_name": "estado", "supports_filter": True, "allowed_values": ["ACTIVO", "INACTIVO"]},
+            {"table_name": "cinco_base_de_personal", "logical_name": "area", "column_name": "area", "supports_group_by": True, "supports_dimension": True},
+            {"table_name": "cinco_base_de_personal", "logical_name": "cargo", "column_name": "cargo", "supports_group_by": True, "supports_dimension": True},
+        ],
+        "allowed_tables": ["cincosas_cincosas.cinco_base_de_personal", "cinco_base_de_personal"],
+        "allowed_columns": ["fnacimiento", "cedula", "estado", "area", "cargo"],
+        "dictionary": {"relations": []},
+        "source_of_truth": {"pilot_sql_assisted_enabled": True, "used_dictionary": True, "used_yaml": True},
+        "query_hints": {"candidate_group_dimensions": ["area", "cargo", "birth_month"]},
+        "supports_sql_assisted": True,
+        "domain_status": "active",
+    }
+
+
 class ChatRuntimeSqlAlignmentTests(SimpleTestCase):
     def _resolve_plan(
         self,
@@ -247,6 +269,77 @@ class ChatRuntimeSqlAlignmentTests(SimpleTestCase):
             str(plan.reason or "").startswith("sql_rejected:")
             or str(plan.reason or "") in {"no_allowed_dimension", "unsupported_dimension"}
         )
+
+    def test_employee_birthdays_in_may_use_sql_assisted(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "IA_DEV_USE_OPENAI_CLASSIFIER": "0",
+                "IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0",
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            resolved_intent = QueryIntentResolver().resolve(
+                message="Cumpleaños de mayo",
+                base_classification={"domain": "general", "intent": "general_question"},
+                semantic_context=_employee_birthday_context(),
+            )
+            resolved_query = ResolvedQuerySpec(
+                intent=resolved_intent,
+                semantic_context=_employee_birthday_context(),
+                normalized_filters={"fnacimiento_month": "5", "estado": "ACTIVO"},
+                normalized_period={},
+            )
+            plan = QueryExecutionPlanner().plan(
+                run_context=RunContext.create(message="Cumpleaños de mayo", session_id="birthday-may", reset_memory=False),
+                resolved_query=resolved_query,
+            )
+
+        self.assertEqual(str(resolved_intent.domain_code or ""), "empleados")
+        self.assertEqual(plan.strategy, "sql_assisted")
+        self.assertIn("MONTH(fnacimiento) = 5", str(plan.sql_query or ""))
+        self.assertEqual(str((plan.metadata or {}).get("compiler") or ""), "employee_semantic_sql")
+
+    def test_employee_birthdays_in_may_grouped_by_area_use_sql_assisted(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "IA_DEV_USE_OPENAI_CLASSIFIER": "0",
+                "IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0",
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            resolved_intent = QueryIntentResolver().resolve(
+                message="cumpleanos de mayo por area",
+                base_classification={"domain": "general", "intent": "general_question"},
+                semantic_context=_employee_birthday_context(),
+            )
+            resolved_query = ResolvedQuerySpec(
+                intent=resolved_intent,
+                semantic_context=_employee_birthday_context(),
+                normalized_filters={"fnacimiento_month": "5", "estado": "ACTIVO"},
+                normalized_period={},
+            )
+            plan = QueryExecutionPlanner().plan(
+                run_context=RunContext.create(message="cumpleanos de mayo por area", session_id="birthday-area", reset_memory=False),
+                resolved_query=resolved_query,
+            )
+
+        self.assertEqual(str(resolved_intent.domain_code or ""), "empleados")
+        self.assertEqual(str(resolved_intent.operation or ""), "aggregate")
+        self.assertEqual(list(resolved_intent.group_by or []), ["area"])
+        self.assertEqual(plan.strategy, "sql_assisted")
+        self.assertIn("MONTH(fnacimiento) = 5", str(plan.sql_query or ""))
+        self.assertIn("SELECT area AS area, COUNT(*) AS total_registros", str(plan.sql_query or ""))
+        self.assertIn("GROUP BY area", str(plan.sql_query or ""))
+        self.assertEqual(list((plan.metadata or {}).get("dimensions_used") or []), ["area"])
+        self.assertEqual(str((plan.metadata or {}).get("compiler") or ""), "employee_semantic_sql")
 
     def test_pilot_report_counts_sql_assisted_and_physical_columns(self):
         observability = MagicMock()

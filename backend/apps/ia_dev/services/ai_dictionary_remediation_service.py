@@ -245,9 +245,9 @@ class AIDictionaryRemediationService:
             self._field("cincosas_cincosas", "cinco_base_de_personal", "movil", "movil"),
             self._field("cincosas_cincosas", "cinco_base_de_personal", "tipo", "tipo_labor", capabilities={"supports_filter": True, "supports_group_by": True, "supports_dimension": True}),
             self._field("cincosas_cincosas", "cinco_base_de_personal", "zona_nodo", "sede", capabilities={"supports_filter": True, "supports_group_by": True, "supports_dimension": True}),
-            self._field("cincosas_cincosas", "cinco_base_de_personal", "fnacimiento", "fecha_nacimiento", capabilities={"is_date": True}),
-            self._field("cincosas_cincosas", "cinco_base_de_personal", "fecha_ingreso", "fecha_ingreso", capabilities={"supports_filter": True, "is_date": True}),
-            self._field("cincosas_cincosas", "cinco_base_de_personal", "fecha_egreso", "fecha_egreso", capabilities={"supports_filter": True, "is_date": True}),
+            self._field("cincosas_cincosas", "cinco_base_de_personal", "fnacimiento", "fecha_nacimiento", capabilities={"supports_filter": True, "supports_group_by": True, "supports_dimension": True, "is_date": True}),
+            self._field("cincosas_cincosas", "cinco_base_de_personal", "fecha_ingreso", "fecha_ingreso", capabilities={"supports_filter": True, "supports_group_by": True, "supports_dimension": True, "is_date": True}),
+            self._field("cincosas_cincosas", "cinco_base_de_personal", "fecha_egreso", "fecha_egreso", capabilities={"supports_filter": True, "supports_group_by": True, "supports_dimension": True, "is_date": True}),
         ]
 
     def _curated_relations(self, *, domain_code: str) -> list[dict[str, Any]]:
@@ -286,6 +286,34 @@ class AIDictionaryRemediationService:
 
     def _curated_synonyms(self, *, domain_code: str) -> list[tuple[str, str]]:
         base = [("area", "areas"), ("cargo", "cargos"), ("empleado", "empleados"), ("sede", "sedes")]
+        if domain_code == "empleados":
+            base.extend(
+                [
+                    ("empleados", "personal"),
+                    ("empleados", "colaboradores"),
+                    ("empleados", "personas"),
+                    ("empleado", "trabajador"),
+                    ("empleados", "trabajadores"),
+                    ("fecha_nacimiento", "cumpleanos"),
+                    ("fecha_nacimiento", "cumple"),
+                    ("fecha_nacimiento", "nacimiento"),
+                    ("fecha_nacimiento", "fecha de nacimiento"),
+                    ("fecha_ingreso", "antiguedad"),
+                    ("fecha_egreso", "retiro"),
+                    ("fecha_egreso", "salida"),
+                    ("area", "dependencia"),
+                    ("area", "dependencias"),
+                    ("area", "departamento"),
+                    ("area", "departamentos"),
+                    ("area", "unidad"),
+                    ("area", "unidades"),
+                    ("cargo", "puesto"),
+                    ("cargo", "puestos"),
+                    ("cargo", "rol"),
+                    ("supervisor", "jefe"),
+                    ("supervisor", "lider"),
+                ]
+            )
         if domain_code == "ausentismo":
             base.extend([("ausentismo", "ausencia"), ("justificacion", "motivo")])
         if domain_code == "transporte":

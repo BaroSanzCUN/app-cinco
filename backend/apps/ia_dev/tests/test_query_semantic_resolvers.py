@@ -187,6 +187,8 @@ class _FakeDictionaryTool:
                     "table_name": "cinco_base_de_personal",
                     "campo_logico": "fecha_nacimiento",
                     "column_name": "fnacimiento",
+                    "es_filtro": True,
+                    "es_group_by": True,
                     "is_date": True,
                 },
                 {
@@ -211,6 +213,9 @@ class _FakeDictionaryTool:
                 {"termino": "supervisor", "sinonimo": "lider"},
                 {"termino": "activo", "sinonimo": "habilitado"},
                 {"termino": "activo", "sinonimo": "habilitados"},
+                {"termino": "fecha_nacimiento", "sinonimo": "cumpleanos"},
+                {"termino": "fecha_nacimiento", "sinonimo": "nacimiento"},
+                {"termino": "fecha_ingreso", "sinonimo": "antiguedad"},
             ],
         }
 
@@ -656,7 +661,7 @@ class QuerySemanticResolversTests(SimpleTestCase):
         self.assertEqual(plan.strategy, "capability")
         self.assertEqual(plan.capability_id, "empleados.detail.v1")
 
-    def test_query_execution_planner_routes_birthday_month_to_employee_detail(self):
+    def test_query_execution_planner_routes_birthday_month_to_sql_assisted(self):
         planner = QueryExecutionPlanner()
         resolved = ResolvedQuerySpec(
             intent=StructuredQueryIntent(
@@ -668,8 +673,18 @@ class QuerySemanticResolversTests(SimpleTestCase):
                 confidence=0.9,
             ),
             semantic_context={
-                "tables": [{"table_name": "cinco_base_de_personal"}],
-                "columns": [{"column_name": "fnacimiento"}, {"column_name": "cedula"}],
+                "domain_status": "active",
+                "supports_sql_assisted": True,
+                "tables": [{"table_name": "cinco_base_de_personal", "table_fqn": "cincosas_cincosas.cinco_base_de_personal"}],
+                "columns": [{"column_name": "fnacimiento"}, {"column_name": "cedula"}, {"column_name": "estado"}],
+                "column_profiles": [
+                    {"table_name": "cinco_base_de_personal", "logical_name": "fecha_nacimiento", "column_name": "fnacimiento", "supports_filter": True, "supports_group_by": True, "is_date": True},
+                    {"table_name": "cinco_base_de_personal", "logical_name": "cedula", "column_name": "cedula", "is_identifier": True},
+                    {"table_name": "cinco_base_de_personal", "logical_name": "estado_empleado", "column_name": "estado", "supports_filter": True, "allowed_values": ["ACTIVO", "INACTIVO"]},
+                ],
+                "allowed_tables": ["cinco_base_de_personal", "cincosas_cincosas.cinco_base_de_personal"],
+                "allowed_columns": ["fnacimiento", "cedula", "estado"],
+                "source_of_truth": {"pilot_sql_assisted_enabled": True},
             },
             normalized_filters={"fnacimiento_month": "5", "estado": "ACTIVO"},
             normalized_period={},
@@ -678,6 +693,9 @@ class QuerySemanticResolversTests(SimpleTestCase):
             os.environ,
             {
                 "IA_DEV_CAP_EMPLEADOS_ENABLED": "1",
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
             },
             clear=False,
         ):
@@ -685,8 +703,9 @@ class QuerySemanticResolversTests(SimpleTestCase):
                 run_context=RunContext.create(message=resolved.intent.raw_query, session_id="test", reset_memory=False),
                 resolved_query=resolved,
             )
-        self.assertEqual(plan.strategy, "capability")
-        self.assertEqual(plan.capability_id, "empleados.detail.v1")
+        self.assertEqual(plan.strategy, "sql_assisted")
+        self.assertIn("MONTH(fnacimiento) = 5", str(plan.sql_query or ""))
+        self.assertEqual(str((plan.metadata or {}).get("compiler") or ""), "employee_semantic_sql")
 
     def test_semantic_business_resolver_maps_birthday_month_to_detail_filter(self):
         resolver = SemanticBusinessResolver(
@@ -736,9 +755,64 @@ class QuerySemanticResolversTests(SimpleTestCase):
             semantic_context_override=semantic_context,
         )
         self.assertEqual(str(resolved.normalized_filters.get("fnacimiento_month") or ""), "5")
-        self.assertEqual(resolved.intent.operation, "detail")
-        self.assertEqual(resolved.intent.template_id, "detail_by_entity_and_period")
+        self.assertEqual(resolved.intent.operation, "count")
+        self.assertEqual(resolved.intent.template_id, "count_records_by_period")
         self.assertNotIn("temporal_scope_ambiguous", resolved.warnings)
+        field_match = dict(((resolved.semantic_context or {}).get("resolved_semantic") or {}).get("field_match") or {})
+        self.assertEqual(str(field_match.get("logical_name") or ""), "fecha_nacimiento")
+        self.assertIn("birthday", list(field_match.get("business_concepts") or []))
+
+    def test_semantic_business_resolver_maps_birthday_group_by_month(self):
+        resolver = SemanticBusinessResolver(
+            registry=_FakeRegistry(_FakeDomain(raw_context={})),
+            dictionary_tool=_FakeDictionaryTool(),
+        )
+        intent = StructuredQueryIntent(
+            raw_query="cumpleanos por mes",
+            domain_code="empleados",
+            operation="aggregate",
+            template_id="aggregate_by_group_and_period",
+            filters={},
+            group_by=["birth_month"],
+            metrics=["count"],
+            confidence=0.8,
+        )
+        resolved = resolver.resolve_query(
+            message=intent.raw_query,
+            intent=intent,
+            base_classification={"domain": "empleados"},
+        )
+        self.assertIn("birth_month", list(resolved.intent.group_by or []))
+        field_match = dict(((resolved.semantic_context or {}).get("resolved_semantic") or {}).get("field_match") or {})
+        self.assertEqual(str(field_match.get("semantic_role") or ""), "person_birth_date")
+
+    def test_semantic_business_resolver_exposes_group_by_candidate_metadata_for_birthday_by_area(self):
+        resolver = SemanticBusinessResolver(
+            registry=_FakeRegistry(_FakeDomain(raw_context={})),
+            dictionary_tool=_FakeDictionaryTool(),
+        )
+        intent = StructuredQueryIntent(
+            raw_query="cumpleanos de mayo por area",
+            domain_code="empleados",
+            operation="aggregate",
+            template_id="aggregate_by_group_and_period",
+            filters={"fnacimiento_month": "5"},
+            group_by=["area"],
+            metrics=["count"],
+            confidence=0.88,
+        )
+        resolved = resolver.resolve_query(
+            message=intent.raw_query,
+            intent=intent,
+            base_classification={"domain": "empleados"},
+        )
+        group_candidates = list(((resolved.semantic_context or {}).get("resolved_semantic") or {}).get("group_by_candidates") or [])
+        self.assertTrue(group_candidates)
+        self.assertEqual(str(group_candidates[0].get("business_name") or ""), "area")
+        self.assertEqual(str(group_candidates[0].get("physical_column") or ""), "area")
+        self.assertEqual(str(group_candidates[0].get("table") or ""), "cinco_base_de_personal")
+        self.assertEqual(str(group_candidates[0].get("semantic_role") or ""), "organizational_dimension")
+        self.assertIn("group_by", list(group_candidates[0].get("allowed_operations") or []))
 
     def test_semantic_business_resolver_inferrs_group_by_area_from_plural_question(self):
         fake_domain = _FakeDomain(
@@ -1085,6 +1159,52 @@ class QuerySemanticResolversTests(SimpleTestCase):
         self.assertEqual(str(resolved.normalized_filters.get("estado") or ""), "ACTIVO")
         self.assertEqual(str(resolved.normalized_filters.get("estado_empleado") or ""), "ACTIVO")
         self.assertIn("area", list(resolved.intent.group_by or []))
+
+    def test_semantic_business_resolver_treats_personal_activo_hoy_as_current_population_count(self):
+        fake_domain = _FakeDomain(
+            raw_context={
+                "tables": [
+                    {
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "cinco_base_de_personal",
+                        "table_fqn": "cincosas_cincosas.cinco_base_de_personal",
+                        "rol": "dimension",
+                        "es_principal": True,
+                    }
+                ],
+                "columns": [
+                    {"table_name": "cinco_base_de_personal", "column_name": "estado", "nombre_columna_logico": "estado_empleado"},
+                    {"table_name": "cinco_base_de_personal", "column_name": "fecha_ingreso", "nombre_columna_logico": "fecha_ingreso"},
+                ],
+                "relationships": [],
+                "flags": {"sql_asistido_permitido": False},
+            }
+        )
+        resolver = SemanticBusinessResolver(
+            registry=_FakeRegistry(fake_domain),
+            dictionary_tool=_FakeDictionaryTool(),
+        )
+        intent = StructuredQueryIntent(
+            raw_query="personal activo hoy",
+            domain_code="empleados",
+            operation="count",
+            template_id="count_records_by_period",
+            filters={},
+            period={"label": "hoy", "start_date": "2026-05-04", "end_date": "2026-05-04"},
+            group_by=[],
+            metrics=["count"],
+            confidence=0.9,
+        )
+        resolved = resolver.resolve_query(
+            message=intent.raw_query,
+            intent=intent,
+            base_classification={"domain": "empleados"},
+        )
+        self.assertEqual(str(resolved.intent.operation or ""), "count")
+        self.assertEqual(str(resolved.intent.template_id or ""), "count_entities_by_status")
+        self.assertEqual(str(resolved.normalized_filters.get("estado") or ""), "ACTIVO")
+        temporal_scope = dict(((resolved.semantic_context or {}).get("resolved_semantic") or {}).get("temporal_scope") or {})
+        self.assertEqual(temporal_scope, {})
 
     def test_semantic_business_resolver_preserves_group_by_from_domain_scope_when_dictionary_profile_is_weaker(self):
         fake_domain = _FakeDomain(
