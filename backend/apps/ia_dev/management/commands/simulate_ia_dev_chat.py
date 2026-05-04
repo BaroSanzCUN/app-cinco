@@ -1,16 +1,21 @@
 import json
 import os
+import sys
 from datetime import date, datetime
 from typing import Any, Callable
 from urllib import error, request
 
 from django.core.management.base import BaseCommand, CommandError
 
+from apps.ia_dev.application.orchestration.chat_application_service import (
+    ChatApplicationService,
+)
 from apps.ia_dev.application.runtime.service_runtime_bootstrap import (
     SERVICE_RUNTIME_DEFAULTS,
     apply_service_runtime_bootstrap,
 )
-from apps.ia_dev.services.orchestrator_service import IADevOrchestratorService
+from apps.ia_dev.services.observability_service import ObservabilityService
+from apps.ia_dev.services.orchestrator_legacy_runtime import LegacyOrchestratorRuntime
 
 
 class _RealtimeObservabilityProxy:
@@ -69,7 +74,7 @@ class Command(BaseCommand):
             "--mode",
             choices=["service", "http"],
             default="service",
-            help="service: llama IADevOrchestratorService directo. http: llama POST /ia-dev/chat/.",
+            help="service: llama ChatApplicationService directo. http: llama POST /ia-dev/chat/.",
         )
         parser.add_argument(
             "--skip-service-runtime-bootstrap",
@@ -124,6 +129,7 @@ class Command(BaseCommand):
         parser.add_argument("--timeout", type=int, default=45)
 
     def handle(self, *args, **options):
+        self._prepare_terminal_io()
         mode = str(options.get("mode") or "service").strip().lower()
         interactive = bool(options.get("interactive"))
         raw = bool(options.get("raw"))
@@ -154,7 +160,7 @@ class Command(BaseCommand):
             )
             return
 
-        message = str(options.get("message") or "").strip()
+        message = self._normalize_cli_message(str(options.get("message") or ""))
         if not message:
             raise CommandError("Debes enviar --message o usar --interactive.")
 
@@ -194,7 +200,7 @@ class Command(BaseCommand):
         current_live_mode = live_mode
         while True:
             try:
-                message = input("tu> ").strip()
+                message = self._normalize_cli_message(input("tu> "))
             except (EOFError, KeyboardInterrupt):
                 self.stdout.write("")
                 self.stdout.write("Fin de sesion.")
@@ -286,17 +292,22 @@ class Command(BaseCommand):
         actor_user_key: str | None,
         live_mode: str,
     ) -> dict:
-        service = IADevOrchestratorService()
+        service = ChatApplicationService()
+        legacy_runtime = LegacyOrchestratorRuntime()
+        observability = ObservabilityService()
         if live_mode in {"compact", "full"}:
-            service.observability = _RealtimeObservabilityProxy(
-                base=service.observability,
+            observability = _RealtimeObservabilityProxy(
+                base=observability,
                 on_event=lambda event: self._emit_live_event(event=event, live_mode=live_mode),
             )
             self.stdout.write(self.style.WARNING(f"live> observability en tiempo real ({live_mode})"))
+        legacy_runtime.observability = observability
         return service.run(
             message=message,
             session_id=session_id,
             reset_memory=reset_memory,
+            legacy_runner=lambda **kwargs: legacy_runtime.run(**kwargs),
+            observability=observability,
             actor_user_key=actor_user_key,
         )
 
@@ -369,9 +380,14 @@ class Command(BaseCommand):
 
     def _print_flow_summary(self, *, payload: dict, flow_mode: str) -> None:
         orchestrator = dict(payload.get("orchestrator") or {})
-        capability_shadow = dict(orchestrator.get("capability_shadow") or {})
-        route = dict(capability_shadow.get("route") or {})
-        qi_payload = dict(capability_shadow.get("query_intelligence") or {})
+        runtime_meta = dict((payload.get("data_sources") or {}).get("runtime") or {})
+        route = {
+            "selected_capability_id": str(orchestrator.get("selected_capability_id") or ""),
+            "execute_capability": str(orchestrator.get("runtime_flow") or "") == "handler",
+            "use_legacy": str(orchestrator.get("runtime_flow") or "") == "legacy_fallback",
+            "reason": str(orchestrator.get("fallback_reason") or ""),
+        }
+        qi_payload = dict((payload.get("data_sources") or {}).get("query_intelligence") or {})
         execution_plan = dict(qi_payload.get("execution_plan") or {})
         query_pattern_fastpath = dict(qi_payload.get("query_pattern_fastpath") or {})
         intent = dict(qi_payload.get("intent") or {})
@@ -392,7 +408,7 @@ class Command(BaseCommand):
         if route:
             self.stdout.write(
                 "  route: "
-                f"capability={str(route.get('selected_capability_id') or '-')}"
+                f"capability={str(route.get('selected_capability_id') or runtime_meta.get('task_state_key') or '-')}"
                 f" | execute={bool(route.get('execute_capability'))}"
                 f" | use_legacy={bool(route.get('use_legacy'))}"
                 f" | reason={str(route.get('reason') or '-')}"
@@ -478,6 +494,41 @@ class Command(BaseCommand):
             if len(trace) > limit:
                 pending = len(trace) - limit
                 self.stdout.write(f"    ... +{pending} etapas mas")
+
+    @staticmethod
+    def _prepare_terminal_io() -> None:
+        for stream in (getattr(sys, "stdin", None), getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
+            if stream is None or not hasattr(stream, "reconfigure"):
+                continue
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+
+    @classmethod
+    def _normalize_cli_message(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        repaired = cls._repair_terminal_mojibake(text)
+        return str(repaired or text).strip()
+
+    @staticmethod
+    def _repair_terminal_mojibake(value: str) -> str:
+        text = str(value or "")
+        if not text:
+            return ""
+        suspicious_markers = ("Ã", "Â", "â€™", "â€œ", "â€", "ðŸ")
+        if not any(marker in text for marker in suspicious_markers):
+            return text
+        for source_encoding in ("cp1252", "latin-1"):
+            try:
+                repaired = text.encode(source_encoding, errors="strict").decode("utf-8", errors="strict")
+            except Exception:
+                continue
+            if repaired and repaired != text:
+                return repaired
+        return text
 
     @staticmethod
     def _resolve_flow_mode(*, requested_mode: str, interactive: bool) -> str:
@@ -637,9 +688,34 @@ class Command(BaseCommand):
             or ""
         ).strip().lower()
         orchestrator_domain = str(orchestrator.get("domain") or "").strip().lower()
-        if capability_resolved.startswith("attendance.") and orchestrator_domain == "attendance":
+        final_runtime_domain = str(
+            orchestrator.get("final_domain")
+            or execution_plan.get("domain_code")
+            or canonical_resolution.get("domain_code")
+            or semantic_normalization.get("domain_code")
+            or intent.get("domain_code")
+            or ""
+        ).strip().lower()
+        runtime_flow = str(orchestrator.get("runtime_flow") or "").strip().lower()
+        execution_strategy = str(execution_plan.get("strategy") or "").strip().lower()
+        arbitrated_intent = str(
+            orchestrator.get("arbitrated_intent")
+            or orchestrator.get("final_intent")
+            or ""
+        ).strip().lower()
+        execution_domain = str(execution_plan.get("domain_code") or "").strip().lower()
+        sql_assisted_runtime = runtime_flow == "sql_assisted" or execution_strategy == "sql_assisted"
+        if sql_assisted_runtime and final_runtime_domain not in {"", "general", "legacy"}:
+            codigo_dominio = final_runtime_domain
+        elif (
+            runtime_flow == "sql_assisted"
+            and arbitrated_intent == "analytics_query"
+            and "ausentismo" in {orchestrator_domain, execution_domain}
+        ):
+            codigo_dominio = "ausentismo"
+        if not sql_assisted_runtime and capability_resolved.startswith("attendance.") and orchestrator_domain == "attendance":
             codigo_dominio = "attendance"
-        elif capability_resolved.startswith("empleados.") and orchestrator_domain == "empleados":
+        elif not sql_assisted_runtime and capability_resolved.startswith("empleados.") and orchestrator_domain == "empleados":
             codigo_dominio = "empleados"
         if codigo_dominio in {"", "general"}:
             if capability_resolved.startswith("empleados."):

@@ -220,6 +220,8 @@ class DictionaryToolService:
         code_map = {
             "ausentismo": "AUSENTISMOS",
             "empleados": "EMPLEADOS",
+            "transport": "TRANSPORTE",
+            "transporte": "TRANSPORTE",
             "general": "GENERAL",
             "knowledge": "GENERAL",
             "legacy": "GENERAL",

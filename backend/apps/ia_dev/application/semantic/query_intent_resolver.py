@@ -338,6 +338,19 @@ class QueryIntentResolver:
             if "turnover_rate" not in merged_metrics:
                 merged_metrics.insert(0, "turnover_rate")
 
+        if QueryIntentResolver._is_attendance_analytics_guardrail_query(
+            normalized=normalized_raw_query,
+            base_domain=fallback_domain or resolved_domain,
+        ):
+            resolved_domain = "ausentismo"
+            operation = str(fallback.operation or ("aggregate" if merged_group_by else "summary")).strip().lower()
+            template_id = str(
+                fallback.template_id
+                or ("aggregate_by_group_and_period" if merged_group_by else "count_records_by_period")
+            ).strip().lower()
+            merged_filters = dict(fallback_filters)
+            merged_filters.setdefault("indicador_ausentismo", "SI")
+
         return StructuredQueryIntent(
             raw_query=fallback.raw_query,
             domain_code=resolved_domain,
@@ -445,6 +458,7 @@ class QueryIntentResolver:
             "supervisor": ("supervisor", "supervisores", "jefe", "jefes", "lider", "lideres"),
             "area": ("area", "areas"),
             "cargo": ("cargo", "cargos"),
+            "sede": ("sede", "sedes"),
             "carpeta": ("carpeta", "carpetas"),
             "tipo_labor": ("labor", "labores", "tipo_labor", "tipo labor", "tipo de labor"),
             "centro_costo": ("centro costo", "centro de costo", "centros de costo", "cc"),
@@ -749,9 +763,17 @@ class QueryIntentResolver:
             or re.search(r"^\s*(?:info|informacion|detalle|datos|ficha)\s+[a-z0-9_-]{3,40}\s*$", str(normalized or ""))
         )
         attendance_reason_match = bool(QueryIntentResolver._extract_attendance_reason_filter(normalized=normalized))
-        attendance_match = any(token in normalized for token in ("ausent", "asistencia", "injustific")) or attendance_reason_match
+        attendance_match = any(
+            token in normalized
+            for token in ("ausent", "ausenc", "ausencia", "ausencias", "asistencia", "injustific", "incapacidad", "incapacidades")
+        ) or attendance_reason_match
         if domain == "ausentismo":
             return domain
+        if QueryIntentResolver._is_attendance_analytics_guardrail_query(
+            normalized=normalized,
+            base_domain=domain,
+        ):
+            return "ausentismo"
         if domain in {"empleados", "rrhh"} and attendance_match:
             return "ausentismo"
         if domain == "empleados":
@@ -834,7 +856,7 @@ class QueryIntentResolver:
     def _has_group_dimension_signal(normalized: str) -> bool:
         return bool(
             re.search(
-                r"\b(supervisor(?:es)?|jefe(?:s)?|lider(?:es)?|area|areas|cargo|cargos|carpeta|carpetas|labor(?:es)?|tipo_labor|tipo\s+labor|tipo\s+de\s+labor|centro\s+de\s+costo|centro\s+costo|cc)\b",
+                r"\b(supervisor(?:es)?|jefe(?:s)?|lider(?:es)?|area|areas|cargo|cargos|sede|sedes|carpeta|carpetas|labor(?:es)?|tipo_labor|tipo\s+labor|tipo\s+de\s+labor|centro\s+de\s+costo|centro\s+costo|cc)\b",
                 str(normalized or ""),
             )
         )
@@ -855,7 +877,7 @@ class QueryIntentResolver:
     def _has_explicit_grouping_phrase(normalized: str) -> bool:
         return bool(
             re.search(
-                r"\bpor\s+(supervisor(?:es)?|jefe(?:s)?|lider(?:es)?|area|areas|cargo|cargos|carpeta|carpetas|labor(?:es)?|tipo_labor|tipo\s+labor|tipo\s+de\s+labor)\b",
+                r"\bpor\s+(supervisor(?:es)?|jefe(?:s)?|lider(?:es)?|area|areas|cargo|cargos|sede|sedes|carpeta|carpetas|labor(?:es)?|tipo_labor|tipo\s+labor|tipo\s+de\s+labor)\b",
                 str(normalized or ""),
             )
         )
@@ -863,6 +885,8 @@ class QueryIntentResolver:
     @staticmethod
     def _has_aggregate_signal(normalized: str) -> bool:
         text = str(normalized or "")
+        if "patron" in text or "patrones" in text:
+            return True
         if "concentra" in text or "concentran" in text:
             return True
         if "distribucion" in text or "participacion" in text:
@@ -874,6 +898,54 @@ class QueryIntentResolver:
         ):
             return True
         return False
+
+    @staticmethod
+    def _starts_with_analytics_question(normalized: str) -> bool:
+        return bool(re.match(r"^\s*(que|cuales|como|donde|quienes)\b", str(normalized or "")))
+
+    @classmethod
+    def _is_attendance_analytics_guardrail_query(cls, *, normalized: str, base_domain: str) -> bool:
+        text = str(normalized or "")
+        if not cls._starts_with_analytics_question(text):
+            return False
+        if any(
+            token in text
+            for token in (
+                "crear regla",
+                "nueva regla",
+                "agregar regla",
+                "actualizar regla",
+                "modificar regla",
+                "ajustar regla",
+                "propuesta",
+                "gobernanza",
+                "knowledge",
+            )
+        ):
+            return False
+        analytics_terms = (
+            "patron",
+            "patrones",
+            "area",
+            "areas",
+            "cargo",
+            "cargos",
+            "sede",
+            "sedes",
+            "ausent",
+            "ausenc",
+            "ausencia",
+            "ausencias",
+            "incapacidad",
+            "incapacidades",
+        )
+        if not any(token in text for token in analytics_terms):
+            return False
+        if any(token in text for token in ("ausent", "ausenc", "ausencia", "ausencias", "incapacidad", "incapacidades")):
+            return True
+        if normalizar_codigo_dominio(base_domain) == "ausentismo":
+            return True
+        return "patron" in text and any(token in text for token in ("area", "areas", "cargo", "cargos", "sede", "sedes"))
 
     @staticmethod
     def _has_identifier_signal(normalized: str) -> bool:

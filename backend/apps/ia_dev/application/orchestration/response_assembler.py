@@ -29,8 +29,7 @@ class LegacyResponseAssembler:
         memory_effects: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         # Defensive deep-copy to avoid shared nested references between
-        # `legacy_response` and metadata snapshots (e.g. query_intelligence.precomputed_response).
-        # Shared references can become circular once we inject capability_shadow into orchestrator.
+        # `legacy_response` and metadata snapshots.
         response = ensure_chat_response_contract(copy.deepcopy(legacy_response))
 
         # Always expose memory loop outputs for incremental frontend adoption.
@@ -47,6 +46,7 @@ class LegacyResponseAssembler:
             run_context=run_context,
         )
         self._inject_frontend_presentation(response=response)
+        self._inject_business_response_summary(response=response)
         self._inject_query_intelligence_semantic_diagnostics(
             response=response,
             run_context=run_context,
@@ -56,98 +56,6 @@ class LegacyResponseAssembler:
             run_context=run_context,
         )
 
-        if not run_context.is_shadow_mode and not run_context.is_capability_mode_requested:
-            return response
-
-        orchestrator = copy.deepcopy(response.get("orchestrator") or {})
-        proactive_loop = copy.deepcopy(dict(run_context.metadata.get("proactive_loop") or {}))
-        query_intelligence = copy.deepcopy(dict(run_context.metadata.get("query_intelligence") or {}))
-        orchestrator["capability_shadow"] = {
-            "run_id": run_context.run_id,
-            "trace_id": run_context.trace_id,
-            "routing_mode": run_context.routing_mode,
-            "planned_capability": copy.deepcopy(planned_capability),
-            "route": copy.deepcopy(route),
-            "policy": {
-                "action": policy_decision.action.value,
-                "policy_id": policy_decision.policy_id,
-                "reason": policy_decision.reason,
-                "metadata": dict(policy_decision.metadata or {}),
-            },
-            "divergence": copy.deepcopy(divergence),
-            "memory": {
-                "candidate_count": len(response.get("memory_candidates") or []),
-                "pending_proposals_count": len(response.get("pending_proposals") or []),
-            },
-            "proactive_loop": proactive_loop,
-            "query_intelligence": query_intelligence,
-        }
-        response["orchestrator"] = orchestrator
-
-        trace = copy.deepcopy(response.get("trace") or [])
-        trace.append(
-            self._trace_event(
-                phase="capability_planner",
-                status="ok",
-                detail={
-                    "run_id": run_context.run_id,
-                    "trace_id": run_context.trace_id,
-                    "planned_capability_id": planned_capability.get("capability_id"),
-                    "reason": planned_capability.get("reason"),
-                },
-            )
-        )
-        trace.append(
-            self._trace_event(
-                phase="policy_guard",
-                status="ok",
-                detail={
-                    "action": policy_decision.action.value,
-                    "policy_id": policy_decision.policy_id,
-                    "reason": policy_decision.reason,
-                },
-            )
-        )
-        trace.append(
-            self._trace_event(
-                phase="capability_router",
-                status="ok",
-                detail=route,
-            )
-        )
-        trace.append(
-            self._trace_event(
-                phase="capability_divergence",
-                status="warning" if divergence.get("diverged") else "ok",
-                detail=divergence,
-            )
-        )
-        if response.get("memory_candidates"):
-            trace.append(
-                self._trace_event(
-                    phase="memory_feedback_loop",
-                    status="ok",
-                    detail={
-                        "candidate_count": len(response.get("memory_candidates") or []),
-                        "pending_count": len(response.get("pending_proposals") or []),
-                    },
-                )
-            )
-        if proactive_loop:
-            trace.append(
-                self._trace_event(
-                    phase="proactive_loop",
-                    status="ok" if not proactive_loop.get("used_legacy") else "warning",
-                    detail={
-                        "enabled": bool(proactive_loop.get("enabled")),
-                        "iterations_ran": int(proactive_loop.get("iterations_ran") or 0),
-                        "max_iterations": int(proactive_loop.get("max_iterations") or 0),
-                        "selected_capability_id": proactive_loop.get("selected_capability_id"),
-                        "used_legacy": bool(proactive_loop.get("used_legacy")),
-                    },
-                )
-            )
-        response["trace"] = trace
         return response
 
     def _inject_reasoning_payload(
@@ -319,6 +227,45 @@ class LegacyResponseAssembler:
 
         meta["presentation"] = presentation
         data["meta"] = meta
+        response["data"] = data
+
+    def _inject_business_response_summary(self, *, response: dict[str, Any]) -> None:
+        data = dict(response.get("data") or {})
+        table = dict(data.get("table") or {})
+        findings = [item for item in list(data.get("findings") or []) if isinstance(item, dict)]
+        insights = [str(item or "").strip() for item in list(data.get("insights") or []) if str(item or "").strip()]
+        actions = [item for item in list(response.get("actions") or []) if isinstance(item, dict)]
+        kpis = dict(data.get("kpis") or {})
+
+        dato = ""
+        if int(table.get("rowcount") or 0) > 0:
+            dato = f"{int(table.get('rowcount') or 0)} filas disponibles."
+        elif kpis:
+            first_key = next(iter(kpis.keys()), "")
+            if first_key:
+                dato = f"{first_key}: {kpis.get(first_key)}"
+
+        hallazgo = ""
+        if findings:
+            hallazgo = str(findings[0].get("detail") or findings[0].get("title") or "").strip()
+        if not hallazgo and insights:
+            hallazgo = insights[0]
+
+        recomendacion = ""
+        if len(insights) > 1:
+            recomendacion = insights[1]
+
+        siguiente_accion = ""
+        if actions:
+            siguiente_accion = str(actions[0].get("label") or "").strip()
+
+        data["business_response"] = {
+            "dato": dato,
+            "hallazgo": hallazgo,
+            "riesgo": "",
+            "recomendacion": recomendacion,
+            "siguiente_accion": siguiente_accion,
+        }
         response["data"] = data
 
     @staticmethod
@@ -764,3 +711,6 @@ class LegacyResponseAssembler:
             "detail": detail,
             "active_nodes": ["q", "gpt", "route"],
         }
+
+
+ResponseAssembler = LegacyResponseAssembler

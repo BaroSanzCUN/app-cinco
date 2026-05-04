@@ -41,24 +41,23 @@ La arquitectura favorece:
 
 Punto de entrada principal:
 
-- [orchestrator_service.py](</c:/dev/agente_cinco/app-cinco/backend/apps/ia_dev/services/orchestrator_service.py>)
+- [chat_application_service.py](</c:/dev/agente_cinco/app-cinco/backend/apps/ia_dev/application/orchestration/chat_application_service.py>)
 
 Clase principal:
 
-- `IADevOrchestratorService`
+- `ChatApplicationService`
 
 Metodo principal:
 
-- `IADevOrchestratorService.run()`
+- `ChatApplicationService.run()`
 
 Comportamiento:
 
-- intenta delegar a `ChatApplicationService`
-- si falla, cae al orquestador legacy
+- ejecuta el flujo capability-first, query intelligence y handlers modernos
+- si un caller HTTP necesita contingencia, el fallback legacy queda aislado en `RuntimeFallbackService`
 
 Ruta actual recomendada:
 
-- `IADevOrchestratorService.run()`
 - `ChatApplicationService.run()`
 
 ## Nucleo De Orquestacion
@@ -642,8 +641,7 @@ Recomendado cuando:
 
 ```text
 Usuario
-  -> IADevOrchestratorService.run
-    -> ChatApplicationService.run
+  -> ChatApplicationService.run
       -> bootstrap classification
       -> preload memory
       -> query intelligence
@@ -732,8 +730,8 @@ Revisar:
 
 ## Archivos Mas Importantes Del Sistema
 
-- [orchestrator_service.py](</c:/dev/agente_cinco/app-cinco/backend/apps/ia_dev/services/orchestrator_service.py>)
 - [chat_application_service.py](</c:/dev/agente_cinco/app-cinco/backend/apps/ia_dev/application/orchestration/chat_application_service.py>)
+- [runtime_fallback_service.py](</c:/dev/agente_cinco/app-cinco/backend/apps/ia_dev/services/runtime_fallback_service.py>)
 - [semantic_business_resolver.py](</c:/dev/agente_cinco/app-cinco/backend/apps/ia_dev/application/semantic/semantic_business_resolver.py>)
 - [query_intent_resolver.py](</c:/dev/agente_cinco/app-cinco/backend/apps/ia_dev/application/semantic/query_intent_resolver.py>)
 - [query_execution_planner.py](</c:/dev/agente_cinco/app-cinco/backend/apps/ia_dev/application/semantic/query_execution_planner.py>)

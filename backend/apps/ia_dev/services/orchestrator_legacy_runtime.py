@@ -3,7 +3,6 @@ import hashlib
 import logging
 import os
 import re
-import threading
 import time
 import unicodedata
 from datetime import date, datetime, timedelta
@@ -15,6 +14,7 @@ from apps.ia_dev.application.runtime.service_runtime_bootstrap import (
 )
 from apps.ia_dev.infrastructure.ai.model_routing import resolve_model_name
 
+from .attendance_period_resolver_service import AttendancePeriodResolverService
 from .observability_service import ObservabilityService
 from .dictionary_tool_service import DictionaryToolService
 from .intent_service import IntentClassifierService
@@ -32,7 +32,7 @@ _YES_FOLLOW_UP_RE = re.compile(
 )
 
 
-class IADevOrchestratorService:
+class LegacyOrchestratorRuntime:
     def __init__(self):
         self.runtime_bootstrap = apply_service_runtime_bootstrap()
         self.intent_classifier = IntentClassifierService()
@@ -55,19 +55,10 @@ class IADevOrchestratorService:
         self.followup_model = resolve_model_name("followups")
         self._last_openai_usage: dict | None = None
         self.cause_diagnostics_service = CauseDiagnosticsService()
-        self._delegate_state = threading.local()
-        self._delegate_state.skip = False
-        self._chat_application_service = None
-        try:
-            from apps.ia_dev.application.orchestration.chat_application_service import (
-                ChatApplicationService,
-            )
-
-            self._chat_application_service = ChatApplicationService()
-        except Exception:
-            logger.exception(
-                "No se pudo inicializar ChatApplicationService, se mantiene orchestrator legacy."
-            )
+        self.attendance_period_resolver = AttendancePeriodResolverService(
+            enable_openai_period=self.enable_openai_period,
+            period_model=self.period_model,
+        )
 
     @staticmethod
     def _get_openai_api_key() -> str:
@@ -82,21 +73,6 @@ class IADevOrchestratorService:
         reset_memory: bool = False,
         actor_user_key: str | None = None,
     ) -> dict:
-        if self._chat_application_service is not None and not self._is_delegate_skipped():
-            try:
-                return self._chat_application_service.run(
-                    message=message,
-                    session_id=session_id,
-                    reset_memory=reset_memory,
-                    legacy_runner=self.run_legacy,
-                    observability=self.observability,
-                    actor_user_key=actor_user_key,
-                )
-            except Exception:
-                logger.exception(
-                    "Fallo delegado ChatApplicationService, fallback a orquestador legacy."
-                )
-
         started_at = time.perf_counter()
         tool_latencies_ms: dict[str, int] = {}
         self._last_openai_usage = None
@@ -195,7 +171,7 @@ class IADevOrchestratorService:
         transport_status = data_sources["transport"]
         probe_message = self._extract_period_probe_message(message)
         if probe_message:
-            period_resolution = self.resolve_attendance_period(
+            period_resolution = self.attendance_period_resolver.resolve_attendance_period(
                 message=probe_message,
                 session_id=sid,
             )
@@ -290,7 +266,7 @@ class IADevOrchestratorService:
             }
             self.observability.record_event(
                 event_type="orchestrator_run",
-                source="IADevOrchestratorService",
+                source="LegacyOrchestratorRuntime",
                 duration_ms=total_duration_ms,
                 tokens_in=tokens_in or None,
                 tokens_out=tokens_out or None,
@@ -1399,7 +1375,7 @@ class IADevOrchestratorService:
         }
         self.observability.record_event(
             event_type="orchestrator_run",
-            source="IADevOrchestratorService",
+            source="LegacyOrchestratorRuntime",
             duration_ms=total_duration_ms,
             tokens_in=tokens_in or None,
             tokens_out=tokens_out or None,
@@ -1422,6 +1398,11 @@ class IADevOrchestratorService:
                 "synonyms": dictionary_context.get("synonyms", []),
             }
 
+        response_flow = self._resolve_legacy_response_flow(
+            classification=classification,
+            used_tools=used_tools,
+            reply=reply,
+        )
         return {
             "session_id": sid,
             "reply": reply,
@@ -1433,6 +1414,7 @@ class IADevOrchestratorService:
                 "needs_database": needs_database,
                 "output_mode": output_mode,
                 "used_tools": used_tools,
+                "runtime_flow": response_flow,
             },
             "data": payload,
             "actions": actions,
@@ -1449,84 +1431,19 @@ class IADevOrchestratorService:
             ),
         }
 
-    def run_legacy(
-        self,
-        message: str,
-        session_id: str | None = None,
-        reset_memory: bool = False,
-    ) -> dict:
-        previous = self._is_delegate_skipped()
-        self._set_delegate_skipped(True)
-        try:
-            return self.run(
-                message=message,
-                session_id=session_id,
-                reset_memory=reset_memory,
-            )
-        finally:
-            self._set_delegate_skipped(previous)
-
-    def _is_delegate_skipped(self) -> bool:
-        return bool(getattr(self._delegate_state, "skip", False))
-
-    def _set_delegate_skipped(self, value: bool) -> None:
-        self._delegate_state.skip = bool(value)
-
-    def reset_memory(self, session_id: str) -> dict:
-        sid = (session_id or "").strip()
-        if not sid:
-            return {"error": "session_id is required"}
-
-        SessionMemoryStore.reset(sid)
-        return {
-            "session_id": sid,
-            "memory": SessionMemoryStore.status(sid),
-        }
-
-    def resolve_attendance_period(self, *, message: str, session_id: str | None = None) -> dict:
-        text = str(message or "").strip()
-        if not text:
-            return {"error": "message is required"}
-
-        sid, _ = SessionMemoryStore.get_or_create(session_id)
-        session_context = SessionMemoryStore.get_context(sid)
-        recent_messages = SessionMemoryStore.get_recent_messages(sid, limit=8)
-        rules_period = resolve_period_from_text(text)
-        final_period = self._resolve_period_for_attendance(
-            text,
-            session_context,
-            recent_messages,
-        )
-        period_alternative_hint = self._build_period_alternative_hint(
-            message=text,
-            period=final_period,
-        )
-
-        return {
-            "session_id": sid,
-            "input": {
-                "message": text,
-                "explicit_period_detected": self._has_explicit_period(text),
-            },
-            "resolved_period": self._serialize_period(final_period),
-            "rules_fallback_period": self._serialize_period({**rules_period, "source": "rules"}),
-            "alternative_hint": period_alternative_hint,
-        }
-
     @staticmethod
-    def _serialize_period(period: dict | None) -> dict:
-        item = period or {}
-        start = item.get("start")
-        end = item.get("end")
-        payload = {
-            "label": str(item.get("label") or ""),
-            "source": str(item.get("source") or "rules"),
-            "start_date": start.isoformat() if hasattr(start, "isoformat") else None,
-            "end_date": end.isoformat() if hasattr(end, "isoformat") else None,
-        }
-        if "confidence" in item:
-            payload["confidence"] = item.get("confidence")
-        return payload
+    def _resolve_legacy_response_flow(
+        *,
+        classification: dict[str, Any],
+        used_tools: list[str],
+        reply: str,
+    ) -> str:
+        classifier_source = str(classification.get("classifier_source") or "").strip().lower()
+        if any("attendance" in item or "empleados" in item or "transport" in item for item in list(used_tools or [])):
+            return "handler"
+        if "openai" in classifier_source and str(reply or "").strip():
+            return "openai_only"
+        return "legacy_fallback"
 
     @staticmethod
     def _normalize_text(text: str) -> str:
@@ -1707,10 +1624,10 @@ class IADevOrchestratorService:
         return {
             "capability_id": str(capability_id or ""),
             "generator": str(payload.get("generator") or ""),
-            "confidence": IADevOrchestratorService._safe_float(payload.get("confidence"), 0.0),
+            "confidence": LegacyOrchestratorRuntime._safe_float(payload.get("confidence"), 0.0),
             "validated": bool(payload.get("validated")),
             "top_group": str(payload.get("top_group") or ""),
-            "top_pct": IADevOrchestratorService._safe_float(payload.get("top_pct"), 0.0),
+            "top_pct": LegacyOrchestratorRuntime._safe_float(payload.get("top_pct"), 0.0),
             "fallback_reason": str(payload.get("fallback_reason") or ""),
             "validation_errors": validation_errors,
             "prompt_hash": str(payload.get("prompt_hash") or ""),
@@ -1786,7 +1703,7 @@ class IADevOrchestratorService:
         if observability is not None and hasattr(observability, "record_event"):
             observability.record_event(
                 event_type="cause_diagnostics_result",
-                source="IADevOrchestratorService",
+                source="LegacyOrchestratorRuntime",
                 meta={
                     "run_id": run_id,
                     "trace_id": None,
@@ -2021,7 +1938,7 @@ class IADevOrchestratorService:
 
     @staticmethod
     def _has_explicit_period(text: str) -> bool:
-        msg = IADevOrchestratorService._normalize_text(text)
+        msg = LegacyOrchestratorRuntime._normalize_text(text)
         if re.search(r"\d{4}-\d{2}-\d{2}", msg):
             return True
         if re.search(r"\b(lunes|martes|mi.?rcoles|jueves|viernes|s.?bado|domingo)\b", msg):
@@ -2083,7 +2000,7 @@ class IADevOrchestratorService:
 
     @staticmethod
     def _prefers_rules_period_resolution(normalized_message: str) -> bool:
-        msg = IADevOrchestratorService._normalize_text(normalized_message)
+        msg = LegacyOrchestratorRuntime._normalize_text(normalized_message)
         if any(
             token in msg
             for token in (
@@ -2281,7 +2198,7 @@ class IADevOrchestratorService:
 
     @staticmethod
     def _is_chart_request(message: str) -> bool:
-        normalized = IADevOrchestratorService._normalize_text(message)
+        normalized = LegacyOrchestratorRuntime._normalize_text(message)
         return any(
             token in normalized
             for token in (
@@ -2299,7 +2216,7 @@ class IADevOrchestratorService:
 
     @staticmethod
     def _is_contextual_reference_request(message: str) -> bool:
-        normalized = IADevOrchestratorService._normalize_text(message)
+        normalized = LegacyOrchestratorRuntime._normalize_text(message)
         return any(
             token in normalized
             for token in (
