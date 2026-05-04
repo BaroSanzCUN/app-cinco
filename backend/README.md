@@ -144,7 +144,7 @@ Se agrego un comando de management para simular consultas del frontend:
 
 Modos disponibles:
 
-- `--mode service` (default): llama `IADevOrchestratorService.run(...)` directo, sin levantar servidor.
+- `--mode service` (default): llama `ChatApplicationService.run(...)` directo, sin levantar servidor.
 - `--mode http`: llama `POST /ia-dev/chat/` y emula el flujo del frontend (requiere servidor activo y auth si aplica).
 
 Ejemplos:

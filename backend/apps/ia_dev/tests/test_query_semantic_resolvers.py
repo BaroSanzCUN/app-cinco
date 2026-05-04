@@ -65,6 +65,68 @@ class _DualRegistry(_FakeRegistry):
 class _FakeDictionaryTool:
     @staticmethod
     def get_domain_context(domain: str, *, limit: int = 20) -> dict:
+        normalized = str(domain or "").strip().lower()
+        if normalized in {"ausentismo", "attendance"}:
+            return {
+                "domain": {"id": 2, "code": "AUSENTISMO", "matched": True},
+                "tables": [
+                    {
+                        "id": 10,
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "gestionh_ausentismo",
+                    },
+                    {
+                        "id": 11,
+                        "schema_name": "cincosas_cincosas",
+                        "table_name": "cinco_base_de_personal",
+                    },
+                ],
+                "fields": [
+                    {
+                        "table_name": "gestionh_ausentismo",
+                        "campo_logico": "fecha_ausentismo",
+                        "column_name": "fecha_edit",
+                        "es_filtro": True,
+                        "is_date": True,
+                    },
+                    {
+                        "table_name": "gestionh_ausentismo",
+                        "campo_logico": "cedula",
+                        "column_name": "cedula",
+                        "is_identifier": True,
+                        "es_filtro": True,
+                    },
+                    {
+                        "table_name": "gestionh_ausentismo",
+                        "campo_logico": "justificacion",
+                        "column_name": "justificacion",
+                        "es_filtro": True,
+                        "es_group_by": True,
+                    },
+                    {
+                        "table_name": "gestionh_ausentismo",
+                        "campo_logico": "dias_perdidos",
+                        "column_name": "dias_perdidos",
+                        "es_metrica": True,
+                        "supports_metric": True,
+                    },
+                ],
+                "field_profiles": [],
+                "rules": [{"resultado_funcional": "ausentismo = cedula"}],
+                "relations": [
+                    {
+                        "nombre_relacion": "ausentismo_empleado",
+                        "join_sql": "gestionh_ausentismo.cedula = cinco_base_de_personal.cedula",
+                        "cardinalidad": "many_to_one",
+                    }
+                ],
+                "synonyms": [
+                    {"termino": "justificacion", "sinonimo": "motivo"},
+                    {"termino": "justificacion", "sinonimo": "causa"},
+                    {"termino": "activo", "sinonimo": "habilitado"},
+                    {"termino": "activo", "sinonimo": "habilitados"},
+                ],
+            }
         return {
             "domain": {"id": 1, "code": "EMPLEADOS", "matched": True},
             "tables": [
@@ -98,7 +160,34 @@ class _FakeDictionaryTool:
                     "table_name": "cinco_base_de_personal",
                     "campo_logico": "cargo",
                     "column_name": "cargo",
-                    "es_group_by": False,
+                    "es_group_by": True,
+                },
+                {
+                    "table_name": "cinco_base_de_personal",
+                    "campo_logico": "tipo_labor",
+                    "column_name": "tipo",
+                    "es_filtro": True,
+                    "es_group_by": True,
+                },
+                {
+                    "table_name": "cinco_base_de_personal",
+                    "campo_logico": "fecha_ingreso",
+                    "column_name": "fecha_ingreso",
+                    "es_filtro": True,
+                    "is_date": True,
+                },
+                {
+                    "table_name": "cinco_base_de_personal",
+                    "campo_logico": "fecha_egreso",
+                    "column_name": "fecha_egreso",
+                    "es_filtro": True,
+                    "is_date": True,
+                },
+                {
+                    "table_name": "cinco_base_de_personal",
+                    "campo_logico": "fecha_nacimiento",
+                    "column_name": "fnacimiento",
+                    "is_date": True,
                 },
                 {
                     "table_name": "cinco_base_de_personal",
@@ -135,7 +224,7 @@ class _FakeDictionaryTool:
                 "table_name": "cinco_base_de_personal",
                 "campo_id": 999,
                 "campo_logico": "sede",
-                "column_name": "sede",
+                "column_name": "zona_nodo",
                 "definicion_negocio": "Sede del colaborador",
                 "es_filtro": True,
                 "es_group_by": True,
@@ -152,7 +241,117 @@ class _FakeDictionaryTool:
                 "allowed_aggregations": [],
                 "normalization_strategy": "joined_table_profile",
                 "priority": 90,
-            }
+            },
+            {
+                "table_name": "cinco_base_de_personal",
+                "campo_id": 1000,
+                "campo_logico": "area",
+                "column_name": "area",
+                "definicion_negocio": "Area organizacional",
+                "es_filtro": True,
+                "es_group_by": True,
+                "supports_filter": True,
+                "supports_group_by": True,
+                "supports_metric": False,
+                "supports_dimension": True,
+                "is_date": False,
+                "is_identifier": False,
+                "is_chart_dimension": True,
+                "is_chart_measure": False,
+                "allowed_values": [],
+                "allowed_operators": [],
+                "allowed_aggregations": [],
+                "normalization_strategy": "joined_table_profile",
+                "priority": 90,
+            },
+            {
+                "table_name": "cinco_base_de_personal",
+                "campo_id": 1001,
+                "campo_logico": "cargo",
+                "column_name": "cargo",
+                "definicion_negocio": "Cargo del colaborador",
+                "es_filtro": True,
+                "es_group_by": True,
+                "supports_filter": True,
+                "supports_group_by": True,
+                "supports_metric": False,
+                "supports_dimension": True,
+                "is_date": False,
+                "is_identifier": False,
+                "is_chart_dimension": True,
+                "is_chart_measure": False,
+                "allowed_values": [],
+                "allowed_operators": [],
+                "allowed_aggregations": [],
+                "normalization_strategy": "joined_table_profile",
+                "priority": 90,
+            },
+            {
+                "table_name": "cinco_base_de_personal",
+                "campo_id": 1002,
+                "campo_logico": "supervisor",
+                "column_name": "supervisor",
+                "definicion_negocio": "Supervisor del colaborador",
+                "es_filtro": True,
+                "es_group_by": True,
+                "supports_filter": True,
+                "supports_group_by": True,
+                "supports_metric": False,
+                "supports_dimension": True,
+                "is_date": False,
+                "is_identifier": False,
+                "is_chart_dimension": True,
+                "is_chart_measure": False,
+                "allowed_values": [],
+                "allowed_operators": [],
+                "allowed_aggregations": [],
+                "normalization_strategy": "joined_table_profile",
+                "priority": 90,
+            },
+            {
+                "table_name": "cinco_base_de_personal",
+                "campo_id": 1003,
+                "campo_logico": "carpeta",
+                "column_name": "carpeta",
+                "definicion_negocio": "Carpeta del colaborador",
+                "es_filtro": True,
+                "es_group_by": True,
+                "supports_filter": True,
+                "supports_group_by": True,
+                "supports_metric": False,
+                "supports_dimension": True,
+                "is_date": False,
+                "is_identifier": False,
+                "is_chart_dimension": True,
+                "is_chart_measure": False,
+                "allowed_values": [],
+                "allowed_operators": [],
+                "allowed_aggregations": [],
+                "normalization_strategy": "joined_table_profile",
+                "priority": 90,
+            },
+            {
+                "table_name": "cinco_base_de_personal",
+                "campo_id": 1004,
+                "campo_logico": "tipo_labor",
+                "column_name": "tipo",
+                "definicion_negocio": "Tipo de labor",
+                "es_filtro": True,
+                "es_group_by": True,
+                "supports_filter": True,
+                "supports_group_by": True,
+                "supports_metric": False,
+                "supports_dimension": True,
+                "is_date": False,
+                "is_identifier": False,
+                "is_chart_dimension": True,
+                "is_chart_measure": False,
+                "allowed_values": [],
+                "allowed_operators": [],
+                "allowed_aggregations": [],
+                "normalization_strategy": "joined_table_profile",
+                "priority": 90,
+            },
         ]
 
 
@@ -317,6 +516,81 @@ class QuerySemanticResolversTests(SimpleTestCase):
         self.assertIn("supervisor", list(resolved.intent.group_by or []))
         relation_payload = dict((resolved.semantic_context or {}).get("resolved_semantic") or {})
         self.assertTrue(list(relation_payload.get("relations") or []))
+
+    def test_semantic_business_resolver_uses_dictionary_as_only_structural_source(self):
+        fake_domain = _FakeDomain(
+            raw_context={
+                "tables": [
+                    {
+                        "table_name": "yaml_only_table",
+                        "table_fqn": "demo.yaml_only_table",
+                    }
+                ],
+                "columns": [
+                    {
+                        "table_name": "yaml_only_table",
+                        "column_name": "yaml_only_column",
+                        "nombre_columna_logico": "yaml_only_column",
+                    }
+                ],
+                "relationships": [
+                    {
+                        "nombre_relacion": "yaml_only_relation",
+                        "condicion": "yaml_only_table.id = otra.id",
+                    }
+                ],
+                "contexto_agente": {"descripcion": "Narrativa de prueba"},
+            }
+        )
+        resolver = SemanticBusinessResolver(
+            registry=_FakeRegistry(fake_domain),
+            dictionary_tool=_FakeDictionaryTool(),
+        )
+
+        context = resolver.build_semantic_context(domain_code="ausentismo", include_dictionary=True)
+
+        table_names = {str(item.get("table_name") or "") for item in list(context.get("tables") or [])}
+        column_names = {str(item.get("column_name") or "") for item in list(context.get("columns") or [])}
+        relation_names = {str(item.get("nombre_relacion") or "") for item in list(context.get("relationships") or [])}
+        self.assertIn("gestionh_ausentismo", table_names)
+        self.assertNotIn("yaml_only_table", table_names)
+        self.assertIn("fecha_edit", column_names)
+        self.assertNotIn("yaml_only_column", column_names)
+        self.assertIn("ausentismo_empleado", relation_names)
+        self.assertNotIn("yaml_only_relation", relation_names)
+        source_of_truth = dict(context.get("source_of_truth") or {})
+        self.assertEqual(str(source_of_truth.get("structural_source") or ""), "ai_dictionary")
+        self.assertEqual(str(source_of_truth.get("yaml_role") or ""), "narrative_only")
+        self.assertTrue(bool(source_of_truth.get("yaml_structural_ignored")))
+        self.assertIn("columns", list(context.get("yaml_fields_ignored") or []))
+
+    def test_semantic_business_resolver_reports_missing_dictionary_metadata_without_yaml_fallback(self):
+        fake_domain = _FakeDomain(
+            raw_context={
+                "columns": [
+                    {
+                        "table_name": "cinco_base_de_personal",
+                        "column_name": "zona_nodo",
+                        "nombre_columna_logico": "sede",
+                    }
+                ],
+                "group_by_soportados": ["sede"],
+            }
+        )
+        resolver = SemanticBusinessResolver(
+            registry=_FakeRegistry(fake_domain),
+            dictionary_tool=_FakeDictionaryTool(),
+        )
+
+        context = resolver.build_semantic_context(domain_code="empleados", include_dictionary=True)
+
+        missing = {
+            (str(item.get("type") or ""), str(item.get("value") or ""))
+            for item in list(context.get("missing_dictionary_metadata") or [])
+        }
+        self.assertIn(("dictionary_column_missing", "sede"), missing)
+        self.assertIn(("dictionary_group_by_metadata_missing", "sede"), missing)
+        self.assertNotIn("zona_nodo", list(context.get("allowed_columns") or []))
 
     def test_query_execution_planner_treats_logical_cedula_as_employee_detail_identifier(self):
         planner = QueryExecutionPlanner()

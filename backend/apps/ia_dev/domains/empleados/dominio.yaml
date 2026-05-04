@@ -36,8 +36,11 @@ columnas_clave:
     column_name: movil
     nombre_columna_logico: movil
   - table_name: cinco_base_de_personal
-    column_name: tipo_labor
+    column_name: tipo
     nombre_columna_logico: tipo_labor
+  - table_name: cinco_base_de_personal
+    column_name: zona_nodo
+    nombre_columna_logico: sede
 joins_conocidos:
   - nombre_relacion: empleado_supervisor
     condicion: cinco_base_de_personal.supervisor = cinco_base_de_personal.cedula

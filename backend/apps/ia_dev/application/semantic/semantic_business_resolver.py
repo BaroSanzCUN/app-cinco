@@ -24,7 +24,7 @@ from apps.ia_dev.services.period_service import resolve_period_from_text
 class SemanticBusinessResolver:
     """
     Convierte intencion estructurada en especificacion operativa de negocio
-    usando contexto semantico (YAML + catalogo DB + ai_dictionary).
+    usando ai_dictionary.dd_* como fuente estructural y YAML solo como narrativa.
     """
 
     DOMAIN_TO_DICTIONARY_CODE = {
@@ -35,6 +35,11 @@ class SemanticBusinessResolver:
         "transporte": "transport",
         "transport": "transport",
     }
+    LEGACY_STRUCTURAL_CATALOGS = (
+        "ia_dev_catalogo_*",
+        "dd_campos_semantic_profile",
+        "dd_capacidades_campo",
+    )
 
     def __init__(
         self,
@@ -64,11 +69,18 @@ class SemanticBusinessResolver:
         vocabulario_negocio = list(raw.get("vocabulario_negocio") or [])
         tablas_prioritarias = list(raw.get("tablas_prioritarias") or [])
         columnas_prioritarias = list(raw.get("columnas_prioritarias") or [])
-
-        tables = self._extract_tables(raw)
-        columns = self._extract_columns(raw)
-        relationships = self._extract_relationships(raw)
-        capabilities = list(raw.get("capabilities") or [])
+        yaml_structural_inventory = self._extract_yaml_structural_inventory(raw=raw)
+        yaml_fields_ignored = self._resolve_yaml_field_list(
+            raw=raw,
+            explicit_key="yaml_fields_ignored",
+            structural_inventory=yaml_structural_inventory,
+        )
+        yaml_fields_removed = self._resolve_yaml_field_list(
+            raw=raw,
+            explicit_key="yaml_fields_removed",
+            structural_inventory=yaml_structural_inventory,
+        )
+        capabilities = list(raw.get("capabilities") or raw.get("legacy_capabilities") or [])
         flags = dict(raw.get("flags") or {})
 
         dictionary_context: dict[str, Any] = {}
@@ -93,45 +105,69 @@ class SemanticBusinessResolver:
         dictionary_synonyms = list(dictionary_context.get("synonyms") or [])
         dictionary_rules = list(dictionary_context.get("rules") or [])
         dictionary_field_profiles = list(dictionary_context.get("field_profiles") or [])
+        dictionary_tables = self._dictionary_tables_from_context(dictionary_context=dictionary_context)
+        dictionary_relationships = self._dictionary_relationships_from_relations(dictionary_relations=dictionary_relations)
         dictionary_fields, dictionary_field_profiles = self._extend_joined_table_semantics(
             normalized_domain=normalized_domain,
-            tables=tables,
-            relationships=relationships,
+            tables=dictionary_tables,
+            relationships=dictionary_relationships,
             dictionary_fields=dictionary_fields,
             dictionary_field_profiles=dictionary_field_profiles,
         )
+        tables = self._dictionary_tables_from_context(dictionary_context=dictionary_context)
+        columns = self._dictionary_columns_from_fields(
+            dictionary_fields=dictionary_fields,
+        )
+        relationships = self._dictionary_relationships_from_relations(dictionary_relations=dictionary_relations)
+        missing_dictionary_metadata = self._find_missing_dictionary_metadata(
+            normalized_domain=normalized_domain,
+            dictionary_context=dictionary_context,
+            dictionary_fields=dictionary_fields,
+            dictionary_relations=dictionary_relations,
+            yaml_structural_inventory=yaml_structural_inventory,
+        )
 
         column_profiles = self.column_resolver.build_column_profiles(
-            runtime_columns=columns,
+            runtime_columns=[],
             dictionary_fields=dictionary_fields,
         )
         if dictionary_field_profiles:
             # Prefer perfiles persistidos cuando existan.
             column_profiles = self.column_resolver.build_column_profiles(
-                runtime_columns=columns,
+                runtime_columns=[],
                 dictionary_fields=dictionary_field_profiles + dictionary_fields,
             )
 
         relation_profiles = self.relation_resolver.build_relation_profiles(
-            runtime_relationships=relationships,
+            runtime_relationships=[],
             dictionary_relations=dictionary_relations,
         )
 
         synonym_index = self.synonym_resolver.build_index(
             dictionary_synonyms=dictionary_synonyms,
             dictionary_fields=dictionary_fields,
-            runtime_columns=columns,
+            runtime_columns=[],
         )
         company_synonym_index = self._build_company_language_synonym_index(company_context=company_context)
         synonym_index = {**company_synonym_index, **synonym_index}
 
-        allowed_tables = self._collect_allowed_tables(tables=tables, dictionary_context=dictionary_context)
-        allowed_columns = self._collect_allowed_columns(columns=columns, dictionary_fields=dictionary_fields)
-        aliases = self._collect_aliases(columns=columns, dictionary_fields=dictionary_fields, dictionary_synonyms=dictionary_synonyms)
+        allowed_tables = self._collect_allowed_tables(tables=[], dictionary_context=dictionary_context)
+        allowed_columns = self._collect_allowed_columns(columns=[], dictionary_fields=dictionary_fields)
+        aliases = self._collect_aliases(columns=[], dictionary_fields=dictionary_fields, dictionary_synonyms=dictionary_synonyms)
         aliases = {**synonym_index, **aliases}
         operational_scope = self._build_company_operational_scope(
             normalized_domain=normalized_domain,
             company_context=company_context,
+        )
+        pilot_sql_assisted_enabled = bool(
+            normalized_domain in {"ausentismo", "attendance"}
+            and dictionary_fields
+            and dictionary_relations
+            and any(
+                str(item.get("table_name") or "").strip().lower() == "cinco_base_de_personal"
+                for item in dictionary_fields
+                if isinstance(item, dict)
+            )
         )
         query_hints = self._build_query_hints(
             normalized_domain=normalized_domain,
@@ -139,6 +175,18 @@ class SemanticBusinessResolver:
             column_profiles=column_profiles,
             relation_profiles=relation_profiles,
         )
+        used_yaml = any(
+            [
+                bool(contexto_agente),
+                bool(reglas_negocio),
+                bool(ejemplos_consulta),
+                bool(vocabulario_negocio),
+                bool(tablas_prioritarias),
+                bool(columnas_prioritarias),
+                bool(yaml_fields_ignored),
+            ]
+        )
+        runtime_structural_status = "dictionary_runtime_context" if (tables or columns or relationships) else "dictionary_metadata_missing"
 
         return {
             "domain_code": normalized_domain,
@@ -171,11 +219,44 @@ class SemanticBusinessResolver:
             "allowed_tables": allowed_tables,
             "allowed_columns": allowed_columns,
             "aliases": aliases,
-            "supports_sql_assisted": bool(flags.get("sql_asistido_permitido")),
+            "supports_sql_assisted": bool(flags.get("sql_asistido_permitido")) or pilot_sql_assisted_enabled,
             "dictionary_seed": dictionary_seed,
             "company_context": company_context,
             "company_operational_scope": operational_scope,
             "query_hints": query_hints,
+            "yaml_role": "narrative_only",
+            "yaml_fields_ignored": yaml_fields_ignored,
+            "yaml_fields_removed": yaml_fields_removed,
+            "yaml_structural_inventory": yaml_structural_inventory,
+            "missing_dictionary_metadata": missing_dictionary_metadata,
+            "source_of_truth": {
+                "structural": "ai_dictionary.dd_*",
+                "narrative": "yaml_domain_context",
+                "structural_authority": "dictionary_first",
+                "structural_source": "ai_dictionary",
+                "yaml_role": "narrative_only",
+                "yaml_structural_ignored": bool(yaml_fields_ignored),
+                "yaml_fields_ignored": list(yaml_fields_ignored),
+                "yaml_fields_removed": list(yaml_fields_removed),
+                "missing_dictionary_metadata": list(missing_dictionary_metadata),
+                "pilot_sql_assisted_enabled": pilot_sql_assisted_enabled,
+                "used_dictionary": bool(include_dictionary and dictionary_context),
+                "used_yaml": used_yaml,
+                "runtime_structural_context": {
+                    "tables": bool(tables),
+                    "columns": bool(columns),
+                    "relationships": bool(relationships),
+                    "status": runtime_structural_status,
+                },
+                "legacy_catalogs": [
+                    {
+                        "pattern": pattern,
+                        "status": "deprecated",
+                        "mode": "isolated_non_authoritative",
+                    }
+                    for pattern in self.LEGACY_STRUCTURAL_CATALOGS
+                ],
+            },
             "contexto_agente": contexto_agente,
             "reglas_negocio": reglas_negocio,
             "ejemplos_consulta": ejemplos_consulta,
@@ -242,41 +323,6 @@ class SemanticBusinessResolver:
             payload = dict(row)
             payload.setdefault("semantic_source", "joined_table_profile")
             base_fields.append(payload)
-            base_profiles.append(dict(payload))
-
-        employee_domain = self.registry.get_domain("empleados")
-        employee_runtime_columns = self._extract_columns(
-            dict((getattr(employee_domain, "raw_context", {}) if employee_domain else {}) or {})
-        )
-        for row in employee_runtime_columns:
-            if not isinstance(row, dict):
-                continue
-            table_name = str(row.get("table_name") or "").strip().lower()
-            logical_name = str(row.get("nombre_columna_logico") or row.get("campo_logico") or "").strip().lower()
-            column_name = str(row.get("column_name") or "").strip().lower()
-            key = (table_name, logical_name or column_name)
-            if table_name not in employee_like_tables or not key[1] or key in seen_keys:
-                continue
-            seen_keys.add(key)
-            payload = {
-                "table_name": table_name,
-                "campo_logico": logical_name or column_name,
-                "column_name": column_name,
-                "definicion_negocio": str(row.get("descripcion") or "").strip(),
-                "es_filtro": bool(row.get("es_filtro")),
-                "es_group_by": bool(row.get("es_group_by")),
-                "supports_filter": bool(row.get("es_filtro")),
-                "supports_group_by": bool(row.get("es_group_by")),
-                "supports_metric": bool(row.get("es_metrica")),
-                "supports_dimension": bool(row.get("es_group_by")),
-                "is_date": "fecha" in logical_name or "fecha" in column_name,
-                "is_identifier": logical_name in {"cedula", "cedula_empleado", "codigo_sap"},
-                "is_chart_dimension": bool(row.get("es_group_by")),
-                "is_chart_measure": bool(row.get("es_metrica")),
-                "allowed_values": [],
-                "semantic_source": "joined_table_runtime_scope",
-            }
-            base_fields.append(dict(payload))
             base_profiles.append(dict(payload))
         return base_fields, base_profiles
 
@@ -536,6 +582,245 @@ class SemanticBusinessResolver:
             mapped_columns=mapped_columns,
             warnings=warnings,
         )
+
+    @staticmethod
+    def _dictionary_tables_from_context(*, dictionary_context: dict[str, Any]) -> list[dict[str, Any]]:
+        tables: list[dict[str, Any]] = []
+        for item in list(dictionary_context.get("tables") or []):
+            if not isinstance(item, dict):
+                continue
+            schema_name = str(item.get("schema_name") or "").strip()
+            table_name = str(item.get("table_name") or "").strip()
+            if not table_name:
+                continue
+            table_fqn = f"{schema_name}.{table_name}" if schema_name else table_name
+            tables.append(
+                {
+                    "schema_name": schema_name,
+                    "table_name": table_name,
+                    "table_fqn": table_fqn,
+                    "nombre_tabla_logico": str(item.get("alias_negocio") or "").strip(),
+                    "rol": str(item.get("rol") or "").strip(),
+                    "es_principal": bool(item.get("es_principal")),
+                }
+            )
+        return tables
+
+    @staticmethod
+    def _dictionary_columns_from_fields(*, dictionary_fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        columns: list[dict[str, Any]] = []
+        for item in list(dictionary_fields or []):
+            if not isinstance(item, dict):
+                continue
+            logical_name = str(item.get("campo_logico") or item.get("logical_name") or "").strip()
+            column_name = str(item.get("column_name") or "").strip()
+            if not logical_name and not column_name:
+                continue
+            columns.append(
+                {
+                    "table_name": str(item.get("table_name") or "").strip(),
+                    "column_name": column_name,
+                    "nombre_columna_logico": logical_name or column_name,
+                    "descripcion": str(item.get("definicion_negocio") or "").strip(),
+                    "es_filtro": bool(item.get("supports_filter") or item.get("es_filtro")),
+                    "es_group_by": bool(item.get("supports_group_by") or item.get("es_group_by")),
+                    "es_metrica": bool(item.get("supports_metric") or item.get("es_metrica")),
+                    "es_clave": bool(item.get("es_clave")),
+                }
+            )
+        return columns
+
+    @staticmethod
+    def _dictionary_relationships_from_relations(*, dictionary_relations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        relationships: list[dict[str, Any]] = []
+        for item in list(dictionary_relations or []):
+            if not isinstance(item, dict):
+                continue
+            join_sql = str(item.get("join_sql") or "").strip()
+            if not join_sql:
+                continue
+            relationships.append(
+                {
+                    "nombre_relacion": str(item.get("nombre_relacion") or "").strip(),
+                    "condicion": join_sql,
+                    "cardinalidad": str(item.get("cardinalidad") or "").strip(),
+                }
+            )
+        return relationships
+
+    def _extract_yaml_structural_inventory(self, *, raw: dict[str, Any]) -> dict[str, Any]:
+        explicit = dict(raw.get("yaml_structural_inventory") or {})
+        if explicit:
+            return {
+                "tables": list(explicit.get("tables") or []),
+                "columns": list(explicit.get("columns") or []),
+                "relationships": list(explicit.get("relationships") or []),
+                "capabilities": list(explicit.get("capabilities") or []),
+                "supported_filters": list(explicit.get("supported_filters") or []),
+                "supported_group_by": list(explicit.get("supported_group_by") or []),
+                "supported_metrics": list(explicit.get("supported_metrics") or []),
+            }
+        return {
+            "tables": list(raw.get("tables") or raw.get("tablas_asociadas") or []),
+            "columns": list(raw.get("columns") or raw.get("columnas_clave") or []),
+            "relationships": list(raw.get("relationships") or raw.get("joins_conocidos") or []),
+            "capabilities": list(raw.get("capabilities") or raw.get("legacy_capabilities") or raw.get("capacidades") or []),
+            "supported_filters": list(raw.get("filtros_soportados") or []),
+            "supported_group_by": list(raw.get("group_by_soportados") or []),
+            "supported_metrics": list(raw.get("metricas_soportadas") or []),
+        }
+
+    def _resolve_yaml_field_list(
+        self,
+        *,
+        raw: dict[str, Any],
+        explicit_key: str,
+        structural_inventory: dict[str, Any],
+    ) -> list[str]:
+        explicit = [
+            str(item or "").strip()
+            for item in list(raw.get(explicit_key) or [])
+            if str(item or "").strip()
+        ]
+        if explicit:
+            return list(dict.fromkeys(explicit))
+        return [
+            key
+            for key, value in structural_inventory.items()
+            if self._has_yaml_structural_payload(value)
+        ]
+
+    @staticmethod
+    def _has_yaml_structural_payload(value: Any) -> bool:
+        if isinstance(value, dict):
+            return bool(value)
+        if isinstance(value, list):
+            return any(item not in (None, "", [], {}) for item in value)
+        return value not in (None, "", [], {})
+
+    def _find_missing_dictionary_metadata(
+        self,
+        *,
+        normalized_domain: str,
+        dictionary_context: dict[str, Any],
+        dictionary_fields: list[dict[str, Any]],
+        dictionary_relations: list[dict[str, Any]],
+        yaml_structural_inventory: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        issues: list[dict[str, str]] = []
+        matched = bool(dict(dictionary_context.get("domain") or {}).get("matched"))
+        if not matched:
+            issues.append(
+                {
+                    "domain": normalized_domain,
+                    "type": "dictionary_domain_missing",
+                    "value": normalized_domain,
+                }
+            )
+            return issues
+
+        dictionary_tables = {
+            str(item.get("table_name") or "").strip().lower()
+            for item in list(dictionary_context.get("tables") or [])
+            if isinstance(item, dict) and str(item.get("table_name") or "").strip()
+        }
+        dictionary_columns = {
+            str(item.get("campo_logico") or item.get("column_name") or "").strip().lower()
+            for item in list(dictionary_fields or [])
+            if isinstance(item, dict) and str(item.get("campo_logico") or item.get("column_name") or "").strip()
+        }
+        dictionary_physical_columns = {
+            str(item.get("column_name") or "").strip().lower()
+            for item in list(dictionary_fields or [])
+            if isinstance(item, dict) and str(item.get("column_name") or "").strip()
+        }
+        filterable_columns = {
+            str(item.get("campo_logico") or item.get("column_name") or "").strip().lower()
+            for item in list(dictionary_fields or [])
+            if isinstance(item, dict)
+            and bool(item.get("supports_filter") or item.get("es_filtro"))
+            and str(item.get("campo_logico") or item.get("column_name") or "").strip()
+        }
+        groupable_columns = {
+            str(item.get("campo_logico") or item.get("column_name") or "").strip().lower()
+            for item in list(dictionary_fields or [])
+            if isinstance(item, dict)
+            and bool(item.get("supports_group_by") or item.get("supports_dimension") or item.get("es_group_by"))
+            and str(item.get("campo_logico") or item.get("column_name") or "").strip()
+        }
+        metric_columns = {
+            str(item.get("campo_logico") or item.get("column_name") or "").strip().lower()
+            for item in list(dictionary_fields or [])
+            if isinstance(item, dict)
+            and bool(item.get("supports_metric") or item.get("es_metrica"))
+            and str(item.get("campo_logico") or item.get("column_name") or "").strip()
+        }
+        relation_names = {
+            str(item.get("nombre_relacion") or "").strip().lower()
+            for item in list(dictionary_relations or [])
+            if isinstance(item, dict) and str(item.get("nombre_relacion") or "").strip()
+        }
+        relation_sql = {
+            " ".join(str(item.get("join_sql") or "").strip().lower().split())
+            for item in list(dictionary_relations or [])
+            if isinstance(item, dict) and str(item.get("join_sql") or "").strip()
+        }
+
+        for item in list(yaml_structural_inventory.get("tables") or []):
+            if not isinstance(item, dict):
+                continue
+            table_name = str(item.get("table_name") or "").strip().lower()
+            if table_name and table_name not in dictionary_tables:
+                issues.append({"domain": normalized_domain, "type": "dictionary_table_missing", "value": table_name})
+        for item in list(yaml_structural_inventory.get("columns") or []):
+            if not isinstance(item, dict):
+                continue
+            logical_name = str(item.get("nombre_columna_logico") or item.get("campo_logico") or "").strip().lower()
+            column_name = str(item.get("column_name") or "").strip().lower()
+            if logical_name and logical_name not in dictionary_columns and column_name not in dictionary_physical_columns:
+                issues.append(
+                    {
+                        "domain": normalized_domain,
+                        "type": "dictionary_column_missing",
+                        "value": logical_name or column_name,
+                    }
+                )
+        for raw_filter in list(yaml_structural_inventory.get("supported_filters") or []):
+            token = str(raw_filter or "").strip().lower()
+            if token and token not in filterable_columns:
+                issues.append({"domain": normalized_domain, "type": "dictionary_filter_metadata_missing", "value": token})
+        for raw_group in list(yaml_structural_inventory.get("supported_group_by") or []):
+            token = str(raw_group or "").strip().lower()
+            if token and token not in groupable_columns:
+                issues.append({"domain": normalized_domain, "type": "dictionary_group_by_metadata_missing", "value": token})
+        for raw_metric in list(yaml_structural_inventory.get("supported_metrics") or []):
+            token = str(raw_metric or "").strip().lower()
+            if token and token not in metric_columns:
+                issues.append({"domain": normalized_domain, "type": "dictionary_metric_metadata_missing", "value": token})
+        for item in list(yaml_structural_inventory.get("relationships") or []):
+            if not isinstance(item, dict):
+                continue
+            relation_name = str(item.get("nombre_relacion") or "").strip().lower()
+            join_sql = " ".join(
+                str(item.get("condicion") or item.get("condicion_join_sql") or item.get("join_sql") or "").strip().lower().split()
+            )
+            if join_sql and join_sql not in relation_sql and relation_name not in relation_names:
+                issues.append(
+                    {
+                        "domain": normalized_domain,
+                        "type": "dictionary_relation_missing",
+                        "value": relation_name or join_sql,
+                    }
+                )
+        deduped: dict[tuple[str, str, str], dict[str, str]] = {}
+        for issue in issues:
+            key = (
+                str(issue.get("domain") or ""),
+                str(issue.get("type") or ""),
+                str(issue.get("value") or ""),
+            )
+            deduped[key] = issue
+        return list(deduped.values())
 
     @staticmethod
     def _extract_tables(raw: dict[str, Any]) -> list[dict[str, Any]]:
