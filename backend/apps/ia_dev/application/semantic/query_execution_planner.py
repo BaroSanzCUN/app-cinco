@@ -86,12 +86,17 @@ class QueryExecutionPlanner:
                     max_limit=self._max_sql_limit(),
                 )
                 if validation.allowed:
+                    effective_constraints = dict(constraints or {})
+                    if str((sql_metadata or {}).get("metric_used") or "") == "certificado_alturas_vigencia":
+                        effective_constraints["group_by"] = []
+                        effective_constraints["result_shape"] = "kpi"
+                        effective_constraints["operation"] = "count"
                     return QueryExecutionPlan(
                         strategy="sql_assisted",
                         reason=sql_reason,
                         domain_code=domain_code,
                         sql_query=sql_query,
-                        constraints=constraints,
+                        constraints=effective_constraints,
                         policy={
                             "allowed": True,
                             "reason": validation.reason,
@@ -632,6 +637,13 @@ class QueryExecutionPlanner:
                 and temporal_scope.get("end_date")
                 and not bool(temporal_scope.get("ambiguous"))
             )
+            if self._is_employee_population_summary_request(
+                raw_query=raw_query,
+                filters=filters,
+                group_by=group_by,
+                status_value=status_value,
+            ):
+                return "empleados.count.active.v1"
             if "turnover_rate" in metrics or re.search(r"\b(rotacion|rotaciones|turnover)\b", raw_query):
                 return "empleados.count.active.v1"
             if (template_id == "detail_by_entity_and_period" or operation == "detail") and (
@@ -701,6 +713,14 @@ class QueryExecutionPlanner:
         group_by = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or []) if str(item).strip()]
         metrics = [str(item).strip().lower() for item in list(resolved_query.intent.metrics or []) if str(item).strip()]
         operation = str(resolved_query.intent.operation or "").strip().lower()
+        raw_query = str(resolved_query.intent.raw_query or "").strip().lower()
+        if str(resolved_query.intent.domain_code or "").strip().lower() in {"empleados", "rrhh"} and self._is_employee_population_summary_request(
+            raw_query=raw_query,
+            filters=filters,
+            group_by=group_by,
+            status_value=status_value,
+        ):
+            operation = "aggregate" if group_by else "count"
         result_shape = "summary"
         if group_by:
             result_shape = "table"
@@ -763,6 +783,30 @@ class QueryExecutionPlanner:
             "operation": operation,
             "template_id": str(resolved_query.intent.template_id or ""),
         }
+
+    @staticmethod
+    def _is_employee_population_summary_request(
+        *,
+        raw_query: str,
+        filters: dict[str, Any],
+        group_by: list[str],
+        status_value: str,
+    ) -> bool:
+        normalized = str(raw_query or "").strip().lower()
+        if status_value not in {"ACTIVO", "INACTIVO"}:
+            return False
+        if not re.search(r"\b(emplead\w*|colaborador(?:es)?|personal|persona(?:s)?|trabajador(?:es)?)\b", normalized):
+            return False
+        if any(
+            str((filters or {}).get(key) or "").strip()
+            for key in ("cedula", "cedula_empleado", "identificacion", "documento", "id_empleado", "movil", "codigo_sap", "nombre", "search")
+        ):
+            return False
+        if any(token in normalized for token in ("detalle", "informacion", "info", "ficha", "datos", "buscar", "encuentra")):
+            return False
+        if any(str((filters or {}).get(key) or "").strip() for key in ("fnacimiento_month", "birth_month", "month_of_birth")):
+            return False
+        return bool(group_by) or bool(re.search(r"\b(activo|activos|activa|activas|inactivo|inactivos|vigente|vigentes|habilitado|habilitados)\b", normalized))
 
     @staticmethod
     def _resolve_status_filter(*, filters: dict[str, Any]) -> str:
@@ -936,6 +980,16 @@ class QueryExecutionPlanner:
         where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
         limit = self._max_sql_limit()
         used_columns = [birthday_column, status_column, *detail_columns]
+        certificate_query, certificate_reason, certificate_metadata = self._build_employee_certificate_heights_sql_query(
+            resolved_query=resolved_query,
+            context=context,
+            table=table,
+            status_column=status_column,
+        )
+        if certificate_query:
+            return certificate_query, certificate_reason, certificate_metadata
+        if certificate_reason not in {"employee_heights_certificate_not_applicable", ""}:
+            return "", certificate_reason, certificate_metadata
 
         if template_id == "detail_by_entity_and_period" or operation == "detail":
             order_sql = ""
@@ -987,6 +1041,196 @@ class QueryExecutionPlanner:
             )
 
         return "", "employee_sql_not_applicable", {}
+
+    def _build_employee_certificate_heights_sql_query(
+        self,
+        *,
+        resolved_query: ResolvedQuerySpec,
+        context: dict[str, Any],
+        table: str,
+        status_column: str,
+    ) -> tuple[str, str, dict[str, Any]]:
+        operation = str(resolved_query.intent.operation or "").strip().lower()
+        if operation not in {"count", "summary", "aggregate"}:
+            return "", "employee_heights_certificate_not_applicable", {}
+
+        field_match = dict((context.get("resolved_semantic") or {}).get("field_match") or {})
+        if not field_match:
+            field_match = dict(context.get("semantic_field_match") or {})
+        semantic_role = str(field_match.get("semantic_role") or "").strip().lower()
+        logical_name = str(field_match.get("logical_name") or "").strip().lower()
+        certificate_filter_keys = {
+            str(key or "").strip().lower()
+            for key in dict(resolved_query.normalized_filters or {}).keys()
+            if str(key or "").strip()
+        }
+        certificate_filter_detected = bool(
+            certificate_filter_keys
+            & {
+                "certificado_alturas_fecha_emision",
+                "certificado_alturas_fecha_vencimiento",
+                "certificado_alturas_estado_vigencia",
+            }
+        )
+        if (
+            semantic_role != "heights_certificate_validity"
+            and logical_name
+            not in {
+                "certificado_alturas_fecha_emision",
+                "certificado_alturas_fecha_vencimiento",
+                "certificado_alturas_estado_vigencia",
+            }
+            and not certificate_filter_detected
+        ):
+            return "", "employee_heights_certificate_not_applicable", {}
+
+        required_rule_codes = (
+            "certificado_alturas_vigencia_18_meses",
+            "certificado_alturas_vencido",
+            "certificado_alturas_proximo_vencer_45_dias",
+            "personal_activo_operativo",
+        )
+        missing_rules = [
+            code for code in required_rule_codes if not self._dictionary_rule_declared(context=context, rule_code=code)
+        ]
+        if missing_rules:
+            return "", "employee_heights_certificate_rules_missing", {"missing_rule_codes": missing_rules}
+
+        status_filter = self._resolve_status_filter(filters=dict(resolved_query.normalized_filters or {})) or "ACTIVO"
+        if status_filter != "ACTIVO":
+            return "", "employee_heights_certificate_requires_active_scope", {"requested_status": status_filter}
+        tipo_labor_value = str((resolved_query.normalized_filters or {}).get("tipo_labor") or "").strip().upper()
+        if tipo_labor_value and tipo_labor_value != "OPERATIVO":
+            return "", "employee_heights_certificate_requires_operativo_scope", {"requested_tipo_labor": tipo_labor_value}
+        tipo_labor_value = "OPERATIVO"
+
+        tipo_labor_column = self._resolve_named_column(context=context, preferred_terms=("tipo_labor",))
+        if not status_column:
+            return "", "employee_heights_certificate_status_column_missing", {}
+        if not tipo_labor_column:
+            return "", "employee_heights_certificate_tipo_labor_column_missing", {}
+
+        selected_table = self._resolve_table_for_required_columns(
+            context=context,
+            required_columns=("datos", "tipo_labor", "estado", "calturas"),
+            preferred_table_name="cinco_base_de_personal",
+        )
+        if selected_table:
+            table = selected_table
+
+        source_profile = self._find_context_profile_for_table(
+            context=context,
+            table_ref=table,
+            logical_names=("certificado_alturas_fecha_emision",),
+            column_names=("datos",),
+        )
+        if not source_profile:
+            source_profile = self._find_context_profile_for_table(
+                context=context,
+                table_ref=table,
+                logical_names=("certificado_alturas_fecha_emision",),
+                column_names=("calturas",),
+            )
+        if not source_profile:
+            return "", "employee_heights_certificate_source_missing", {}
+        if not str(source_profile.get("definicion_negocio") or "").strip():
+            dictionary_source_profile = self._find_context_profile_for_table(
+                context={"column_profiles": [], "dictionary": context.get("dictionary")},
+                table_ref=table,
+                logical_names=("certificado_alturas_fecha_emision",),
+                column_names=("datos",),
+            )
+            if dictionary_source_profile:
+                source_profile = dict(dictionary_source_profile)
+
+        source_metadata = self._parse_semantic_tags(
+            text=str(source_profile.get("definicion_negocio") or ""),
+        )
+        source_column = str(source_profile.get("column_name") or "").strip().lower()
+        json_path = str(source_metadata.get("json_path") or "").strip()
+        json_filter_tipo = str(source_metadata.get("json_filter_tipo") or "alturas").strip()
+        fallback_column = str(source_metadata.get("fallback_column") or "calturas").strip().lower()
+        try:
+            vigencia_months = max(1, int(str(source_metadata.get("vigencia_months") or "18").strip()))
+        except Exception:
+            vigencia_months = 18
+        try:
+            expiry_warning_days = max(1, int(str(source_metadata.get("expiry_warning_days") or "45").strip()))
+        except Exception:
+            expiry_warning_days = 45
+
+        where_sql = (
+            f" WHERE e.{status_column} = 'ACTIVO' AND e.{tipo_labor_column} = 'OPERATIVO'"
+        )
+        if json_path and source_column == "datos":
+            query = (
+                "SELECT "
+                f"SUM(CASE WHEN DATE_ADD(src.fecha_emision, INTERVAL {vigencia_months} MONTH) < CURRENT_DATE() THEN 1 ELSE 0 END) AS certificados_vencidos, "
+                f"SUM(CASE WHEN DATE_ADD(src.fecha_emision, INTERVAL {vigencia_months} MONTH) BETWEEN CURRENT_DATE() AND DATE_ADD(CURRENT_DATE(), INTERVAL {expiry_warning_days} DAY) THEN 1 ELSE 0 END) AS certificados_proximos_vencer "
+                "FROM ("
+                f"SELECT CAST(jt.fecha AS DATE) AS fecha_emision FROM {table} AS e "
+                f"JOIN JSON_TABLE(e.{source_column}, '{json_path}' COLUMNS("
+                "tipo VARCHAR(50) PATH '$.tipo', "
+                "fecha VARCHAR(20) PATH '$.fecha'"
+                f")) AS jt ON jt.tipo = '{self._escape_literal(json_filter_tipo)}'"
+                f"{where_sql}"
+                ") AS src LIMIT 1"
+            )
+            return query, "employee_heights_certificate_summary_json", self._employee_sql_metadata(
+                table=table,
+                columns=[source_column, status_column, tipo_labor_column],
+                metric_used="certificado_alturas_vigencia",
+                aggregation_used="count_by_validity",
+                dimensions_used=[],
+                concept_field="certificado_alturas_fecha_emision",
+                extra_metadata={
+                    "json_path_used": json_path,
+                    "json_filter_tipo": json_filter_tipo,
+                    "vigencia_months": vigencia_months,
+                    "expiry_warning_days": expiry_warning_days,
+                    "source_mode": "json_path",
+                    "declared_rule_source": "ai_dictionary.dd_reglas",
+                    "physical_columns_used": sorted({source_column, status_column, tipo_labor_column}),
+                },
+            )
+
+        fallback_profile = self._find_context_profile_for_table(
+            context=context,
+            table_ref=table,
+            column_names=(fallback_column,),
+        )
+        if not fallback_profile:
+            fallback_profile = self._find_context_profile_for_table(
+                context=context,
+                table_ref=table,
+                column_names=("calturas",),
+            )
+        fallback_physical = str((fallback_profile or {}).get("column_name") or fallback_column).strip().lower()
+        if fallback_physical != "calturas":
+            return "", "employee_heights_certificate_json_path_missing", {"fallback_column": fallback_physical}
+        query = (
+            "SELECT "
+            f"SUM(CASE WHEN DATE_ADD(DATE(e.calturas), INTERVAL {vigencia_months} MONTH) < CURRENT_DATE() THEN 1 ELSE 0 END) AS certificados_vencidos, "
+            f"SUM(CASE WHEN DATE_ADD(DATE(e.calturas), INTERVAL {vigencia_months} MONTH) BETWEEN CURRENT_DATE() AND DATE_ADD(CURRENT_DATE(), INTERVAL {expiry_warning_days} DAY) THEN 1 ELSE 0 END) AS certificados_proximos_vencer "
+            f"FROM {table} AS e"
+            f"{where_sql} AND e.calturas IS NOT NULL LIMIT 1"
+        )
+        return query, "employee_heights_certificate_summary_fallback", self._employee_sql_metadata(
+            table=table,
+            columns=["calturas", status_column, tipo_labor_column],
+            metric_used="certificado_alturas_vigencia",
+            aggregation_used="count_by_validity",
+            dimensions_used=[],
+            concept_field="certificado_alturas_fecha_emision",
+            extra_metadata={
+                "source_mode": "fallback_calturas",
+                "fallback_reason": "json_path_missing_in_ai_dictionary",
+                "vigencia_months": vigencia_months,
+                "expiry_warning_days": expiry_warning_days,
+                "declared_rule_source": "ai_dictionary.dd_reglas",
+                "physical_columns_used": sorted({"calturas", status_column, tipo_labor_column}),
+            },
+        )
 
     def _resolve_employee_group_dimension(self, *, resolved_query: ResolvedQuerySpec, context: dict[str, Any]) -> dict[str, Any]:
         group_by = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or []) if str(item).strip()]
@@ -1075,6 +1319,7 @@ class QueryExecutionPlanner:
         aggregation_used: str,
         dimensions_used: list[str],
         concept_field: str,
+        extra_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         physical_columns = [item for item in columns if item and "(" not in str(item)]
         metadata = self._default_sql_metadata(table=table, columns=physical_columns)
@@ -1093,7 +1338,64 @@ class QueryExecutionPlanner:
                 ],
             }
         )
+        if extra_metadata:
+            metadata.update(dict(extra_metadata or {}))
         return metadata
+
+    @staticmethod
+    def _parse_semantic_tags(*, text: str) -> dict[str, str]:
+        payload: dict[str, str] = {}
+        for key, value in re.findall(r"\[([a-zA-Z0-9_]+)=(.*?)\](?=\[|$)", str(text or "")):
+            clean_key = str(key or "").strip().lower()
+            clean_value = str(value or "").strip()
+            if clean_key and clean_value:
+                payload[clean_key] = clean_value
+        return payload
+
+    @staticmethod
+    def _find_context_profile(
+        *,
+        context: dict[str, Any],
+        logical_names: tuple[str, ...] = (),
+        column_names: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        logical_set = {str(item or "").strip().lower() for item in logical_names if str(item or "").strip()}
+        column_set = {str(item or "").strip().lower() for item in column_names if str(item or "").strip()}
+        profile_sources = [
+            profile
+            for profile in list(context.get("column_profiles") or [])
+            if isinstance(profile, dict)
+        ]
+        profile_sources.extend(
+            [
+                field
+                for field in list((context.get("dictionary") or {}).get("fields") or [])
+                if isinstance(field, dict)
+            ]
+        )
+        if logical_set:
+            for profile in profile_sources:
+                logical_name = str(profile.get("logical_name") or profile.get("campo_logico") or "").strip().lower()
+                if logical_name in logical_set:
+                    return profile
+        if column_set:
+            for profile in profile_sources:
+                column_name = str(profile.get("column_name") or "").strip().lower()
+                if column_name in column_set:
+                    return profile
+        return {}
+
+    @staticmethod
+    def _dictionary_rule_declared(*, context: dict[str, Any], rule_code: str) -> bool:
+        target = str(rule_code or "").strip().lower()
+        if not target:
+            return False
+        for rule in list((context.get("dictionary") or {}).get("rules") or []):
+            if not isinstance(rule, dict):
+                continue
+            if str(rule.get("codigo") or "").strip().lower() == target:
+                return True
+        return False
 
     @staticmethod
     def _build_date_where(*, date_column: str, start_date: str, end_date: str) -> list[str]:
@@ -1119,6 +1421,155 @@ class QueryExecutionPlanner:
             "physical_columns_used": sorted(set(normalized_columns)),
             "relations_used": [],
         }
+
+    @staticmethod
+    def _table_key(*, schema_name: str = "", table_name: str = "", table_fqn: str = "") -> str:
+        if str(table_fqn or "").strip():
+            return str(table_fqn).strip().lower()
+        clean_table = str(table_name or "").strip().lower()
+        clean_schema = str(schema_name or "").strip().lower()
+        if clean_schema and clean_table:
+            return f"{clean_schema}.{clean_table}"
+        return clean_table
+
+    @classmethod
+    def _profile_matches_table(cls, *, profile: dict[str, Any], table: dict[str, Any]) -> bool:
+        profile_key = cls._table_key(
+            schema_name=str(profile.get("schema_name") or ""),
+            table_name=str(profile.get("table_name") or ""),
+            table_fqn=str(profile.get("table_fqn") or ""),
+        )
+        table_key = cls._table_key(
+            schema_name=str(table.get("schema_name") or ""),
+            table_name=str(table.get("table_name") or ""),
+            table_fqn=str(table.get("table_fqn") or ""),
+        )
+        if profile_key and table_key:
+            return profile_key == table_key
+        return (
+            str(profile.get("table_name") or "").strip().lower()
+            == str(table.get("table_name") or "").strip().lower()
+        )
+
+    @classmethod
+    def _profile_columns_for_table(cls, *, context: dict[str, Any], table: dict[str, Any]) -> set[str]:
+        columns: set[str] = set()
+        profile_sources = [
+            profile
+            for profile in list(context.get("column_profiles") or [])
+            if isinstance(profile, dict)
+        ]
+        profile_sources.extend(
+            [
+                field
+                for field in list((context.get("dictionary") or {}).get("fields") or [])
+                if isinstance(field, dict)
+            ]
+        )
+        for profile in profile_sources:
+            if not cls._profile_matches_table(profile=profile, table=table):
+                continue
+            column_name = str(profile.get("column_name") or "").strip().lower()
+            if column_name:
+                columns.add(column_name)
+        return columns
+
+    def _resolve_table_for_required_columns(
+        self,
+        *,
+        context: dict[str, Any],
+        required_columns: tuple[str, ...],
+        preferred_table_name: str = "",
+    ) -> str:
+        candidates = [
+            item
+            for item in list(context.get("tables") or [])
+            if isinstance(item, dict)
+        ]
+        if not candidates:
+            return ""
+        required = {
+            str(item or "").strip().lower()
+            for item in required_columns
+            if str(item or "").strip()
+        }
+        preferred_name = str(preferred_table_name or "").strip().lower()
+        best_table = ""
+        best_score = -1
+        for candidate in candidates:
+            table_name = str(candidate.get("table_name") or "").strip().lower()
+            if preferred_name and table_name and table_name != preferred_name:
+                continue
+            available = self._profile_columns_for_table(context=context, table=candidate)
+            score = len(required & available)
+            if score <= best_score:
+                continue
+            table_ref = self._table_key(
+                schema_name=str(candidate.get("schema_name") or ""),
+                table_name=str(candidate.get("table_name") or ""),
+                table_fqn=str(candidate.get("table_fqn") or ""),
+            )
+            if not table_ref or not self._is_safe_identifier(table_ref):
+                continue
+            best_score = score
+            best_table = table_ref
+            if score == len(required):
+                break
+        return best_table
+
+    @classmethod
+    def _find_context_profile_for_table(
+        cls,
+        *,
+        context: dict[str, Any],
+        table_ref: str,
+        logical_names: tuple[str, ...] = (),
+        column_names: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        base = cls._find_context_profile(
+            context=context,
+            logical_names=logical_names,
+            column_names=column_names,
+        )
+        if not table_ref:
+            return base
+        logical_set = {str(item or "").strip().lower() for item in logical_names if str(item or "").strip()}
+        column_set = {str(item or "").strip().lower() for item in column_names if str(item or "").strip()}
+        profile_sources = [
+            profile
+            for profile in list(context.get("column_profiles") or [])
+            if isinstance(profile, dict)
+        ]
+        profile_sources.extend(
+            [
+                field
+                for field in list((context.get("dictionary") or {}).get("fields") or [])
+                if isinstance(field, dict)
+            ]
+        )
+        table = {"table_fqn": table_ref}
+        best_profile: dict[str, Any] = {}
+        best_score = -1
+        for profile in profile_sources:
+            if not cls._profile_matches_table(profile=profile, table=table):
+                continue
+            logical_name = str(profile.get("logical_name") or profile.get("campo_logico") or "").strip().lower()
+            column_name = str(profile.get("column_name") or "").strip().lower()
+            logical_match = logical_name in logical_set if logical_set else False
+            column_match = column_name in column_set if column_set else False
+            if logical_set and not logical_match and not column_match:
+                continue
+            if column_set and not logical_set and not column_match:
+                continue
+            score = 0
+            if logical_match:
+                score += 2
+            if column_match:
+                score += 3
+            if score > best_score:
+                best_score = score
+                best_profile = profile
+        return best_profile or base
 
     def _resolve_primary_table(self, *, context: dict[str, Any]) -> str:
         tables = list(context.get("tables") or [])
@@ -1369,6 +1820,7 @@ class QueryExecutionPlanner:
             kpis["rowcount"] = int(len(rows))
         metadata = dict(execution_plan.metadata or {})
         compiler = str(metadata.get("compiler") or "default_sql_builder")
+        metric_used = str(metadata.get("metric_used") or "")
         relations_used = list(metadata.get("relations_used") or [])
         insights = [
             "Resultado obtenido con SQL asistido restringido (solo lectura).",
@@ -1412,6 +1864,73 @@ class QueryExecutionPlanner:
                 reply = f"Se encontraron {total} empleados que cumplen anos en el mes {month_value}."
             else:
                 reply = f"Se listan {len(rows)} empleados con cumpleanos en el mes {month_value}."
+        business_response: dict[str, Any] | None = None
+        findings = [
+            {
+                "title": "Top hallazgo",
+                "detail": (
+                    f"Se obtuvieron {len(rows)} filas usando {compiler}."
+                    if domain_code not in {"empleados", "rrhh"} or not month_value
+                    else f"El campo semantico fecha_nacimiento permitio resolver cumpleanos del mes {month_value}."
+                ),
+            }
+        ]
+        actions = [
+            {
+                "id": f"task-followup-{run_context.run_id}",
+                "type": "followup",
+                "label": "Profundizar analisis",
+                "payload": {
+                    "suggested_dimensions": ["sede", "area", "cargo"],
+                    "current_strategy": "sql_assisted",
+                },
+            }
+        ]
+        if metric_used == "certificado_alturas_vigencia" and rows:
+            first_row = dict(rows[0] or {})
+            vencidos = int(first_row.get("certificados_vencidos") or 0)
+            proximos = int(first_row.get("certificados_proximos_vencer") or 0)
+            reply = (
+                f"{vencidos} certificados de alturas vencidos y {proximos} proximos a vencer "
+                "en personal activo de labor operativa."
+            )
+            findings = [
+                {
+                    "title": "Riesgo documental operativo",
+                    "detail": (
+                        "El personal operativo activo tiene riesgo documental si hay certificados vencidos."
+                    ),
+                }
+            ]
+            insights = [
+                f"Dato principal: {vencidos} certificados de alturas vencidos y {proximos} proximos a vencer.",
+                "Riesgo: tecnicos con certificado vencido no deberian ser asignados a trabajos en alturas.",
+                "Recomendacion: priorizar renovacion de vencidos y programar renovacion de proximos a vencer.",
+            ]
+            actions = [
+                {
+                    "id": f"task-followup-{run_context.run_id}",
+                    "type": "followup",
+                    "label": "Muestrame el detalle por empleado, area o supervisor.",
+                    "payload": {
+                        "suggested_dimensions": ["empleado", "area", "supervisor"],
+                        "current_strategy": "sql_assisted",
+                        "metric_used": metric_used,
+                    },
+                }
+            ]
+            kpis = {
+                "certificados_vencidos": vencidos,
+                "certificados_proximos_vencer": proximos,
+            }
+            business_response = {
+                "dato": f"{vencidos} certificados de alturas vencidos y {proximos} proximos a vencer.",
+                "hallazgo": "El personal operativo activo tiene riesgo documental si hay certificados vencidos.",
+                "interpretacion": "La vigencia de 18 meses del certificado de alturas impacta la habilitacion operativa del personal de campo.",
+                "riesgo": "Tecnicos con certificado vencido no deberian ser asignados a trabajos en alturas.",
+                "recomendacion": "Priorizar renovacion de vencidos y programar renovacion de proximos a vencer.",
+                "siguiente_accion": "Muestrame el detalle por empleado, area o supervisor.",
+            }
         return {
             "session_id": str(run_context.session_id or ""),
             "reply": reply,
@@ -1448,27 +1967,11 @@ class QueryExecutionPlanner:
                     else []
                 ),
                 "findings": [
-                    {
-                        "title": "Top hallazgo",
-                        "detail": (
-                            f"Se obtuvieron {len(rows)} filas usando {compiler}."
-                            if domain_code not in {"empleados", "rrhh"} or not month_value
-                            else f"El campo semantico fecha_nacimiento permitio resolver cumpleanos del mes {month_value}."
-                        ),
-                    }
+                    *findings
                 ],
+                **({"business_response": business_response} if business_response else {}),
             },
-            "actions": [
-                {
-                    "id": f"task-followup-{run_context.run_id}",
-                    "type": "followup",
-                    "label": "Profundizar analisis",
-                    "payload": {
-                        "suggested_dimensions": ["sede", "area", "cargo"],
-                        "current_strategy": "sql_assisted",
-                    },
-                }
-            ],
+            "actions": actions,
             "data_sources": {
                 "query_intelligence": {
                     "ok": True,
@@ -1477,7 +1980,7 @@ class QueryExecutionPlanner:
                     "db_alias": db_alias,
                     "compiler": compiler,
                     "relations_used": relations_used,
-                    "metric_used": str(metadata.get("metric_used") or ""),
+                    "metric_used": metric_used,
                     "aggregation_used": str(metadata.get("aggregation_used") or ""),
                     "dimensions_used": list(metadata.get("dimensions_used") or []),
                     "declared_metric_source": str(metadata.get("declared_metric_source") or ""),

@@ -169,6 +169,80 @@ def _birthday_sql_response() -> dict:
     }
 
 
+def _heights_sql_response() -> dict:
+    return {
+        "session_id": "heights-session",
+        "reply": "12 certificados de alturas vencidos y 7 proximos a vencer en personal activo de labor operativa.",
+        "orchestrator": {
+            "intent": "count",
+            "domain": "empleados",
+            "selected_agent": "analista_agent",
+            "classifier_source": "query_intelligence_sql_assisted",
+            "needs_database": True,
+            "output_mode": "summary",
+            "used_tools": ["query_sql_assisted_executor"],
+            "runtime_flow": "sql_assisted",
+        },
+        "data": {
+            "kpis": {
+                "certificados_vencidos": 12,
+                "certificados_proximos_vencer": 7,
+            },
+            "series": [],
+            "labels": [],
+            "insights": [
+                "Dato principal: 12 certificados de alturas vencidos y 7 proximos a vencer.",
+                "Riesgo: tecnicos con certificado vencido no deberian ser asignados a trabajos en alturas.",
+                "Recomendacion: priorizar renovacion de vencidos y programar renovacion de proximos a vencer.",
+            ],
+            "findings": [
+                {
+                    "title": "Riesgo documental operativo",
+                    "detail": "El personal operativo activo tiene riesgo documental si hay certificados vencidos.",
+                }
+            ],
+            "business_response": {
+                "dato": "12 certificados de alturas vencidos y 7 proximos a vencer.",
+                "hallazgo": "El personal operativo activo tiene riesgo documental si hay certificados vencidos.",
+                "interpretacion": "La vigencia anual del certificado de alturas impacta la habilitacion operativa.",
+                "riesgo": "Tecnicos con certificado vencido no deberian ser asignados a trabajos en alturas.",
+                "recomendacion": "Priorizar renovacion de vencidos y programar renovacion de proximos a vencer.",
+                "siguiente_accion": "Muestrame el detalle por empleado, area o supervisor.",
+            },
+            "table": {
+                "columns": ["certificados_vencidos", "certificados_proximos_vencer"],
+                "rows": [{"certificados_vencidos": 12, "certificados_proximos_vencer": 7}],
+                "rowcount": 1,
+            },
+        },
+        "actions": [
+            {
+                "id": "heights-followup",
+                "type": "followup",
+                "label": "Muestrame el detalle por empleado, area o supervisor.",
+                "payload": {"metric_used": "certificado_alturas_vigencia"},
+            }
+        ],
+        "memory_candidates": [],
+        "pending_proposals": [],
+        "data_sources": {
+            "query_intelligence": {
+                "ok": True,
+                "compiler": "employee_semantic_sql",
+                "metric_used": "certificado_alturas_vigencia",
+            },
+            "runtime": {
+                "runtime_authority": "query_execution_planner",
+                "planner_was_authority": True,
+            },
+        },
+        "trace": [],
+        "memory": {"used_messages": 0, "capacity_messages": 20, "usage_ratio": 0.0, "trim_events": 0, "saturated": False},
+        "observability": {"enabled": False, "duration_ms": 0, "tool_latencies_ms": {}, "tokens_in": 0, "tokens_out": 0, "estimated_cost_usd": 0.0},
+        "active_nodes": [],
+    }
+
+
 class _CapabilityRuntimeStub:
     def __init__(self):
         self.classifications_seen: list[dict] = []
@@ -599,6 +673,42 @@ class SimulateIADevChatCommandTests(SimpleTestCase):
         self.assertEqual(str(runtime.get("runtime_authority") or ""), "query_execution_planner")
         self.assertTrue(bool(runtime.get("planner_was_authority")))
         self.assertEqual(int(table.get("rowcount") or 0), 2)
+
+    def test_management_command_raw_output_preserves_heights_business_response(self):
+        stdout = StringIO()
+
+        class _HeightsChatApplicationService:
+            def run(self, **kwargs):
+                del kwargs
+                return _heights_sql_response()
+
+        with patch(
+            "apps.ia_dev.management.commands.simulate_ia_dev_chat.ChatApplicationService",
+            _HeightsChatApplicationService,
+        ):
+            call_command(
+                "simulate_ia_dev_chat",
+                "--message",
+                "si el certificado de alturas vence cada año, cuántos certificados están vencidos y cuántos certificados están próximos a vencer, solo personal activo y tipo de labor operativo",
+                "--session-id",
+                "heights-session",
+                "--raw",
+                stdout=stdout,
+            )
+
+        payload = json.loads(stdout.getvalue())
+        business_response = dict((payload.get("data") or {}).get("business_response") or {})
+        query_intelligence = dict((payload.get("data_sources") or {}).get("query_intelligence") or {})
+
+        self.assertEqual(str(query_intelligence.get("metric_used") or ""), "certificado_alturas_vigencia")
+        self.assertIn("certificados de alturas vencidos", str(business_response.get("dato") or "").lower())
+        self.assertIn("riesgo documental", str(business_response.get("hallazgo") or "").lower())
+        self.assertIn("no deberian ser asignados", str(business_response.get("riesgo") or "").lower())
+        self.assertIn("priorizar renovacion", str(business_response.get("recomendacion") or "").lower())
+        self.assertEqual(
+            str(business_response.get("siguiente_accion") or ""),
+            "Muestrame el detalle por empleado, area o supervisor.",
+        )
 
     def test_management_command_module_does_not_import_legacy_adapter(self):
         import apps.ia_dev.management.commands.simulate_ia_dev_chat as command_module

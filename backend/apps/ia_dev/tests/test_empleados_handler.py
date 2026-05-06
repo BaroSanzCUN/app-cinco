@@ -417,7 +417,10 @@ class EmpleadosHandlerTests(SimpleTestCase):
 
         self.assertTrue(result.ok)
         response = dict(result.response or {})
-        self.assertEqual(str(response.get("reply") or ""), "Actualmente hay 866 empleados activos.")
+        self.assertEqual(
+            str(response.get("reply") or ""),
+            "Actualmente hay 866 empleados activos. Si lo necesitas, puedo desglosarlo por area, cargo o sede.",
+        )
         first_action = dict((response.get("actions") or [{}])[0] or {})
         self.assertEqual(str(first_action.get("label") or ""), "Muestrame empleados activos por area.")
         self.assertEqual(str(first_action.get("type") or ""), "suggestion")

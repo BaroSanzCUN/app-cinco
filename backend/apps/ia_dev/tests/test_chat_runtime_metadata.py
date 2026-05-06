@@ -12,6 +12,7 @@ from apps.ia_dev.application.contracts.query_intelligence_contracts import (
     ResolvedQuerySpec,
     StructuredQueryIntent,
 )
+from apps.ia_dev.application.orchestration.response_assembler import ResponseAssembler
 from apps.ia_dev.application.orchestration.chat_application_service import ChatApplicationService
 
 
@@ -24,6 +25,45 @@ class _ObservabilityStub:
 
 
 class ChatRuntimeMetadataTests(SimpleTestCase):
+    def test_response_assembler_preserves_existing_business_response(self):
+        assembler = ResponseAssembler()
+        response = {
+            "reply": "12 certificados de alturas vencidos y 7 proximos a vencer.",
+            "data": {
+                "business_response": {
+                    "dato": "12 certificados de alturas vencidos y 7 proximos a vencer.",
+                    "hallazgo": "El personal operativo activo tiene riesgo documental si hay certificados vencidos.",
+                    "interpretacion": "La vigencia anual del certificado de alturas impacta la habilitacion operativa.",
+                    "riesgo": "Tecnicos con certificado vencido no deberian ser asignados a trabajos en alturas.",
+                    "recomendacion": "Priorizar renovacion de vencidos y programar renovacion de proximos a vencer.",
+                    "siguiente_accion": "Muestrame el detalle por empleado, area o supervisor.",
+                },
+                "table": {"columns": [], "rows": [], "rowcount": 0},
+                "insights": [],
+                "findings": [],
+                "kpis": {},
+            },
+            "actions": [],
+            "trace": [],
+            "data_sources": {},
+        }
+
+        assembled = assembler.assemble(
+            legacy_response=response,
+            run_context=RunContext.create(message="certificados de alturas", session_id="heights", reset_memory=False),
+            planned_capability={},
+            route={},
+            policy_decision=None,  # type: ignore[arg-type]
+            divergence={},
+            memory_effects={},
+        )
+
+        business_response = dict((assembled.get("data") or {}).get("business_response") or {})
+        self.assertEqual(
+            str(business_response.get("siguiente_accion") or ""),
+            "Muestrame el detalle por empleado, area o supervisor.",
+        )
+
     def test_resolve_query_intelligence_keeps_planner_payload_for_personal_activo_hoy(self):
         service = ChatApplicationService()
         run_context = RunContext.create(message="personal activo hoy", session_id="sess-qi", reset_memory=False)

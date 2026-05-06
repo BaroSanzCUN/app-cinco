@@ -219,9 +219,13 @@ class ResultSatisfactionValidator:
         execution_plan: QueryExecutionPlan | None,
         message: str,
     ) -> list[str]:
-        values = [str(item).strip().lower() for item in list((execution_plan.constraints if execution_plan else {}).get("group_by") or []) if str(item).strip()]
-        if values:
-            return values
+        plan_constraints = dict((execution_plan.constraints if execution_plan else {}) or {})
+        if "group_by" in plan_constraints:
+            return [
+                str(item).strip().lower()
+                for item in list(plan_constraints.get("group_by") or [])
+                if str(item).strip()
+            ]
         if resolved_query is not None:
             values = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or []) if str(item).strip()]
             if values:

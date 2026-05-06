@@ -316,7 +316,7 @@ class SemanticBusinessResolver:
         base_profiles = list(dictionary_field_profiles or [])
         seen_keys = {
             (
-                str(item.get("table_name") or "").strip().lower(),
+                str(item.get("table_fqn") or item.get("table_name") or "").strip().lower(),
                 str(item.get("campo_logico") or item.get("column_name") or "").strip().lower(),
             )
             for item in [*base_fields, *base_profiles]
@@ -326,7 +326,7 @@ class SemanticBusinessResolver:
             if not isinstance(row, dict):
                 continue
             key = (
-                str(row.get("table_name") or "").strip().lower(),
+                str(row.get("table_fqn") or row.get("table_name") or "").strip().lower(),
                 str(row.get("campo_logico") or row.get("column_name") or "").strip().lower(),
             )
             if not key[0] or not key[1] or key in seen_keys:
@@ -431,6 +431,16 @@ class SemanticBusinessResolver:
             if status_from_message:
                 normalized_filters["estado"] = status_from_message
                 normalized_filters["estado_empleado"] = status_from_message
+        if domain_code in {"empleados", "rrhh"}:
+            dictionary_value_filters = self._resolve_allowed_value_filters_from_dictionary(
+                message=message,
+                semantic_context=semantic_context,
+                normalized_filters=normalized_filters,
+            )
+            for filter_key, filter_value in dictionary_value_filters.items():
+                if not str(filter_value or "").strip():
+                    continue
+                normalized_filters.setdefault(filter_key, filter_value)
         if domain_code in {"empleados", "rrhh"} and self._is_turnover_query(message):
             normalized_filters["estado"] = "INACTIVO"
             normalized_filters["estado_empleado"] = "INACTIVO"
@@ -677,7 +687,9 @@ class SemanticBusinessResolver:
                 continue
             columns.append(
                 {
+                    "schema_name": str(item.get("schema_name") or "").strip(),
                     "table_name": str(item.get("table_name") or "").strip(),
+                    "table_fqn": str(item.get("table_fqn") or "").strip(),
                     "column_name": column_name,
                     "nombre_columna_logico": logical_name or column_name,
                     "descripcion": str(item.get("definicion_negocio") or "").strip(),
@@ -1704,6 +1716,12 @@ class SemanticBusinessResolver:
             return "employment_start_date"
         if key in {"fecha_egreso", "fecha_retiro", "fretiro"}:
             return "employment_end_date"
+        if key in {
+            "certificado_alturas_fecha_emision",
+            "certificado_alturas_fecha_vencimiento",
+            "certificado_alturas_estado_vigencia",
+        }:
+            return "heights_certificate_validity"
         return ""
 
     @staticmethod
@@ -1712,6 +1730,7 @@ class SemanticBusinessResolver:
             "person_birth_date": ["birthday", "age"],
             "employment_start_date": ["tenure"],
             "employment_end_date": ["turnover"],
+            "heights_certificate_validity": ["certificate", "expiration", "compliance"],
         }
         return list(mapping.get(str(role or ""), []))
 
@@ -1721,6 +1740,7 @@ class SemanticBusinessResolver:
             "person_birth_date": ["list", "count", "group_by_month", "filter_by_month"],
             "employment_start_date": ["list", "count", "group_by_month", "filter_by_month"],
             "employment_end_date": ["list", "count", "group_by_month", "filter_by_month"],
+            "heights_certificate_validity": ["count", "detail", "filter", "derive_expiration"],
         }
         return list(mapping.get(str(role or ""), []))
 
@@ -1988,6 +2008,44 @@ class SemanticBusinessResolver:
                     "allowed_values": sorted(allowed_set),
                 }
         return {}
+
+    def _resolve_allowed_value_filters_from_dictionary(
+        self,
+        *,
+        message: str,
+        semantic_context: dict[str, Any],
+        normalized_filters: dict[str, Any],
+    ) -> dict[str, str]:
+        resolved: dict[str, str] = {}
+        normalized_message = self._normalize_text(message)
+        if not normalized_message:
+            return resolved
+
+        for profile in list(semantic_context.get("column_profiles") or []):
+            if not isinstance(profile, dict):
+                continue
+            logical_name = str(profile.get("logical_name") or profile.get("column_name") or "").strip().lower()
+            if not logical_name or logical_name in {"estado", "estado_empleado"}:
+                continue
+            if str((normalized_filters or {}).get(logical_name) or "").strip():
+                continue
+            if not bool(profile.get("supports_filter")):
+                continue
+            allowed_values = [
+                str(item or "").strip().upper()
+                for item in list(profile.get("allowed_values") or [])
+                if str(item or "").strip()
+            ]
+            if not allowed_values:
+                continue
+            for candidate in allowed_values:
+                normalized_candidate = self._normalize_text(candidate)
+                if not normalized_candidate:
+                    continue
+                if re.search(rf"\b{re.escape(normalized_candidate)}\b", normalized_message):
+                    resolved[logical_name] = candidate
+                    break
+        return resolved
 
     def _find_status_profile(self, *, semantic_context: dict[str, Any]) -> dict[str, Any]:
         profiles = list(semantic_context.get("column_profiles") or [])

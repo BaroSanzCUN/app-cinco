@@ -322,6 +322,40 @@ class QueryIntelligenceLayerTests(SimpleTestCase):
         self.assertEqual(intent.operation, "detail")
         self.assertEqual(str(intent.filters.get("movil") or ""), "462")
 
+    def test_query_intent_resolver_detects_employee_detail_by_name_lookup(self):
+        resolver = QueryIntentResolver()
+        with patch.dict(os.environ, {"IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0"}, clear=False):
+            intent = resolver.resolve(
+                message="buscar Juan Perez",
+                base_classification={
+                    "domain": "empleados",
+                    "intent": "empleados_query",
+                    "needs_database": True,
+                },
+                semantic_context={},
+            )
+        self.assertEqual(intent.domain_code, "empleados")
+        self.assertEqual(intent.operation, "detail")
+        self.assertEqual(intent.template_id, "detail_by_entity_and_period")
+        self.assertEqual(str(intent.filters.get("nombre") or ""), "juan perez")
+
+    def test_query_intent_resolver_detects_employee_detail_by_numeric_employee_code(self):
+        resolver = QueryIntentResolver()
+        with patch.dict(os.environ, {"IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0"}, clear=False):
+            intent = resolver.resolve(
+                message="empleado 123456",
+                base_classification={
+                    "domain": "general",
+                    "intent": "general_question",
+                    "needs_database": False,
+                },
+                semantic_context={},
+            )
+        self.assertEqual(intent.domain_code, "empleados")
+        self.assertEqual(intent.operation, "detail")
+        self.assertEqual(intent.template_id, "detail_by_entity_and_period")
+        self.assertEqual(str(intent.filters.get("cedula") or ""), "123456")
+
     def test_query_intent_resolver_merge_discards_search_when_identifier_is_present(self):
         fallback = StructuredQueryIntent(
             raw_query="informacion TIRAN462",
@@ -558,6 +592,49 @@ class QueryIntelligenceLayerTests(SimpleTestCase):
         self.assertEqual(plan.capability_id, "empleados.count.active.v1")
         self.assertFalse(bool(((plan.constraints or {}).get("entity_scope") or {}).get("has_entity_filter")))
         self.assertNotIn("search", dict((plan.constraints or {}).get("filters") or {}))
+
+    def test_query_execution_planner_recovers_population_summary_when_upstream_marks_employee_detail(self):
+        planner = QueryExecutionPlanner()
+        intent = StructuredQueryIntent(
+            raw_query="personal activo hoy",
+            domain_code="empleados",
+            operation="detail",
+            template_id="detail_by_entity_and_period",
+            filters={"estado": "ACTIVO"},
+            period={"label": "hoy", "start_date": "2026-05-06", "end_date": "2026-05-06"},
+            group_by=[],
+            metrics=["count"],
+            confidence=0.63,
+            source="openai",
+        )
+        resolved_query = ResolvedQuerySpec(
+            intent=intent,
+            semantic_context={
+                "domain_status": "active",
+                "supports_sql_assisted": False,
+                "tables": [{"table_fqn": "bd_c3nc4s1s.cinco_base_de_personal", "table_name": "cinco_base_de_personal"}],
+                "allowed_tables": ["cinco_base_de_personal", "bd_c3nc4s1s.cinco_base_de_personal"],
+                "allowed_columns": ["estado", "cedula"],
+            },
+            normalized_filters={"estado": "ACTIVO"},
+            normalized_period={},
+            mapped_columns={"estado": "estado"},
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "IA_DEV_CAP_EMPLEADOS_ENABLED": "1",
+                "IA_DEV_CAP_EMPLEADOS_COUNT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            plan = planner.plan(
+                run_context=RunContext.create(message=intent.raw_query),
+                resolved_query=resolved_query,
+            )
+        self.assertEqual(plan.strategy, "capability")
+        self.assertEqual(plan.capability_id, "empleados.count.active.v1")
+        self.assertEqual(str((plan.constraints or {}).get("result_shape") or ""), "kpi")
 
     def test_query_execution_planner_selects_rrhh_capability_even_with_generic_template(self):
         planner = QueryExecutionPlanner()
@@ -1046,6 +1123,306 @@ class QueryIntelligenceLayerTests(SimpleTestCase):
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.reason, "sql_must_start_with_select")
 
+    def test_query_execution_policy_allows_json_table_when_declared_columns_are_safe(self):
+        policy = QueryExecutionPolicy()
+        decision = policy.validate_sql_query(
+            query=(
+                "SELECT COUNT(*) AS total FROM bd_c3nc4s1s.cinco_base_de_personal AS e "
+                "JOIN JSON_TABLE(e.datos, '$.certificados_alturas[*]' "
+                "COLUMNS(tipo VARCHAR(50) PATH '$.tipo', fecha VARCHAR(20) PATH '$.fecha')) AS jt "
+                "ON jt.tipo = 'alturas' WHERE e.estado = 'ACTIVO' LIMIT 1"
+            ),
+            allowed_tables=["bd_c3nc4s1s.cinco_base_de_personal"],
+            allowed_columns=["datos", "estado"],
+            declared_columns=["datos", "estado"],
+            max_limit=100,
+        )
+        self.assertTrue(decision.allowed)
+
+    def test_query_execution_planner_routes_heights_certificate_summary_to_sql_assisted(self):
+        planner = QueryExecutionPlanner()
+        intent = StructuredQueryIntent(
+            raw_query="si el certificado de alturas vence cada año, cuántos certificados están vencidos y cuántos certificados están próximos a vencer, solo personal activo y tipo de labor operativo",
+            domain_code="empleados",
+            operation="count",
+            template_id="count_entities_by_status",
+            filters={"estado_empleado": "ACTIVO", "tipo_labor": "OPERATIVO"},
+            period={},
+            group_by=[],
+            metrics=["count"],
+            confidence=0.94,
+            source="rules",
+        )
+        resolved_query = ResolvedQuerySpec(
+            intent=intent,
+            semantic_context={
+                "domain_status": "active",
+                "supports_sql_assisted": True,
+                "tables": [{"table_fqn": "bd_c3nc4s1s.cinco_base_de_personal", "table_name": "cinco_base_de_personal"}],
+                "allowed_tables": ["cinco_base_de_personal", "bd_c3nc4s1s.cinco_base_de_personal"],
+                "allowed_columns": ["datos", "estado", "tipo_labor"],
+                "dictionary": {
+                    "rules": [
+                        {"codigo": "certificado_alturas_vigencia_anual"},
+                        {"codigo": "certificado_alturas_vencido"},
+                        {"codigo": "certificado_alturas_proximo_vencer_30_dias"},
+                        {"codigo": "personal_activo_operativo"},
+                    ]
+                },
+                "column_profiles": [
+                    {"table_name": "cinco_base_de_personal", "logical_name": "estado_empleado", "column_name": "estado", "supports_filter": True, "allowed_values": ["ACTIVO", "INACTIVO"]},
+                    {"table_name": "cinco_base_de_personal", "logical_name": "tipo_labor", "column_name": "tipo_labor", "supports_filter": True, "allowed_values": ["OPERATIVO", "ADMINISTRATIVO"]},
+                    {
+                        "table_name": "cinco_base_de_personal",
+                        "logical_name": "certificado_alturas_fecha_emision",
+                        "column_name": "datos",
+                        "supports_filter": True,
+                        "is_date": True,
+                        "definicion_negocio": "Fuente oficial. [json_path=$.certificados_alturas[*]][json_filter_tipo=alturas][json_date_key=fecha][fallback_column=calturas]",
+                    },
+                ],
+                "resolved_semantic": {
+                    "field_match": {
+                        "logical_name": "certificado_alturas_fecha_emision",
+                        "semantic_role": "heights_certificate_validity",
+                        "business_concepts": ["certificate", "expiration"],
+                    }
+                },
+                "source_of_truth": {"pilot_sql_assisted_enabled": True},
+            },
+            normalized_filters={"estado_empleado": "ACTIVO", "tipo_labor": "OPERATIVO"},
+            normalized_period={},
+            mapped_columns={"estado_empleado": "estado", "tipo_labor": "tipo_labor"},
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "IA_DEV_CAP_EMPLEADOS_ENABLED": "1",
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            plan = planner.plan(
+                run_context=RunContext.create(message=intent.raw_query, session_id="heights-sql", reset_memory=False),
+                resolved_query=resolved_query,
+            )
+        self.assertEqual(plan.strategy, "sql_assisted")
+        self.assertIn("JSON_TABLE", str(plan.sql_query or ""))
+        self.assertIn("e.estado = 'ACTIVO'", str(plan.sql_query or ""))
+        self.assertIn("e.tipo_labor = 'OPERATIVO'", str(plan.sql_query or ""))
+        self.assertEqual(str((plan.metadata or {}).get("compiler") or ""), "employee_semantic_sql")
+        self.assertEqual(str((plan.metadata or {}).get("metric_used") or ""), "certificado_alturas_vigencia")
+
+    def test_query_execution_planner_heights_certificate_uses_calturas_fallback_when_json_path_missing(self):
+        planner = QueryExecutionPlanner()
+        intent = StructuredQueryIntent(
+            raw_query="certificado de alturas vencidos del personal activo operativo",
+            domain_code="empleados",
+            operation="count",
+            template_id="count_entities_by_status",
+            filters={"estado": "ACTIVO", "tipo_labor": "OPERATIVO"},
+            metrics=["count"],
+            confidence=0.9,
+            source="rules",
+        )
+        resolved_query = ResolvedQuerySpec(
+            intent=intent,
+            semantic_context={
+                "domain_status": "active",
+                "supports_sql_assisted": True,
+                "tables": [{"table_fqn": "bd_c3nc4s1s.cinco_base_de_personal", "table_name": "cinco_base_de_personal"}],
+                "allowed_tables": ["bd_c3nc4s1s.cinco_base_de_personal"],
+                "allowed_columns": ["calturas", "estado", "tipo_labor"],
+                "dictionary": {
+                    "rules": [
+                        {"codigo": "certificado_alturas_vigencia_anual"},
+                        {"codigo": "certificado_alturas_vencido"},
+                        {"codigo": "certificado_alturas_proximo_vencer_30_dias"},
+                        {"codigo": "personal_activo_operativo"},
+                    ]
+                },
+                "column_profiles": [
+                    {"table_name": "cinco_base_de_personal", "logical_name": "estado_empleado", "column_name": "estado", "supports_filter": True, "allowed_values": ["ACTIVO", "INACTIVO"]},
+                    {"table_name": "cinco_base_de_personal", "logical_name": "tipo_labor", "column_name": "tipo_labor", "supports_filter": True, "allowed_values": ["OPERATIVO", "ADMINISTRATIVO"]},
+                    {
+                        "table_name": "cinco_base_de_personal",
+                        "logical_name": "certificado_alturas_fecha_emision",
+                        "column_name": "calturas",
+                        "supports_filter": True,
+                        "is_date": True,
+                        "definicion_negocio": "Fallback controlado para alturas.",
+                    },
+                ],
+                "resolved_semantic": {
+                    "field_match": {
+                        "logical_name": "certificado_alturas_fecha_emision",
+                        "semantic_role": "heights_certificate_validity",
+                    }
+                },
+                "source_of_truth": {"pilot_sql_assisted_enabled": True},
+            },
+            normalized_filters={"estado": "ACTIVO", "tipo_labor": "OPERATIVO"},
+            mapped_columns={"estado": "estado", "tipo_labor": "tipo_labor"},
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            plan = planner.plan(
+                run_context=RunContext.create(message=intent.raw_query, session_id="heights-fallback", reset_memory=False),
+                resolved_query=resolved_query,
+            )
+        self.assertEqual(plan.strategy, "sql_assisted")
+        self.assertIn("DATE(e.calturas)", str(plan.sql_query or ""))
+        self.assertEqual(str((plan.metadata or {}).get("source_mode") or ""), "fallback_calturas")
+
+    def test_query_execution_planner_heights_certificate_prefers_table_covering_required_columns(self):
+        planner = QueryExecutionPlanner()
+        intent = StructuredQueryIntent(
+            raw_query="certificados de alturas vencidos del personal activo operativo",
+            domain_code="empleados",
+            operation="count",
+            template_id="count_entities_by_status",
+            filters={"estado_empleado": "ACTIVO", "tipo_labor": "OPERATIVO"},
+            metrics=["count"],
+            confidence=0.9,
+            source="rules",
+        )
+        resolved_query = ResolvedQuerySpec(
+            intent=intent,
+            semantic_context={
+                "domain_status": "active",
+                "supports_sql_assisted": True,
+                "tables": [
+                    {"schema_name": "cincosas_cincosas", "table_fqn": "cincosas_cincosas.cinco_base_de_personal", "table_name": "cinco_base_de_personal"},
+                    {"schema_name": "bd_c3nc4s1s", "table_fqn": "bd_c3nc4s1s.cinco_base_de_personal", "table_name": "cinco_base_de_personal"},
+                ],
+                "allowed_tables": [
+                    "cincosas_cincosas.cinco_base_de_personal",
+                    "bd_c3nc4s1s.cinco_base_de_personal",
+                ],
+                "allowed_columns": ["datos", "calturas", "estado", "tipo_labor"],
+                "dictionary": {
+                    "rules": [
+                        {"codigo": "certificado_alturas_vigencia_anual"},
+                        {"codigo": "certificado_alturas_vencido"},
+                        {"codigo": "certificado_alturas_proximo_vencer_30_dias"},
+                        {"codigo": "personal_activo_operativo"},
+                    ],
+                    "fields": [
+                        {
+                            "schema_name": "bd_c3nc4s1s",
+                            "table_name": "cinco_base_de_personal",
+                            "table_fqn": "bd_c3nc4s1s.cinco_base_de_personal",
+                            "campo_logico": "certificado_alturas_fecha_emision",
+                            "column_name": "datos",
+                            "definicion_negocio": "Fuente oficial. [json_path=$.certificados_alturas[*]][json_filter_tipo=alturas][json_date_key=fecha][fallback_column=calturas]",
+                        }
+                    ],
+                },
+                "column_profiles": [
+                    {"schema_name": "cincosas_cincosas", "table_name": "cinco_base_de_personal", "table_fqn": "cincosas_cincosas.cinco_base_de_personal", "logical_name": "estado_empleado", "column_name": "estado", "supports_filter": True, "allowed_values": ["ACTIVO", "INACTIVO"]},
+                    {"schema_name": "bd_c3nc4s1s", "table_name": "cinco_base_de_personal", "table_fqn": "bd_c3nc4s1s.cinco_base_de_personal", "logical_name": "estado_empleado", "column_name": "estado", "supports_filter": True, "allowed_values": ["ACTIVO", "INACTIVO"]},
+                    {"schema_name": "bd_c3nc4s1s", "table_name": "cinco_base_de_personal", "table_fqn": "bd_c3nc4s1s.cinco_base_de_personal", "logical_name": "tipo_labor", "column_name": "tipo_labor", "supports_filter": True, "allowed_values": ["OPERATIVO", "ADMINISTRATIVO"]},
+                    {"schema_name": "bd_c3nc4s1s", "table_name": "cinco_base_de_personal", "table_fqn": "bd_c3nc4s1s.cinco_base_de_personal", "logical_name": "certificado_alturas_fecha_emision", "column_name": "datos", "supports_filter": True, "is_date": True, "definicion_negocio": "Fuente oficial. [json_path=$.certificados_alturas[*]][json_filter_tipo=alturas][json_date_key=fecha][fallback_column=calturas]"},
+                    {"schema_name": "bd_c3nc4s1s", "table_name": "cinco_base_de_personal", "table_fqn": "bd_c3nc4s1s.cinco_base_de_personal", "logical_name": "certificado_alturas_fallback", "column_name": "calturas", "supports_filter": True, "is_date": True},
+                ],
+                "resolved_semantic": {
+                    "field_match": {
+                        "logical_name": "certificado_alturas_fecha_emision",
+                        "semantic_role": "heights_certificate_validity",
+                    }
+                },
+                "source_of_truth": {"pilot_sql_assisted_enabled": True},
+            },
+            normalized_filters={"estado_empleado": "ACTIVO", "tipo_labor": "OPERATIVO"},
+            mapped_columns={"estado_empleado": "estado", "tipo_labor": "tipo_labor"},
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            plan = planner.plan(
+                run_context=RunContext.create(message=intent.raw_query, session_id="heights-prefers-bd", reset_memory=False),
+                resolved_query=resolved_query,
+            )
+        self.assertEqual(plan.strategy, "sql_assisted")
+        self.assertIn("FROM bd_c3nc4s1s.cinco_base_de_personal AS e", str(plan.sql_query or ""))
+        self.assertNotIn("FROM cincosas_cincosas.cinco_base_de_personal AS e", str(plan.sql_query or ""))
+        self.assertIn("JSON_TABLE(e.datos", str(plan.sql_query or ""))
+
+    def test_query_execution_planner_heights_certificate_does_not_use_cer_alturas_as_date_source(self):
+        planner = QueryExecutionPlanner()
+        intent = StructuredQueryIntent(
+            raw_query="certificados de alturas vencidos del personal activo operativo",
+            domain_code="empleados",
+            operation="count",
+            template_id="count_entities_by_status",
+            filters={"estado": "ACTIVO", "tipo_labor": "OPERATIVO"},
+            metrics=["count"],
+            confidence=0.9,
+            source="rules",
+        )
+        resolved_query = ResolvedQuerySpec(
+            intent=intent,
+            semantic_context={
+                "domain_status": "active",
+                "supports_sql_assisted": True,
+                "tables": [{"table_fqn": "bd_c3nc4s1s.cinco_base_de_personal", "table_name": "cinco_base_de_personal"}],
+                "allowed_tables": ["bd_c3nc4s1s.cinco_base_de_personal"],
+                "allowed_columns": ["cer_alturas", "estado", "tipo_labor"],
+                "dictionary": {
+                    "rules": [
+                        {"codigo": "certificado_alturas_vigencia_anual"},
+                        {"codigo": "certificado_alturas_vencido"},
+                        {"codigo": "certificado_alturas_proximo_vencer_30_dias"},
+                        {"codigo": "personal_activo_operativo"},
+                    ]
+                },
+                "column_profiles": [
+                    {"table_name": "cinco_base_de_personal", "logical_name": "estado_empleado", "column_name": "estado", "supports_filter": True, "allowed_values": ["ACTIVO", "INACTIVO"]},
+                    {"table_name": "cinco_base_de_personal", "logical_name": "tipo_labor", "column_name": "tipo_labor", "supports_filter": True, "allowed_values": ["OPERATIVO", "ADMINISTRATIVO"]},
+                    {"table_name": "cinco_base_de_personal", "logical_name": "certificado_alturas_fecha_emision", "column_name": "cer_alturas", "supports_filter": True, "definicion_negocio": "Fuente invalida para fecha."},
+                ],
+                "resolved_semantic": {
+                    "field_match": {
+                        "logical_name": "certificado_alturas_fecha_emision",
+                        "semantic_role": "heights_certificate_validity",
+                    }
+                },
+                "source_of_truth": {"pilot_sql_assisted_enabled": True},
+            },
+            normalized_filters={"estado": "ACTIVO", "tipo_labor": "OPERATIVO"},
+            mapped_columns={"estado": "estado", "tipo_labor": "tipo_labor"},
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            plan = planner.plan(
+                run_context=RunContext.create(message=intent.raw_query, session_id="heights-no-cer", reset_memory=False),
+                resolved_query=resolved_query,
+            )
+        self.assertEqual(plan.strategy, "fallback")
+        self.assertEqual(plan.reason, "sql_rejected:sql_uses_unregistered_column")
+
     def test_result_satisfaction_validator_detects_cedula_mismatch(self):
         validator = ResultSatisfactionValidator()
         response = {
@@ -1090,6 +1467,58 @@ class QueryIntelligenceLayerTests(SimpleTestCase):
         )
         self.assertFalse(validation.satisfied)
         self.assertEqual(validation.reason, "group_count_requested_but_result_is_not_aggregated")
+
+    def test_result_satisfaction_validator_respects_explicit_empty_group_by_from_planner_for_heights_kpi(self):
+        validator = ResultSatisfactionValidator()
+        resolved_query = ResolvedQuerySpec(
+            intent=StructuredQueryIntent(
+                raw_query="si el certificado de alturas vence cada ano, cuantos certificados estan vencidos y cuantos certificados estan proximos a vencer, solo personal activo y tipo de labor operativo",
+                domain_code="empleados",
+                operation="aggregate",
+                template_id="aggregate_by_group_and_period",
+                filters={"estado_empleado": "ACTIVO", "tipo_labor": "OPERATIVO"},
+                group_by=["area"],
+                metrics=["count"],
+                confidence=0.94,
+                source="rules",
+            ),
+            normalized_filters={"estado_empleado": "ACTIVO", "tipo_labor": "OPERATIVO"},
+        )
+        execution_plan = QueryExecutionPlan(
+            strategy="sql_assisted",
+            reason="sql_assisted_ready",
+            domain_code="empleados",
+            constraints={
+                "filters": {"estado_empleado": "ACTIVO", "tipo_labor": "OPERATIVO"},
+                "group_by": [],
+                "result_shape": "kpi",
+                "operation": "count",
+            },
+            metadata={"compiler": "employee_semantic_sql", "metric_used": "certificado_alturas_vigencia"},
+        )
+        response = {
+            "reply": "312 certificados de alturas vencidos y 52 proximos a vencer en personal activo de labor operativa.",
+            "data": {
+                "kpis": {
+                    "certificados_vencidos": 312,
+                    "certificados_proximos_vencer": 52,
+                },
+                "table": {
+                    "columns": ["certificados_vencidos", "certificados_proximos_vencer"],
+                    "rows": [{"certificados_vencidos": 312, "certificados_proximos_vencer": 52}],
+                    "rowcount": 1,
+                },
+            },
+        }
+        validation = validator.validate(
+            message=resolved_query.intent.raw_query,
+            response=response,
+            resolved_query=resolved_query,
+            execution_plan=execution_plan,
+        )
+        self.assertTrue(validation.satisfied)
+        self.assertEqual(validation.reason, "ok")
+        self.assertEqual(list(validation.checks.get("expected_group_by") or []), [])
 
     def test_query_shape_key_generalizes_birthday_month_queries(self):
         first = QueryIntentResolver._build_query_shape_key("Cumpleaños de mayo")
