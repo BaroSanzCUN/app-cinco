@@ -180,6 +180,12 @@ class QueryIntentResolver:
             )
         ):
             operation = "aggregate" if group_by else "count"
+        elif (
+            domain in {"empleados", "rrhh"}
+            and str(filters.get("nombre") or "").strip()
+            and not group_by
+        ):
+            operation = "detail"
 
         template_id = self._resolve_template_id(
             normalized=normalized,
@@ -255,7 +261,22 @@ class QueryIntentResolver:
                         "Usa SIEMPRE ambas capas del contexto semantico: YAML de negocio y metadata estructurada de DB.\n"
                         "Prioriza reglas_negocio, contexto_agente y ejemplos_consulta para interpretar el negocio.\n"
                         "Usa tables, columns, relationships, synonyms y query_hints para validar tablas, columnas y joins candidatos.\n"
+                        "Regla critica de RRHH: si la consulta habla de personal/empleados/colaboradores activos o inactivos "
+                        "sin identificador puntual, interpretala como resumen o conteo corporativo, no como detalle.\n"
+                        "Si el usuario dice 'hoy' en una consulta de personal activo actual, usa snapshot actual con period={}.\n"
+                        "Si la consulta pide buscar una persona especifica por nombre, cedula, movil o codigo, usa detail.\n"
+                        "Si la consulta usa 'por <dimension>' como cargo, area o sede, usa aggregate_by_group_and_period.\n"
                         "No generes SQL, no agregues texto fuera del JSON."
+                    ),
+                },
+                {
+                    "role": "system",
+                    "content": (
+                        "Ejemplos canonicos:\n"
+                        '- "personal activo hoy" => {"domain_code":"empleados","operation":"count","template_id":"count_entities_by_status","filters":{"estado":"ACTIVO"},"period":{},"group_by":[],"metrics":["count"]}\n'
+                        '- "colaboradores activos" => {"domain_code":"empleados","operation":"count","template_id":"count_entities_by_status","filters":{"estado":"ACTIVO"},"period":{},"group_by":[],"metrics":["count"]}\n'
+                        '- "empleados activos por cargo" => {"domain_code":"empleados","operation":"aggregate","template_id":"aggregate_by_group_and_period","filters":{"estado":"ACTIVO"},"group_by":["cargo"],"metrics":["count"]}\n'
+                        '- "buscar Juan Perez" => {"domain_code":"empleados","operation":"detail","template_id":"detail_by_entity_and_period","filters":{"nombre":"juan perez"},"group_by":[],"metrics":["count"]}\n'
                     ),
                 },
                 {
@@ -450,7 +471,63 @@ class QueryIntentResolver:
         birthday_month = QueryIntentResolver._extract_birthday_month_filter(normalized)
         if birthday_month:
             filters["fnacimiento_month"] = birthday_month
+        employee_name = QueryIntentResolver._extract_employee_name_filter(normalized=normalized)
+        if employee_name:
+            filters["nombre"] = employee_name
         return filters
+
+    @staticmethod
+    def _extract_employee_name_filter(*, normalized: str) -> str:
+        text = str(normalized or "").strip().lower()
+        patterns = (
+            r"\b(?:buscar|busca|encuentra|encontrar)\s+([a-z][a-z\s]{2,80})$",
+            r"\b(?:empleado|empleada|colaborador|colaboradora|trabajador|persona)\s+([a-z][a-z\s]{2,80})$",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            candidate = " ".join(str(match.group(1) or "").strip().split())
+            if QueryIntentResolver._looks_like_person_name(candidate):
+                return candidate[:80]
+        return ""
+
+    @staticmethod
+    def _looks_like_person_name(value: str) -> bool:
+        candidate = " ".join(str(value or "").strip().split())
+        if not candidate:
+            return False
+        tokens = [token for token in candidate.split() if token]
+        if len(tokens) < 2:
+            return False
+        blocked = {
+            "activo",
+            "activos",
+            "activa",
+            "activas",
+            "inactivo",
+            "inactivos",
+            "hoy",
+            "ayer",
+            "cargo",
+            "cargos",
+            "area",
+            "areas",
+            "sede",
+            "sedes",
+            "supervisor",
+            "supervisores",
+            "por",
+            "con",
+            "de",
+            "del",
+        }
+        for token in tokens:
+            if token in blocked:
+                return False
+            if not re.fullmatch(r"[a-z]{2,}", token):
+                return False
+        return True
 
     @staticmethod
     def _extract_birthday_month_filter(normalized: str) -> str:

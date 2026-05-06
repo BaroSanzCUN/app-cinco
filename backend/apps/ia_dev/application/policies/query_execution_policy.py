@@ -36,6 +36,7 @@ class QueryExecutionPolicy:
         r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=|>=|<=|<>|!=|>|<|like|in|between)\b",
         re.IGNORECASE,
     )
+    SQL_TABLE_FUNCTIONS = {"json_table"}
 
     def __init__(self, *, runtime: PolicyRuntime | None = None):
         self.runtime = runtime or PolicyRuntime()
@@ -215,7 +216,7 @@ class QueryExecutionPolicy:
         values: list[str] = []
         for match in cls.TABLE_REF_RE.finditer(query):
             token = str(match.group(1) or "").strip().strip("`")
-            if token:
+            if token and token.lower() not in cls.SQL_TABLE_FUNCTIONS:
                 values.append(token.lower())
         return values
 

@@ -346,11 +346,16 @@ class IADevRegressionEndpointsTests(SimpleTestCase):
         chart = dict(data.get("chart") or {})
         meta = dict(data.get("meta") or {})
         presentation = dict(meta.get("presentation") or {})
+        business_response = dict(data.get("business_response") or {})
 
         self.assertEqual(chart.get("chart_library"), "amcharts5")
         self.assertEqual(chart.get("type"), "bar")
         self.assertEqual(presentation.get("primary"), "chart")
         self.assertTrue(presentation.get("has_kpis"))
+        self.assertEqual(str(business_response.get("dato") or ""), "Actualmente hay 866 empleados activos.")
+        self.assertTrue(bool(str(business_response.get("hallazgo") or "").strip()))
+        self.assertTrue(bool(str(business_response.get("interpretacion") or "").strip()))
+        self.assertTrue(bool(str(business_response.get("recomendacion") or "").strip()))
 
     def test_observability_summary_endpoint_accepts_filters(self):
         payload = {"enabled": True, "window_seconds": 3600, "sample_size": 0}

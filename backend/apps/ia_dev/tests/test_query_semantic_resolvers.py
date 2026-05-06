@@ -25,6 +25,9 @@ from apps.ia_dev.application.semantic.semantic_business_resolver import (
 from apps.ia_dev.application.semantic.synonym_semantic_resolver import (
     SynonymSemanticResolver,
 )
+from apps.ia_dev.services.ai_dictionary_remediation_service import (
+    AIDictionaryRemediationService,
+)
 
 
 @dataclass
@@ -165,9 +168,10 @@ class _FakeDictionaryTool:
                 {
                     "table_name": "cinco_base_de_personal",
                     "campo_logico": "tipo_labor",
-                    "column_name": "tipo",
+                    "column_name": "tipo_labor",
                     "es_filtro": True,
                     "es_group_by": True,
+                    "valores_permitidos": "OPERATIVO,ADMINISTRATIVO,SUPERVISOR,TRANSVERSAL",
                 },
                 {
                     "table_name": "cinco_base_de_personal",
@@ -198,9 +202,38 @@ class _FakeDictionaryTool:
                     "is_identifier": True,
                     "es_filtro": True,
                 },
+                {
+                    "table_name": "cinco_base_de_personal",
+                    "campo_logico": "certificado_alturas_fecha_emision",
+                    "column_name": "datos",
+                    "es_filtro": True,
+                    "is_date": True,
+                    "definicion_negocio": "Fuente oficial. [json_path=$.certificados_alturas[*]][json_filter_tipo=alturas][json_date_key=fecha][fallback_column=calturas]",
+                },
+                {
+                    "table_name": "cinco_base_de_personal",
+                    "campo_logico": "certificado_alturas_fecha_vencimiento",
+                    "column_name": "datos",
+                    "es_filtro": True,
+                    "is_date": True,
+                    "definicion_negocio": "Fecha derivada. [json_path=$.certificados_alturas[*]][json_filter_tipo=alturas][json_date_key=fecha][fallback_column=calturas]",
+                },
+                {
+                    "table_name": "cinco_base_de_personal",
+                    "campo_logico": "certificado_alturas_estado_vigencia",
+                    "column_name": "datos",
+                    "es_filtro": True,
+                    "definicion_negocio": "Estado derivado. [json_path=$.certificados_alturas[*]][json_filter_tipo=alturas][json_date_key=fecha][fallback_column=calturas]",
+                },
             ],
             "field_profiles": [],
-            "rules": [{"resultado_funcional": "empleado = cedula"}],
+            "rules": [
+                {"codigo": "certificado_alturas_vigencia_anual", "resultado_funcional": "vigencia anual"},
+                {"codigo": "certificado_alturas_vencido", "resultado_funcional": "vencido"},
+                {"codigo": "certificado_alturas_proximo_vencer_30_dias", "resultado_funcional": "proximo"},
+                {"codigo": "personal_activo_operativo", "resultado_funcional": "activo operativo"},
+                {"resultado_funcional": "empleado = cedula"},
+            ],
             "relations": [
                 {
                     "nombre_relacion": "empleado_supervisor",
@@ -216,6 +249,11 @@ class _FakeDictionaryTool:
                 {"termino": "fecha_nacimiento", "sinonimo": "cumpleanos"},
                 {"termino": "fecha_nacimiento", "sinonimo": "nacimiento"},
                 {"termino": "fecha_ingreso", "sinonimo": "antiguedad"},
+                {"termino": "certificado_alturas_fecha_emision", "sinonimo": "certificado de alturas"},
+                {"termino": "certificado_alturas_fecha_emision", "sinonimo": "curso de alturas"},
+                {"termino": "certificado_alturas_fecha_emision", "sinonimo": "alturas"},
+                {"termino": "certificado_alturas_estado_vigencia", "sinonimo": "vencidos"},
+                {"termino": "certificado_alturas_estado_vigencia", "sinonimo": "proximos a vencer"},
             ],
         }
 
@@ -361,6 +399,19 @@ class _FakeDictionaryTool:
 
 
 class QuerySemanticResolversTests(SimpleTestCase):
+    def test_ai_dictionary_remediation_uses_bd_employee_table_for_empleados_domain(self):
+        service = AIDictionaryRemediationService()
+        manifest = service._build_domain_manifest(domain_code="empleados")
+        employee_tables = [
+            item for item in list(manifest.get("tables") or [])
+            if str(item.get("table_name") or "").strip().lower() == "cinco_base_de_personal"
+        ]
+        self.assertEqual(len(employee_tables), 1)
+        self.assertEqual(
+            str(employee_tables[0].get("schema_name") or "").strip().lower(),
+            "bd_c3nc4s1s",
+        )
+
     def test_synonym_semantic_resolver_canonicalize(self):
         resolver = SynonymSemanticResolver()
         index = resolver.build_index(

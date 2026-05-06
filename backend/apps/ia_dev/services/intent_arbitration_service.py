@@ -165,6 +165,9 @@ class IntentArbitrationService:
                         "Regla critica: solo activa should_create_kpro=true si el usuario pide explicitamente "
                         "crear conocimiento, modificar reglas, registrar una definicion, cambiar metadata "
                         "o aprobar/aplicar una propuesta. Una pregunta analitica nunca crea KPRO por defecto.\n"
+                        "Regla de RRHH: consultas como 'personal activo hoy', 'colaboradores activos' o "
+                        "'cuantos empleados activos hay' son analytics de conteo/resumen; no las conviertas "
+                        "en detalle si no traen identificador puntual.\n"
                         "Si la confianza es baja, usa final_intent=fallback y required_clarification."
                     ),
                 },
@@ -180,6 +183,8 @@ class IntentArbitrationService:
                         '{"final_intent":"knowledge_change_request","should_create_kpro":true}\n'
                         '- "Que cargos concentran mas incapacidades" => '
                         '{"final_intent":"analytics_query","should_create_kpro":false}\n'
+                        '- "personal activo hoy" => '
+                        '{"final_intent":"analytics_query","final_domain":"empleados","should_create_kpro":false,"should_use_handler":true}\n'
                     ),
                 },
                 {
@@ -572,6 +577,19 @@ class IntentArbitrationService:
             inferred_operation = "count" if any(
                 token in normalized_query for token in ("cuantos", "cuantas", "cantidad", "total", "numero")
             ) else "list"
+        inferred_domain = normalizar_codigo_dominio(
+            llm_payload.get("domain")
+            or candidate_domain
+            or ""
+        )
+        status_value = cls._extract_status_value(filters=filters, normalized_query=normalized_query)
+        if cls._looks_like_employee_population_query(
+            normalized_query=normalized_query,
+            inferred_domain=inferred_domain,
+            filters=filters,
+            status_value=status_value,
+        ):
+            inferred_operation = "count"
 
         concept_aliases = cls._concept_aliases_from_dictionary(
             fields=fields,
@@ -757,6 +775,41 @@ class IntentArbitrationService:
             "summary": "summary",
         }
         return mapping.get(normalized, normalized)
+
+    @staticmethod
+    def _extract_status_value(*, filters: dict[str, Any], normalized_query: str) -> str:
+        for key in ("estado", "estado_empleado"):
+            value = str((filters or {}).get(key) or "").strip().upper()
+            if value in {"ACTIVO", "INACTIVO"}:
+                return value
+        if re.search(r"\b(inactivo|inactivos|retirado|retirados|egreso|egresos|baja|bajas)\b", normalized_query):
+            return "INACTIVO"
+        if re.search(r"\b(activo|activos|activa|activas|vigente|vigentes|habilitado|habilitados)\b", normalized_query):
+            return "ACTIVO"
+        return ""
+
+    @staticmethod
+    def _looks_like_employee_population_query(
+        *,
+        normalized_query: str,
+        inferred_domain: str,
+        filters: dict[str, Any],
+        status_value: str,
+    ) -> bool:
+        if normalizar_codigo_dominio(inferred_domain) not in {"empleados", "rrhh"}:
+            return False
+        if status_value not in {"ACTIVO", "INACTIVO"}:
+            return False
+        if not re.search(r"\b(emplead\w*|colaborador(?:es)?|personal|persona(?:s)?|trabajador(?:es)?)\b", normalized_query):
+            return False
+        if any(
+            str((filters or {}).get(key) or "").strip()
+            for key in ("cedula", "cedula_empleado", "identificacion", "documento", "id_empleado", "movil", "codigo_sap", "nombre", "search")
+        ):
+            return False
+        if any(token in normalized_query for token in ("detalle", "informacion", "info", "ficha", "datos", "buscar")):
+            return False
+        return True
 
     @staticmethod
     def _default_reasoning_summary(

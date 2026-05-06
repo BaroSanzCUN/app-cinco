@@ -231,11 +231,19 @@ class LegacyResponseAssembler:
 
     def _inject_business_response_summary(self, *, response: dict[str, Any]) -> None:
         data = dict(response.get("data") or {})
+        existing_business_response = dict(data.get("business_response") or {})
+        if all(
+            str(existing_business_response.get(key) or "").strip()
+            for key in ("dato", "hallazgo", "riesgo", "recomendacion", "siguiente_accion")
+        ):
+            response["data"] = data
+            return
         table = dict(data.get("table") or {})
         findings = [item for item in list(data.get("findings") or []) if isinstance(item, dict)]
         insights = [str(item or "").strip() for item in list(data.get("insights") or []) if str(item or "").strip()]
         actions = [item for item in list(response.get("actions") or []) if isinstance(item, dict)]
         kpis = dict(data.get("kpis") or {})
+        reply = str(response.get("reply") or "").strip()
 
         dato = ""
         if kpis:
@@ -246,6 +254,14 @@ class LegacyResponseAssembler:
                     dato = f"Actualmente hay {kpis.get('total_empleados')} empleados activos."
                 elif status_value == "INACTIVO":
                     dato = f"Actualmente hay {kpis.get('total_empleados')} empleados inactivos."
+                else:
+                    combined_text = " ".join(
+                        part for part in [reply, *insights] if str(part or "").strip()
+                    ).lower()
+                    if "empleados activos" in combined_text:
+                        dato = f"Actualmente hay {kpis.get('total_empleados')} empleados activos."
+                    elif "empleados inactivos" in combined_text:
+                        dato = f"Actualmente hay {kpis.get('total_empleados')} empleados inactivos."
             if not dato:
                 first_key = next(iter(kpis.keys()), "")
                 if first_key:
@@ -258,23 +274,82 @@ class LegacyResponseAssembler:
             hallazgo = str(findings[0].get("detail") or findings[0].get("title") or "").strip()
         if not hallazgo and insights:
             hallazgo = insights[0]
+        if not hallazgo and dato:
+            hallazgo = "La consulta se resolvio como un indicador empresarial listo para seguimiento."
 
         recomendacion = ""
         if len(insights) > 1:
             recomendacion = insights[1]
+        if not recomendacion and actions:
+            recomendacion = str(actions[0].get("label") or "").strip()
+        if not recomendacion and hallazgo:
+            recomendacion = "Amplia la consulta con un desglose por dimension o solicita el detalle para accionar."
 
         siguiente_accion = ""
         if actions:
             siguiente_accion = str(actions[0].get("label") or "").strip()
+        interpretacion = self._infer_business_interpretation(
+            dato=dato,
+            hallazgo=hallazgo,
+            reply=reply,
+            rowcount=int(table.get("rowcount") or 0),
+        )
+        riesgo = self._infer_business_risk(
+            dato=dato,
+            hallazgo=hallazgo,
+            reply=reply,
+            rowcount=int(table.get("rowcount") or 0),
+        )
 
         data["business_response"] = {
             "dato": dato,
             "hallazgo": hallazgo,
-            "riesgo": "",
+            "interpretacion": interpretacion,
+            "riesgo": riesgo,
             "recomendacion": recomendacion,
             "siguiente_accion": siguiente_accion,
         }
         response["data"] = data
+
+    @staticmethod
+    def _infer_business_interpretation(
+        *,
+        dato: str,
+        hallazgo: str,
+        reply: str,
+        rowcount: int,
+    ) -> str:
+        text = " ".join(part for part in (dato, hallazgo, reply) if part).lower()
+        if not text and rowcount <= 0:
+            return "No se generaron datos accionables para interpretar."
+        if "actualmente hay 0" in text or "no encontre" in text or "no encontr" in text:
+            return "El resultado sugiere filtros restrictivos o una ausencia puntual de datos para la consulta."
+        if "empleados activos" in text:
+            return "El dato representa una fotografia actual de la dotacion activa disponible para operar."
+        if "empleados inactivos" in text or "egresos" in text or "rotacion" in text:
+            return "El resultado requiere seguimiento de estabilidad laboral y posibles impactos de continuidad."
+        if rowcount > 1:
+            return "La consulta arroja un conjunto de datos util para priorizar revision por segmentos."
+        return "El resultado es consistente con una consulta puntual de seguimiento empresarial."
+
+    @staticmethod
+    def _infer_business_risk(
+        *,
+        dato: str,
+        hallazgo: str,
+        reply: str,
+        rowcount: int,
+    ) -> str:
+        text = " ".join(part for part in (dato, hallazgo, reply) if part).lower()
+        if "actualmente hay 0" in text or "no encontre" in text or "no encontr" in text:
+            return "Puede existir riesgo de interpretacion si los filtros no reflejan la operacion esperada."
+        if "rotacion" in text or "egresos" in text or "inactivos" in text:
+            return "Conviene revisar impacto operativo y continuidad de personal en el periodo analizado."
+        if "empleados activos" in text:
+            return "Riesgo bajo; el siguiente paso es validar distribucion por area, cargo o sede."
+        if rowcount > 20:
+            return "El volumen de resultados puede requerir priorizacion para una lectura ejecutiva."
+        return ""
 
     @staticmethod
     def _coerce_numeric_series(series_value: Any) -> list[float]:

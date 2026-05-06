@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections import Counter, defaultdict
 from typing import Any
 
@@ -446,6 +447,8 @@ class AIDictionaryDeduplicationService:
             }
             return "equivalent" if len(signatures) == 1 else "conflicting"
         if entity_type == "field":
+            if self._fields_are_multiple_semantic_views(rows=rows):
+                return "equivalent"
             tipo_campo = {
                 self._normalize_key(item.get("tipo_campo"))
                 for item in rows
@@ -489,6 +492,8 @@ class AIDictionaryDeduplicationService:
     def _conflict_reason(self, *, entity_type: str, classification: str, rows: list[dict[str, Any]]) -> str:
         if classification == "equivalent":
             if entity_type == "field":
+                if self._fields_are_multiple_semantic_views(rows=rows):
+                    return "multiple_semantic_views_over_same_physical_column"
                 return "shared_physical_column_across_metadata_scopes"
             if entity_type == "table":
                 return "shared_physical_table_across_domains"
@@ -748,3 +753,33 @@ class AIDictionaryDeduplicationService:
     @staticmethod
     def _normalize_text(value: Any) -> str:
         return " ".join(str(value or "").strip().lower().split())
+
+    @classmethod
+    def _fields_are_multiple_semantic_views(cls, *, rows: list[dict[str, Any]]) -> bool:
+        if len(rows) <= 1:
+            return False
+        schema_names = {cls._normalize_key(item.get("schema_name")) for item in rows if cls._normalize_key(item.get("schema_name"))}
+        table_names = {cls._normalize_key(item.get("table_name")) for item in rows if cls._normalize_key(item.get("table_name"))}
+        column_names = {cls._normalize_key(item.get("column_name")) for item in rows if cls._normalize_key(item.get("column_name"))}
+        if len(schema_names) != 1 or len(table_names) != 1 or len(column_names) != 1:
+            return False
+        semantic_views: set[tuple[str, str, str]] = set()
+        for item in rows:
+            tags = cls._parse_semantic_tags(str(item.get("definicion_negocio") or ""))
+            json_path = str(tags.get("json_path") or "").strip()
+            semantic_type = str(tags.get("semantic_type") or "").strip()
+            semantic_view = str(tags.get("semantic_view") or "").strip()
+            if not any((json_path, semantic_type, semantic_view)):
+                continue
+            semantic_views.add((json_path, semantic_type, semantic_view))
+        return len(semantic_views) > 1
+
+    @staticmethod
+    def _parse_semantic_tags(text: str) -> dict[str, str]:
+        payload: dict[str, str] = {}
+        for key, value in re.findall(r"\[([a-zA-Z0-9_]+)=(.*?)\](?=\[|$)", str(text or "")):
+            clean_key = str(key or "").strip().lower()
+            clean_value = str(value or "").strip()
+            if clean_key and clean_value:
+                payload[clean_key] = clean_value
+        return payload

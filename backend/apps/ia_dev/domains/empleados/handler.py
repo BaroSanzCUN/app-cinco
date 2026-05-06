@@ -698,8 +698,14 @@ class EmpleadosHandler:
                 f"{key}={value}" for key, value in dict(filtros_aplicados or {}).items() if str(value or "").strip()
             )
             if filtro_texto:
-                return f"No encontre empleados activos con esos criterios ({filtro_texto})."
-            return "No encontre empleados activos con esos criterios."
+                return (
+                    "No identifique empleados activos con los criterios solicitados. "
+                    f"Revise filtros como {filtro_texto} o pida una busqueda por cedula, nombre, cargo o area."
+                )
+            return (
+                "No identifique empleados activos con los criterios solicitados. "
+                "Puedes pedir una busqueda por cedula, nombre, cargo o area para acotar la consulta."
+            )
         if movil:
             integrantes = len(empleados)
             return (
@@ -741,7 +747,10 @@ class EmpleadosHandler:
                 f"El conteo usa {temporal_scope.get('column_hint')} entre "
                 f"{temporal_scope.get('start_date')} y {temporal_scope.get('end_date')}."
             )
-        return f"Actualmente hay {int(total_empleados)} empleados {status_label}."
+        return (
+            f"Actualmente hay {int(total_empleados)} empleados {status_label}. "
+            "Si lo necesitas, puedo desglosarlo por area, cargo o sede."
+        )
 
     @staticmethod
     def _build_employee_count_actions(
