@@ -349,6 +349,8 @@ class ColumnSemanticResolver:
         for separator in (" y ", " con ", " por ", ",", ".", ";", "?"):
             if separator in raw:
                 raw = raw.split(separator, 1)[0].strip()
+        if re.match(r"^(y|e|o)\b", raw):
+            return ""
         if logical in {"cedula", "cedula_empleado", "identificacion", "documento"}:
             digit_match = re.search(r"\b\d{6,13}\b", raw)
             return digit_match.group(0) if digit_match else ""

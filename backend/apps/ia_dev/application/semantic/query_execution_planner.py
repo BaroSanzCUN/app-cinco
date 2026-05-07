@@ -53,6 +53,11 @@ class QueryExecutionPlanner:
             template_id=template_id,
             resolved_query=resolved_query,
         )
+        raw_query_fallback_meta = self._resolve_raw_query_fallback_metadata(
+            domain_code=domain_code,
+            template_id=template_id,
+            resolved_query=resolved_query,
+        )
         capability_available = bool(capability_id and self._is_capability_rollout_enabled(capability_id))
         pilot_analytics_candidate = self.join_aware_sql_service.should_handle(
             resolved_query=resolved_query
@@ -107,6 +112,7 @@ class QueryExecutionPlanner:
                             "operation": resolved_query.intent.operation,
                             "capability_id": capability_id,
                             **dict(sql_metadata or {}),
+                            **raw_query_fallback_meta,
                             **self._build_analytics_router_metadata(
                                 domain_code=domain_code,
                                 capability_id=capability_id,
@@ -128,6 +134,7 @@ class QueryExecutionPlanner:
                     },
                     metadata={
                         "template_id": template_id,
+                        **raw_query_fallback_meta,
                         **dict(sql_metadata or {}),
                         **analytics_router_metadata,
                     },
@@ -159,6 +166,7 @@ class QueryExecutionPlanner:
                     },
                     metadata={
                         "template_id": template_id,
+                        **raw_query_fallback_meta,
                         **dict(sql_metadata or {}),
                         **cleanup_metadata,
                     },
@@ -175,6 +183,7 @@ class QueryExecutionPlanner:
                 metadata={
                     "template_id": template_id,
                     "operation": resolved_query.intent.operation,
+                    **raw_query_fallback_meta,
                     **self._build_analytics_router_metadata(
                         domain_code=domain_code,
                         capability_id=capability_id,
@@ -194,7 +203,7 @@ class QueryExecutionPlanner:
                 capability_id=capability_id,
                 constraints=constraints,
                 policy={"allowed": False, "reason": "fallback_legacy"},
-                metadata={"template_id": template_id, **analytics_router_metadata},
+                metadata={"template_id": template_id, **raw_query_fallback_meta, **analytics_router_metadata},
             )
 
         if domain_code == "general":
@@ -205,7 +214,7 @@ class QueryExecutionPlanner:
                 capability_id=capability_id,
                 constraints=constraints,
                 policy={"allowed": False, "reason": "fallback_legacy"},
-                metadata={"template_id": template_id, **analytics_router_metadata},
+                metadata={"template_id": template_id, **raw_query_fallback_meta, **analytics_router_metadata},
             )
 
         missing_context = self._detect_missing_context(resolved_query=resolved_query)
@@ -222,7 +231,7 @@ class QueryExecutionPlanner:
                     "reason": "missing_context",
                     "metadata": {"missing_context": missing_context},
                 },
-                metadata={"template_id": template_id, **analytics_router_metadata},
+                metadata={"template_id": template_id, **raw_query_fallback_meta, **analytics_router_metadata},
             )
 
         return QueryExecutionPlan(
@@ -241,6 +250,7 @@ class QueryExecutionPlanner:
             metadata={
                 "template_id": template_id,
                 **({"sql_reason": sql_reason} if sql_reason else {}),
+                **raw_query_fallback_meta,
                 **dict(sql_metadata or {}),
                 **analytics_router_metadata,
             },
@@ -616,7 +626,6 @@ class QueryExecutionPlanner:
         if normalized_domain in {"empleados", "rrhh"}:
             filters = dict(resolved_query.normalized_filters or {})
             operation = str(resolved_query.intent.operation or "").strip().lower()
-            raw_query = str(resolved_query.intent.raw_query or "").strip().lower()
             metrics = [str(item).strip().lower() for item in list(resolved_query.intent.metrics or [])]
             group_by = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or []) if str(item).strip()]
             status_value = self._resolve_status_filter(filters=filters)
@@ -638,13 +647,16 @@ class QueryExecutionPlanner:
                 and not bool(temporal_scope.get("ambiguous"))
             )
             if self._is_employee_population_summary_request(
-                raw_query=raw_query,
                 filters=filters,
                 group_by=group_by,
                 status_value=status_value,
+                template_id=template_id,
+                operation=operation,
+                has_employee_identifier=has_employee_identifier,
+                has_employee_detail_filter=has_employee_detail_filter,
             ):
                 return "empleados.count.active.v1"
-            if "turnover_rate" in metrics or re.search(r"\b(rotacion|rotaciones|turnover)\b", raw_query):
+            if "turnover_rate" in metrics:
                 return "empleados.count.active.v1"
             if (template_id == "detail_by_entity_and_period" or operation == "detail") and (
                 has_employee_identifier or has_employee_detail_filter
@@ -713,12 +725,22 @@ class QueryExecutionPlanner:
         group_by = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or []) if str(item).strip()]
         metrics = [str(item).strip().lower() for item in list(resolved_query.intent.metrics or []) if str(item).strip()]
         operation = str(resolved_query.intent.operation or "").strip().lower()
-        raw_query = str(resolved_query.intent.raw_query or "").strip().lower()
         if str(resolved_query.intent.domain_code or "").strip().lower() in {"empleados", "rrhh"} and self._is_employee_population_summary_request(
-            raw_query=raw_query,
             filters=filters,
             group_by=group_by,
             status_value=status_value,
+            template_id=str(resolved_query.intent.template_id or "").strip().lower(),
+            operation=operation,
+            has_employee_identifier=bool(
+                self._first_filter_value(
+                    filters=filters,
+                    keys=("cedula", "cedula_empleado", "identificacion", "documento", "id_empleado"),
+                )
+                or str(filters.get("movil") or "").strip()
+                or str(filters.get("codigo_sap") or "").strip()
+                or str(filters.get("search") or "").strip()
+            ),
+            has_employee_detail_filter=self._has_employee_detail_filter(filters=filters),
         ):
             operation = "aggregate" if group_by else "count"
         result_shape = "summary"
@@ -787,26 +809,24 @@ class QueryExecutionPlanner:
     @staticmethod
     def _is_employee_population_summary_request(
         *,
-        raw_query: str,
         filters: dict[str, Any],
         group_by: list[str],
         status_value: str,
+        template_id: str,
+        operation: str,
+        has_employee_identifier: bool,
+        has_employee_detail_filter: bool,
     ) -> bool:
-        normalized = str(raw_query or "").strip().lower()
         if status_value not in {"ACTIVO", "INACTIVO"}:
             return False
-        if not re.search(r"\b(emplead\w*|colaborador(?:es)?|personal|persona(?:s)?|trabajador(?:es)?)\b", normalized):
-            return False
-        if any(
-            str((filters or {}).get(key) or "").strip()
-            for key in ("cedula", "cedula_empleado", "identificacion", "documento", "id_empleado", "movil", "codigo_sap", "nombre", "search")
-        ):
-            return False
-        if any(token in normalized for token in ("detalle", "informacion", "info", "ficha", "datos", "buscar", "encuentra")):
+        if has_employee_identifier or has_employee_detail_filter:
             return False
         if any(str((filters or {}).get(key) or "").strip() for key in ("fnacimiento_month", "birth_month", "month_of_birth")):
             return False
-        return bool(group_by) or bool(re.search(r"\b(activo|activos|activa|activas|inactivo|inactivos|vigente|vigentes|habilitado|habilitados)\b", normalized))
+        return bool(group_by) or str(template_id or "").strip().lower() in {
+            "count_entities_by_status",
+            "detail_by_entity_and_period",
+        } or str(operation or "").strip().lower() == "detail"
 
     @staticmethod
     def _resolve_status_filter(*, filters: dict[str, Any]) -> str:
@@ -815,6 +835,50 @@ class QueryExecutionPlanner:
             if status in {"ACTIVO", "INACTIVO"}:
                 return status
         return ""
+
+    def _resolve_raw_query_fallback_metadata(
+        self,
+        *,
+        domain_code: str,
+        template_id: str,
+        resolved_query: ResolvedQuerySpec,
+    ) -> dict[str, Any]:
+        normalized_domain = str(domain_code or "").strip().lower()
+        metadata = {
+            "raw_query_fallback_used": False,
+            "raw_query_fallback_reason": "",
+        }
+        if normalized_domain not in {"ausentismo", "attendance"}:
+            return metadata
+
+        raw_query = str(resolved_query.intent.raw_query or "").strip().lower()
+        if re.search(r"\b(reincid\w*|recurrent\w*|recurren\w*)\b", raw_query):
+            metadata["raw_query_fallback_used"] = True
+            metadata["raw_query_fallback_reason"] = "attendance_recurrence_capability_not_structured_yet"
+            return metadata
+
+        filters = dict(resolved_query.normalized_filters or {})
+        group_by = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or []) if str(item).strip()]
+        has_attendance_reason = bool(
+            str(filters.get("justificacion") or "").strip()
+            or str(filters.get("motivo_justificacion") or "").strip()
+        )
+        has_people_scope = bool(
+            re.search(r"\b(emplead\w*|colaborador(?:es)?|personal|persona(?:s)?)\b", raw_query)
+        )
+        asks_summary_count = bool(
+            re.search(r"\b(cantidad|cuantos|cuantas|total|numero|resumen)\b", raw_query)
+        )
+        if (
+            str(template_id or "").strip().lower() != "aggregate_by_group_and_period"
+            and has_attendance_reason
+            and has_people_scope
+            and not group_by
+            and not asks_summary_count
+        ):
+            metadata["raw_query_fallback_used"] = True
+            metadata["raw_query_fallback_reason"] = "attendance_people_scope_detail_fallback"
+        return metadata
 
     def _build_sql_query(self, *, resolved_query: ResolvedQuerySpec) -> tuple[str, str, dict[str, Any]]:
         pilot = self.join_aware_sql_service.compile(
@@ -968,8 +1032,11 @@ class QueryExecutionPlanner:
             where_parts.append(
                 f"{status_column} = '{self._escape_literal(self._resolve_status_filter(filters=filters))}'"
             )
-        for logical_name in ("area", "cargo", "sede", "supervisor", "carpeta", "tipo_labor"):
-            value = str(filters.get(logical_name) or "").strip()
+        for logical_name in ("area", "cargo", "sede", "supervisor", "carpeta", "tipo_labor", "movil"):
+            raw_value = filters.get(logical_name)
+            if isinstance(raw_value, dict):
+                continue
+            value = str(raw_value or "").strip()
             if not value:
                 continue
             physical = self._resolve_named_column(context=context, preferred_terms=(logical_name,))
@@ -980,6 +1047,17 @@ class QueryExecutionPlanner:
         where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
         limit = self._max_sql_limit()
         used_columns = [birthday_column, status_column, *detail_columns]
+        data_quality_query, data_quality_reason, data_quality_metadata = self._build_employee_data_quality_sql_query(
+            resolved_query=resolved_query,
+            context=context,
+            table=table,
+            detail_columns=detail_columns,
+            base_where_parts=where_parts,
+        )
+        if data_quality_query:
+            return data_quality_query, data_quality_reason, data_quality_metadata
+        if data_quality_reason not in {"employee_data_quality_not_applicable", ""}:
+            return "", data_quality_reason, data_quality_metadata
         certificate_query, certificate_reason, certificate_metadata = self._build_employee_certificate_heights_sql_query(
             resolved_query=resolved_query,
             context=context,
@@ -1005,6 +1083,34 @@ class QueryExecutionPlanner:
                 concept_field="fecha_nacimiento" if is_birthday_query else "employees",
             )
 
+        if group_by or template_id == "aggregate_by_group_and_period" or operation in {"aggregate", "compare", "summary"}:
+            group_dimension = self._resolve_employee_group_dimension(
+                resolved_query=resolved_query,
+                context=context,
+            )
+            if not group_dimension:
+                return "", "employee_group_column_missing", {}
+            group_sql = str(group_dimension.get("group_sql") or "")
+            select_sql = str(group_dimension.get("select_sql") or "")
+            dimension_aliases = [
+                str(item or "").strip().lower()
+                for item in list(group_dimension.get("dimension_aliases") or [])
+                if str(item or "").strip()
+            ] or [str(group_dimension.get("alias") or "grupo").strip().lower() or "grupo"]
+            query = (
+                f"SELECT {select_sql}, COUNT(*) AS total_registros "
+                f"FROM {table}{where_sql} GROUP BY {group_sql} "
+                f"ORDER BY total_registros DESC LIMIT {limit}"
+            )
+            return query, "employee_birthdays_aggregate", self._employee_sql_metadata(
+                table=table,
+                columns=[birthday_column, status_column, *list(group_dimension.get("physical_columns") or [])],
+                metric_used="employees",
+                aggregation_used="count",
+                dimensions_used=dimension_aliases,
+                concept_field="fecha_nacimiento" if is_birthday_query else "employees",
+            )
+
         if template_id in {"count_records_by_period", "count_entities_by_status"} or operation == "count":
             query = f"SELECT COUNT(*) AS total_registros FROM {table}{where_sql} LIMIT 1"
             return query, "employee_birthdays_count", self._employee_sql_metadata(
@@ -1016,7 +1122,73 @@ class QueryExecutionPlanner:
                 concept_field="fecha_nacimiento" if is_birthday_query else "employees",
             )
 
-        if template_id == "aggregate_by_group_and_period" or operation in {"aggregate", "compare", "summary"}:
+        return "", "employee_sql_not_applicable", {}
+
+    def _build_employee_data_quality_sql_query(
+        self,
+        *,
+        resolved_query: ResolvedQuerySpec,
+        context: dict[str, Any],
+        table: str,
+        detail_columns: list[str],
+        base_where_parts: list[str],
+    ) -> tuple[str, str, dict[str, Any]]:
+        filters = dict(resolved_query.normalized_filters or {})
+        targets = self._resolve_data_quality_targets(filters=filters, context=context)
+        if not targets:
+            return "", "employee_data_quality_not_applicable", {}
+
+        operation = str(resolved_query.intent.operation or "").strip().lower()
+        template_id = str(resolved_query.intent.template_id or "").strip().lower()
+        group_by = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or []) if str(item).strip()]
+        where_parts = list(base_where_parts or [])
+        missing_clauses = [str(item.get("where_sql") or "").strip() for item in targets if str(item.get("where_sql") or "").strip()]
+        if not missing_clauses:
+            return "", "employee_data_quality_target_missing_sql", {}
+        where_parts.append(f"({' OR '.join(missing_clauses)})")
+        where_sql = " WHERE " + " AND ".join(where_parts)
+        limit = self._max_sql_limit()
+
+        target_selects = [
+            str(item.get("select_sql") or "").strip()
+            for item in targets
+            if str(item.get("select_sql") or "").strip()
+        ]
+        select_columns = list(detail_columns or [])
+        for select_sql in target_selects:
+            if select_sql not in select_columns:
+                select_columns.append(select_sql)
+        select_columns = select_columns[:20]
+
+        target_labels = [
+            str(item.get("label") or item.get("logical_name") or "").strip()
+            for item in targets
+            if str(item.get("label") or item.get("logical_name") or "").strip()
+        ]
+        dimensions_used = list(group_by or [])
+        extra_metadata = {
+            "response_category": "data_quality",
+            "data_quality_operator": "missing_or_incomplete",
+            "data_quality_targets": [
+                str(item.get("logical_name") or "").strip().lower()
+                for item in targets
+                if str(item.get("logical_name") or "").strip()
+            ],
+            "data_quality_target_labels": target_labels,
+            "insights": [
+                "La consulta se resolvio como revision gobernada de datos faltantes/incompletos.",
+            ],
+        }
+        used_columns = [
+            *list(detail_columns or []),
+            *[
+                str(item.get("source_column") or "").strip()
+                for item in targets
+                if str(item.get("source_column") or "").strip()
+            ],
+        ]
+
+        if group_by or template_id == "aggregate_by_group_and_period" or operation in {"aggregate", "compare", "summary"}:
             group_dimension = self._resolve_employee_group_dimension(
                 resolved_query=resolved_query,
                 context=context,
@@ -1025,22 +1197,48 @@ class QueryExecutionPlanner:
                 return "", "employee_group_column_missing", {}
             group_sql = str(group_dimension.get("group_sql") or "")
             select_sql = str(group_dimension.get("select_sql") or "")
-            dimension_alias = str(group_dimension.get("alias") or "grupo").strip().lower() or "grupo"
             query = (
                 f"SELECT {select_sql}, COUNT(*) AS total_registros "
                 f"FROM {table}{where_sql} GROUP BY {group_sql} "
                 f"ORDER BY total_registros DESC LIMIT {limit}"
             )
-            return query, "employee_birthdays_aggregate", self._employee_sql_metadata(
+            dimensions_used = [
+                str(item or "").strip().lower()
+                for item in list(group_dimension.get("dimension_aliases") or group_by or [])
+                if str(item or "").strip()
+            ]
+            return query, "employee_data_quality_aggregate", self._employee_sql_metadata(
                 table=table,
-                columns=[birthday_column, status_column, *list(group_dimension.get("physical_columns") or [])],
-                metric_used="employees",
+                columns=[*used_columns, *list(group_dimension.get("physical_columns") or [])],
+                metric_used="employee_data_quality",
                 aggregation_used="count",
-                dimensions_used=[dimension_alias],
-                concept_field="fecha_nacimiento" if is_birthday_query else "employees",
+                dimensions_used=dimensions_used,
+                concept_field="employee_data_quality",
+                extra_metadata=extra_metadata,
             )
 
-        return "", "employee_sql_not_applicable", {}
+        if template_id in {"count_records_by_period", "count_entities_by_status"} or operation == "count":
+            query = f"SELECT COUNT(*) AS total_registros FROM {table}{where_sql} LIMIT 1"
+            return query, "employee_data_quality_count", self._employee_sql_metadata(
+                table=table,
+                columns=used_columns,
+                metric_used="employee_data_quality",
+                aggregation_used="count",
+                dimensions_used=[],
+                concept_field="employee_data_quality",
+                extra_metadata=extra_metadata,
+            )
+
+        query = f"SELECT {', '.join(select_columns)} FROM {table}{where_sql} LIMIT {limit}"
+        return query, "employee_data_quality_detail", self._employee_sql_metadata(
+            table=table,
+            columns=used_columns,
+            metric_used="employee_data_quality",
+            aggregation_used="list",
+            dimensions_used=[],
+            concept_field="employee_data_quality",
+            extra_metadata=extra_metadata,
+        )
 
     def _build_employee_certificate_heights_sql_query(
         self,
@@ -1084,14 +1282,16 @@ class QueryExecutionPlanner:
         ):
             return "", "employee_heights_certificate_not_applicable", {}
 
-        required_rule_codes = (
-            "certificado_alturas_vigencia_18_meses",
-            "certificado_alturas_vencido",
-            "certificado_alturas_proximo_vencer_45_dias",
-            "personal_activo_operativo",
+        required_rule_sets = (
+            ("certificado_alturas_vigencia_18_meses", "certificado_alturas_vigencia_anual"),
+            ("certificado_alturas_vencido",),
+            ("certificado_alturas_proximo_vencer_45_dias", "certificado_alturas_proximo_vencer_30_dias"),
+            ("personal_activo_operativo",),
         )
         missing_rules = [
-            code for code in required_rule_codes if not self._dictionary_rule_declared(context=context, rule_code=code)
+            "/".join(rule_codes)
+            for rule_codes in required_rule_sets
+            if not any(self._dictionary_rule_declared(context=context, rule_code=code) for code in rule_codes)
         ]
         if missing_rules:
             return "", "employee_heights_certificate_rules_missing", {"missing_rule_codes": missing_rules}
@@ -1236,27 +1436,56 @@ class QueryExecutionPlanner:
         group_by = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or []) if str(item).strip()]
         if not group_by:
             return {}
-        target = group_by[0]
-        if target == "birth_month":
-            birthday_column = self._resolve_named_column(
+
+        resolved_dimensions: list[dict[str, str]] = []
+        for target in group_by:
+            if target == "birth_month":
+                birthday_column = self._resolve_named_column(
+                    context=context,
+                    preferred_terms=("fecha_nacimiento", "fnacimiento", "birth_date"),
+                )
+                if not birthday_column:
+                    return {}
+                resolved_dimensions.append(
+                    {
+                        "alias": "birth_month",
+                        "group_sql": f"MONTH({birthday_column})",
+                        "select_sql": f"MONTH({birthday_column}) AS birth_month",
+                        "physical_column": birthday_column,
+                    }
+                )
+                continue
+
+            physical = self._resolve_group_column_by_target(
+                target=target,
+                resolved_query=resolved_query,
                 context=context,
-                preferred_terms=("fecha_nacimiento", "fnacimiento", "birth_date"),
             )
-            if birthday_column:
-                return {
-                    "alias": "birth_month",
-                    "group_sql": f"MONTH({birthday_column})",
-                    "select_sql": f"MONTH({birthday_column}) AS birth_month",
-                    "physical_columns": [birthday_column],
+            if not physical:
+                return {}
+            resolved_dimensions.append(
+                {
+                    "alias": target,
+                    "group_sql": physical,
+                    "select_sql": f"{physical} AS {target}",
+                    "physical_column": physical,
                 }
-        physical = self._resolve_group_column(resolved_query=resolved_query, context=context)
-        if not physical:
-            return {}
+            )
+
         return {
-            "alias": target,
-            "group_sql": physical,
-            "select_sql": f"{physical} AS {target}",
-            "physical_columns": [physical],
+            "alias": str(resolved_dimensions[0].get("alias") or "grupo"),
+            "group_sql": ", ".join(str(item.get("group_sql") or "") for item in resolved_dimensions),
+            "select_sql": ", ".join(str(item.get("select_sql") or "") for item in resolved_dimensions),
+            "physical_columns": [
+                str(item.get("physical_column") or "").strip()
+                for item in resolved_dimensions
+                if str(item.get("physical_column") or "").strip()
+            ],
+            "dimension_aliases": [
+                str(item.get("alias") or "").strip().lower()
+                for item in resolved_dimensions
+                if str(item.get("alias") or "").strip()
+            ],
         }
 
     def _resolve_named_column(self, *, context: dict[str, Any], preferred_terms: tuple[str, ...]) -> str:
@@ -1309,6 +1538,109 @@ class QueryExecutionPlanner:
             if physical and physical not in selected:
                 selected.append(physical)
         return selected[:10] or self._resolve_detail_columns(context=context)
+
+    def _resolve_data_quality_targets(
+        self,
+        *,
+        filters: dict[str, Any],
+        context: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        targets: list[dict[str, Any]] = []
+        for logical_name, raw_value in dict(filters or {}).items():
+            if not self._is_data_quality_filter_spec(raw_value):
+                continue
+            profile = self._find_context_profile(
+                context=context,
+                logical_names=(str(logical_name or "").strip().lower(),),
+            )
+            if not profile:
+                continue
+            definition = str(
+                profile.get("definicion_negocio")
+                or profile.get("definition")
+                or profile.get("descripcion")
+                or ""
+            ).strip()
+            semantic_tags = self._parse_semantic_tags(text=definition)
+            source_column = str(profile.get("column_name") or "").strip().lower()
+            if not source_column:
+                continue
+            json_path = str(semantic_tags.get("json_path") or "").strip()
+            if json_path:
+                select_sql = (
+                    f"JSON_UNQUOTE(JSON_EXTRACT({source_column}, '{self._escape_literal(json_path)}')) "
+                    f"AS {str(logical_name).strip().lower()}"
+                )
+                where_sql = (
+                    f"JSON_UNQUOTE(JSON_EXTRACT({source_column}, '{self._escape_literal(json_path)}')) IS NULL "
+                    f"OR JSON_UNQUOTE(JSON_EXTRACT({source_column}, '{self._escape_literal(json_path)}')) = ''"
+                )
+            else:
+                select_sql = source_column
+                where_sql = f"{source_column} IS NULL OR {source_column} = ''"
+            targets.append(
+                {
+                    "logical_name": str(logical_name or "").strip().lower(),
+                    "source_column": source_column,
+                    "select_sql": select_sql,
+                    "where_sql": where_sql,
+                    "label": self._data_quality_label(logical_name=str(logical_name or "").strip().lower()),
+                }
+            )
+        return targets
+
+    @staticmethod
+    def _is_data_quality_filter_spec(value: Any) -> bool:
+        if not isinstance(value, dict):
+            return False
+        operator = str(value.get("operator") or "").strip().lower()
+        return operator in {"is_missing", "is_incomplete"}
+
+    @staticmethod
+    def _data_quality_label(*, logical_name: str) -> str:
+        labels = {
+            "supervisor": "supervisor",
+            "correo_corporativo": "correo corporativo",
+            "celular_personal": "celular personal",
+            "eps": "EPS",
+            "arl": "ARL",
+            "talla_botas": "tallas",
+            "talla_camisa": "tallas",
+            "talla_chaqueta": "tallas",
+            "talla_guerrera": "tallas",
+            "talla_pantalon": "tallas",
+        }
+        return str(labels.get(str(logical_name or "").strip().lower()) or logical_name)
+
+    @staticmethod
+    def _data_quality_risk_text(*, targets: list[str]) -> str:
+        normalized = {str(item or "").strip().lower() for item in list(targets or []) if str(item or "").strip()}
+        if "supervisor" in normalized:
+            return "La falta de jefe directo limita escalamiento, control y seguimiento de la operacion."
+        if "correo corporativo" in normalized:
+            return "La ausencia de correo corporativo afecta notificaciones formales y trazabilidad de comunicaciones."
+        if "celular personal" in normalized:
+            return "La ausencia de celular personal dificulta contacto operativo y actualizacion de datos del colaborador."
+        if normalized & {"eps", "arl"}:
+            return "La falta de EPS o ARL expone riesgos de cumplimiento laboral y cobertura del personal."
+        if "tallas" in normalized:
+            return "La informacion de tallas incompleta afecta planeacion, compra y entrega correcta de dotacion."
+        return "La informacion faltante reduce control operativo y confiabilidad del maestro de personal."
+
+    @staticmethod
+    def _data_quality_recommendation_text(*, targets: list[str]) -> str:
+        normalized = {str(item or "").strip().lower() for item in list(targets or []) if str(item or "").strip()}
+        if "supervisor" in normalized:
+            return "Asignar responsable de actualizacion jerarquica y depurar empleados activos sin jefe directo."
+        if "correo corporativo" in normalized:
+            return "Completar el correo corporativo oficial y validar el proceso de provisionamiento de cuentas."
+        if "celular personal" in normalized:
+            return "Actualizar el celular personal principal y reforzar la captura obligatoria del dato."
+        if normalized & {"eps", "arl"}:
+            return "Regularizar EPS y ARL faltantes con validacion documental y seguimiento de cumplimiento."
+        if "tallas" in normalized:
+            return "Completar tallas oficiales desde datos.tallas antes de programar dotacion o reposiciones."
+        return "Depurar el dato faltante y establecer responsables de calidad por area."
 
     def _employee_sql_metadata(
         self,
@@ -1658,7 +1990,20 @@ class QueryExecutionPlanner:
         requested = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or [])]
         if not requested:
             return ""
+        return self._resolve_group_column_by_target(target=requested[0], resolved_query=resolved_query, context=context)
+
+    def _resolve_group_column_by_target(
+        self,
+        *,
+        target: str,
+        resolved_query: ResolvedQuerySpec,
+        context: dict[str, Any],
+    ) -> str:
+        requested = [str(item).strip().lower() for item in list(resolved_query.intent.group_by or [])]
+        if not requested:
+            return ""
         profile_by_logical: dict[str, str] = {}
+        profile_by_physical: dict[str, str] = {}
         for profile in list(context.get("column_profiles") or []):
             if not isinstance(profile, dict):
                 continue
@@ -1669,16 +2014,17 @@ class QueryExecutionPlanner:
             if not bool(profile.get("supports_group_by") or profile.get("supports_dimension")):
                 continue
             profile_by_logical[logical] = physical
+            profile_by_physical[physical.strip().lower()] = physical
         aliases = dict(context.get("aliases") or {})
         columns = {str(item.get("column_name") or "").strip().lower(): str(item.get("column_name") or "").strip() for item in list(context.get("columns") or []) if isinstance(item, dict)}
-        for item in requested:
-            mapped = str(aliases.get(item, item)).strip().lower()
-            if mapped in profile_by_logical and self._is_safe_identifier(profile_by_logical[mapped]):
-                return profile_by_logical[mapped]
-            if mapped in columns and self._is_safe_identifier(columns[mapped]):
-                return columns[mapped]
-            if self._is_safe_identifier(mapped):
-                return mapped
+        mapped = str(aliases.get(target, target)).strip().lower()
+        for candidate in (target, mapped):
+            if candidate in profile_by_logical and self._is_safe_identifier(profile_by_logical[candidate]):
+                return profile_by_logical[candidate]
+            if candidate in profile_by_physical and self._is_safe_identifier(profile_by_physical[candidate]):
+                return profile_by_physical[candidate]
+            if candidate in columns and self._is_safe_identifier(columns[candidate]):
+                return columns[candidate]
         return ""
 
     @staticmethod
@@ -1865,6 +2211,7 @@ class QueryExecutionPlanner:
             else:
                 reply = f"Se listan {len(rows)} empleados con cumpleanos en el mes {month_value}."
         business_response: dict[str, Any] | None = None
+        response_category = str(metadata.get("response_category") or "").strip().lower()
         findings = [
             {
                 "title": "Top hallazgo",
@@ -1886,6 +2233,54 @@ class QueryExecutionPlanner:
                 },
             }
         ]
+        if response_category == "data_quality":
+            target_labels = [
+                str(item or "").strip()
+                for item in list(metadata.get("data_quality_target_labels") or [])
+                if str(item or "").strip()
+            ]
+            distinct_labels = list(dict.fromkeys(target_labels))
+            label_text = " o ".join(distinct_labels[:2]) if len(distinct_labels) <= 2 else ", ".join(distinct_labels[:-1]) + f" y {distinct_labels[-1]}"
+            total = int(kpis.get("total") or kpis.get("rowcount") or len(rows) or 0)
+            operation = str(resolved_query.intent.operation or "").strip().lower()
+            missing_phrase = (
+                f"sin {label_text}"
+                if len(distinct_labels) == 1 and label_text.lower() != "tallas"
+                else f"con {label_text} faltante o incompleto"
+            )
+            if operation == "count":
+                reply = f"Se identificaron {total} empleados activos {missing_phrase}."
+            else:
+                reply = f"Se listan {len(rows)} empleados activos {missing_phrase}."
+            hallazgo = f"Hay empleados activos con informacion faltante o incompleta en {label_text}."
+            riesgo = self._data_quality_risk_text(targets=distinct_labels)
+            recomendacion = self._data_quality_recommendation_text(targets=distinct_labels)
+            insights = [
+                f"Dato principal: {total} empleados activos con {label_text} faltante o incompleto.",
+                f"Riesgo: {riesgo}",
+                f"Recomendacion: {recomendacion}",
+            ]
+            findings = [{"title": "Alerta de calidad de datos", "detail": hallazgo}]
+            business_response = {
+                "dato": f"{total} empleados activos con {label_text} faltante o incompleto.",
+                "hallazgo": hallazgo,
+                "interpretacion": "La consulta evidencia brechas de calidad de dato sobre atributos operativos y administrativos del personal activo.",
+                "riesgo": riesgo,
+                "recomendacion": recomendacion,
+                "siguiente_accion": "Priorizar depuracion del dato y asignar responsables por area o supervisor.",
+            }
+            actions = [
+                {
+                    "id": f"task-followup-{run_context.run_id}",
+                    "type": "followup",
+                    "label": "Muestrame el resumen por area, cargo o supervisor.",
+                    "payload": {
+                        "suggested_dimensions": ["area", "cargo", "supervisor"],
+                        "current_strategy": "sql_assisted",
+                        "metric_used": metric_used,
+                    },
+                }
+            ]
         if metric_used == "certificado_alturas_vigencia" and rows:
             first_row = dict(rows[0] or {})
             vencidos = int(first_row.get("certificados_vencidos") or 0)
