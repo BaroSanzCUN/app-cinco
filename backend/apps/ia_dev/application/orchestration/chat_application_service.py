@@ -967,6 +967,37 @@ class ChatApplicationService:
                         },
                         only_if=True,
                     )
+            resolved_intent_domain = normalizar_codigo_dominio(
+                str(getattr(intent, "domain_code", "") or "")
+            )
+            current_context_domain = normalizar_codigo_dominio(
+                semantic_context.get("domain_code")
+                or semantic_context.get("domain")
+                or domain_code
+                or ""
+            )
+            if (
+                resolved_intent_domain
+                and resolved_intent_domain not in {"general", "knowledge"}
+                and resolved_intent_domain != current_context_domain
+            ):
+                semantic_context = self.semantic_business_resolver.build_semantic_context(
+                    domain_code=resolved_intent_domain,
+                    include_dictionary=True,
+                )
+                self._record_event(
+                    observability=observability,
+                    event_type="semantic_context_realigned",
+                    source="ChatApplicationService",
+                    meta={
+                        "run_id": run_context.run_id,
+                        "trace_id": run_context.trace_id,
+                        "from_domain": current_context_domain,
+                        "to_domain": resolved_intent_domain,
+                        "reason": "intent_domain_override",
+                    },
+                    only_if=True,
+                )
             intent_arbitration = self.intent_arbitration_service.arbitrate(
                 original_question=message,
                 candidate_domain=domain_code or str(intent.domain_code or ""),
@@ -4188,13 +4219,14 @@ class ChatApplicationService:
         semantic_context = dict(resolved_query.get("semantic_context") or {})
         source_of_truth = dict(semantic_context.get("source_of_truth") or {})
         runtime_compatibility = dict(run_context.metadata.get("runtime_compatibility") or {})
+        resolved_final_intent = ChatApplicationService._resolve_runtime_final_intent(
+            intent_arbitration=intent_arbitration,
+            execution_plan=execution_plan,
+            response_flow=response_flow,
+        )
         orchestrator["runtime_flow"] = response_flow
         orchestrator["arbitrated_intent"] = str(intent_arbitration.get("final_intent") or "")
-        orchestrator["final_intent"] = str(
-            intent_arbitration.get("final_intent")
-            or orchestrator.get("intent")
-            or ""
-        )
+        orchestrator["final_intent"] = resolved_final_intent
         orchestrator["final_domain"] = str(
             intent_arbitration.get("final_domain")
             or execution_plan.get("domain_code")
@@ -4225,11 +4257,7 @@ class ChatApplicationService:
             "ok": True,
             "flow": response_flow,
             "arbitrated_intent": str(intent_arbitration.get("final_intent") or ""),
-            "final_intent": str(
-                intent_arbitration.get("final_intent")
-                or orchestrator.get("intent")
-                or ""
-            ),
+            "final_intent": resolved_final_intent,
             "final_domain": str(
                 intent_arbitration.get("final_domain")
                 or execution_plan.get("domain_code")
@@ -4270,6 +4298,39 @@ class ChatApplicationService:
         }
         payload["data_sources"] = data_sources
         return payload
+
+    @staticmethod
+    def _resolve_runtime_final_intent(
+        *,
+        intent_arbitration: dict[str, Any],
+        execution_plan: dict[str, Any],
+        response_flow: str,
+    ) -> str:
+        final_intent = str(intent_arbitration.get("final_intent") or "").strip().lower()
+        final_domain = str(intent_arbitration.get("final_domain") or execution_plan.get("domain_code") or "").strip().lower()
+        execution_meta = dict(execution_plan.get("metadata") or {})
+        compiler_used = str(
+            execution_meta.get("compiler")
+            or execution_meta.get("compiler_used")
+            or ""
+        ).strip().lower()
+        constraints = dict(execution_plan.get("constraints") or {})
+        group_by = [
+            str(item or "").strip().lower()
+            for item in list(constraints.get("group_by") or [])
+            if str(item or "").strip()
+        ]
+        filters = dict(constraints.get("filters") or {})
+        has_valid_employee_analytics_plan = bool(
+            final_domain in {"empleados", "rrhh"}
+            and str(response_flow or "").strip().lower() == "sql_assisted"
+            and compiler_used == "employee_semantic_sql"
+            and group_by
+            and bool(filters)
+        )
+        if has_valid_employee_analytics_plan:
+            return "analytics_query"
+        return final_intent or ""
 
     def _resolve_cleanup_guard(
         self,

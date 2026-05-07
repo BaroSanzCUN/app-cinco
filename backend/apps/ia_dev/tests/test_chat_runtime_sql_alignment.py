@@ -82,6 +82,59 @@ def _employee_birthday_context() -> dict:
     }
 
 
+def _employee_data_quality_context() -> dict:
+    return {
+        "tables": [
+            {"schema_name": "bd_c3nc4s1s", "table_name": "cinco_base_de_personal", "table_fqn": "bd_c3nc4s1s.cinco_base_de_personal"},
+        ],
+        "column_profiles": [
+            {"table_name": "cinco_base_de_personal", "logical_name": "cedula", "column_name": "cedula", "is_identifier": True},
+            {"table_name": "cinco_base_de_personal", "logical_name": "nombre", "column_name": "nombre"},
+            {"table_name": "cinco_base_de_personal", "logical_name": "apellido", "column_name": "apellido"},
+            {"table_name": "cinco_base_de_personal", "logical_name": "cargo", "column_name": "cargo"},
+            {"table_name": "cinco_base_de_personal", "logical_name": "sede", "column_name": "zona_nodo"},
+            {"table_name": "cinco_base_de_personal", "logical_name": "area", "column_name": "area", "supports_group_by": True, "supports_dimension": True},
+            {"table_name": "cinco_base_de_personal", "logical_name": "carpeta", "column_name": "carpeta", "supports_group_by": True, "supports_dimension": True},
+            {"table_name": "cinco_base_de_personal", "logical_name": "movil", "column_name": "movil", "supports_group_by": True, "supports_dimension": True},
+            {"table_name": "cinco_base_de_personal", "logical_name": "estado_empleado", "column_name": "estado", "supports_filter": True, "allowed_values": ["ACTIVO", "INACTIVO"]},
+            {"table_name": "cinco_base_de_personal", "logical_name": "supervisor", "column_name": "supervisor", "supports_filter": True, "supports_group_by": True, "supports_dimension": True},
+            {"table_name": "cinco_base_de_personal", "logical_name": "correo_corporativo", "column_name": "correo", "supports_filter": True},
+            {"table_name": "cinco_base_de_personal", "logical_name": "celular_personal", "column_name": "celular_personal", "supports_filter": True},
+            {"table_name": "cinco_base_de_personal", "logical_name": "eps", "column_name": "eps", "supports_filter": True},
+            {"table_name": "cinco_base_de_personal", "logical_name": "arl", "column_name": "arl", "supports_filter": True},
+            {"table_name": "cinco_base_de_personal", "logical_name": "talla_botas", "column_name": "datos", "supports_filter": True, "definicion_negocio": "Talla de botas. [json_path=$.tallas.botas]"},
+            {"table_name": "cinco_base_de_personal", "logical_name": "talla_camisa", "column_name": "datos", "supports_filter": True, "definicion_negocio": "Talla de camisa. [json_path=$.tallas.camisa]"},
+            {"table_name": "cinco_base_de_personal", "logical_name": "talla_chaqueta", "column_name": "datos", "supports_filter": True, "definicion_negocio": "Talla de chaqueta. [json_path=$.tallas.chaqueta]"},
+            {"table_name": "cinco_base_de_personal", "logical_name": "talla_guerrera", "column_name": "datos", "supports_filter": True, "definicion_negocio": "Talla de guerrera. [json_path=$.tallas.guerrera]"},
+            {"table_name": "cinco_base_de_personal", "logical_name": "talla_pantalon", "column_name": "datos", "supports_filter": True, "definicion_negocio": "Talla de pantalon. [json_path=$.tallas.pantalon]"},
+        ],
+        "allowed_tables": ["bd_c3nc4s1s.cinco_base_de_personal", "cinco_base_de_personal"],
+        "allowed_columns": [
+            "cedula", "nombre", "apellido", "cargo", "zona_nodo", "area", "carpeta", "movil",
+            "estado", "supervisor", "correo", "celular_personal", "eps", "arl", "datos",
+        ],
+        "aliases": {
+            "jefe directo": "supervisor",
+            "correo": "correo_corporativo",
+            "correo corporativo": "correo_corporativo",
+            "celular": "celular_personal",
+            "celular personal": "celular_personal",
+            "tallas": "talla_botas",
+        },
+        "synonym_index": {
+            "jefe": "supervisor",
+            "correo corporativo": "correo_corporativo",
+            "celular": "celular_personal",
+            "tallas": "talla_botas",
+        },
+        "dictionary": {"relations": []},
+        "source_of_truth": {"pilot_sql_assisted_enabled": True, "used_dictionary": True, "used_yaml": True},
+        "query_hints": {"candidate_group_dimensions": ["area", "carpeta", "movil", "supervisor"]},
+        "supports_sql_assisted": True,
+        "domain_status": "active",
+    }
+
+
 class ChatRuntimeSqlAlignmentTests(SimpleTestCase):
     def _resolve_plan(
         self,
@@ -267,7 +320,7 @@ class ChatRuntimeSqlAlignmentTests(SimpleTestCase):
         self.assertEqual(plan.strategy, "fallback")
         self.assertTrue(
             str(plan.reason or "").startswith("sql_rejected:")
-            or str(plan.reason or "") in {"no_allowed_dimension", "unsupported_dimension"}
+            or str(plan.reason or "") in {"no_allowed_dimension", "unsupported_dimension", "missing_dictionary_column"}
         )
 
     def test_employee_birthdays_in_may_use_sql_assisted(self):
@@ -340,6 +393,237 @@ class ChatRuntimeSqlAlignmentTests(SimpleTestCase):
         self.assertIn("GROUP BY area", str(plan.sql_query or ""))
         self.assertEqual(list((plan.metadata or {}).get("dimensions_used") or []), ["area"])
         self.assertEqual(str((plan.metadata or {}).get("compiler") or ""), "employee_semantic_sql")
+
+    def test_employee_missing_supervisor_uses_semantic_missing_filter_and_sql_assisted(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "IA_DEV_USE_OPENAI_CLASSIFIER": "0",
+                "IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0",
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            resolved_intent = QueryIntentResolver().resolve(
+                message="Empleados activos sin supervisor",
+                base_classification={"domain": "empleados", "intent": "analytics_query"},
+                semantic_context=_employee_data_quality_context(),
+            )
+            self.assertEqual(str(resolved_intent.operation or ""), "detail")
+            self.assertEqual(
+                dict(resolved_intent.filters or {}).get("supervisor"),
+                {"operator": "is_missing", "match_mode": "null_or_empty"},
+            )
+            resolved_query = ResolvedQuerySpec(
+                intent=resolved_intent,
+                semantic_context=_employee_data_quality_context(),
+                normalized_filters={**dict(resolved_intent.filters or {}), "estado": "ACTIVO"},
+                normalized_period={},
+            )
+            plan = QueryExecutionPlanner().plan(
+                run_context=RunContext.create(message="Empleados activos sin supervisor", session_id="dq-supervisor", reset_memory=False),
+                resolved_query=resolved_query,
+            )
+
+        self.assertEqual(plan.strategy, "sql_assisted")
+        self.assertIn("estado = 'ACTIVO'", str(plan.sql_query or ""))
+        self.assertIn("(supervisor IS NULL OR supervisor = '')", str(plan.sql_query or ""))
+        self.assertEqual(str((plan.metadata or {}).get("compiler") or ""), "employee_semantic_sql")
+
+    def test_employee_missing_eps_or_arl_uses_or_null_or_empty_filters(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "IA_DEV_USE_OPENAI_CLASSIFIER": "0",
+                "IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0",
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            resolved_intent = QueryIntentResolver().resolve(
+                message="Empleados activos sin EPS o ARL",
+                base_classification={"domain": "empleados", "intent": "analytics_query"},
+                semantic_context=_employee_data_quality_context(),
+            )
+            resolved_query = ResolvedQuerySpec(
+                intent=resolved_intent,
+                semantic_context=_employee_data_quality_context(),
+                normalized_filters={**dict(resolved_intent.filters or {}), "estado": "ACTIVO"},
+                normalized_period={},
+            )
+            plan = QueryExecutionPlanner().plan(
+                run_context=RunContext.create(message="Empleados activos sin EPS o ARL", session_id="dq-eps-arl", reset_memory=False),
+                resolved_query=resolved_query,
+            )
+
+        self.assertEqual(plan.strategy, "sql_assisted")
+        self.assertIn("eps IS NULL OR eps = ''", str(plan.sql_query or ""))
+        self.assertIn("arl IS NULL OR arl = ''", str(plan.sql_query or ""))
+        self.assertIn(" OR ", str(plan.sql_query or ""))
+
+    def test_employee_missing_corporate_email_uses_correo_column(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "IA_DEV_USE_OPENAI_CLASSIFIER": "0",
+                "IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0",
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            resolved_intent = QueryIntentResolver().resolve(
+                message="Empleados activos sin correo corporativo",
+                base_classification={"domain": "empleados", "intent": "analytics_query"},
+                semantic_context=_employee_data_quality_context(),
+            )
+            resolved_query = ResolvedQuerySpec(
+                intent=resolved_intent,
+                semantic_context=_employee_data_quality_context(),
+                normalized_filters={**dict(resolved_intent.filters or {}), "estado": "ACTIVO"},
+                normalized_period={},
+            )
+            plan = QueryExecutionPlanner().plan(
+                run_context=RunContext.create(message="Empleados activos sin correo corporativo", session_id="dq-correo", reset_memory=False),
+                resolved_query=resolved_query,
+            )
+
+        self.assertEqual(plan.strategy, "sql_assisted")
+        self.assertIn("(correo IS NULL OR correo = '')", str(plan.sql_query or ""))
+
+    def test_employee_missing_personal_phone_uses_celular_personal_column(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "IA_DEV_USE_OPENAI_CLASSIFIER": "0",
+                "IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0",
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            resolved_intent = QueryIntentResolver().resolve(
+                message="Empleados activos sin celular",
+                base_classification={"domain": "empleados", "intent": "analytics_query"},
+                semantic_context=_employee_data_quality_context(),
+            )
+            resolved_query = ResolvedQuerySpec(
+                intent=resolved_intent,
+                semantic_context=_employee_data_quality_context(),
+                normalized_filters={**dict(resolved_intent.filters or {}), "estado": "ACTIVO"},
+                normalized_period={},
+            )
+            plan = QueryExecutionPlanner().plan(
+                run_context=RunContext.create(message="Empleados activos sin celular", session_id="dq-celular", reset_memory=False),
+                resolved_query=resolved_query,
+            )
+
+        self.assertEqual(plan.strategy, "sql_assisted")
+        self.assertIn("(celular_personal IS NULL OR celular_personal = '')", str(plan.sql_query or ""))
+
+    def test_employee_incomplete_sizes_use_datos_tallas_json_paths(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "IA_DEV_USE_OPENAI_CLASSIFIER": "0",
+                "IA_DEV_QUERY_INTELLIGENCE_OPENAI_ENABLED": "0",
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            resolved_intent = QueryIntentResolver().resolve(
+                message="Empleados activos con tallas incompletas",
+                base_classification={"domain": "empleados", "intent": "analytics_query"},
+                semantic_context=_employee_data_quality_context(),
+            )
+            resolved_query = ResolvedQuerySpec(
+                intent=resolved_intent,
+                semantic_context=_employee_data_quality_context(),
+                normalized_filters={**dict(resolved_intent.filters or {}), "estado": "ACTIVO"},
+                normalized_period={},
+            )
+            plan = QueryExecutionPlanner().plan(
+                run_context=RunContext.create(message="Empleados activos con tallas incompletas", session_id="dq-tallas", reset_memory=False),
+                resolved_query=resolved_query,
+            )
+
+        self.assertEqual(plan.strategy, "sql_assisted")
+        self.assertIn("JSON_UNQUOTE(JSON_EXTRACT(datos, '$.tallas.botas')) IS NULL", str(plan.sql_query or ""))
+        self.assertIn("JSON_UNQUOTE(JSON_EXTRACT(datos, '$.tallas.camisa')) IS NULL", str(plan.sql_query or ""))
+
+    def test_employee_data_quality_response_includes_business_response(self):
+        planner = QueryExecutionPlanner()
+        intent = StructuredQueryIntent(
+            raw_query="Empleados activos sin supervisor",
+            domain_code="empleados",
+            operation="detail",
+            template_id="detail_by_entity_and_period",
+            filters={"estado": "ACTIVO", "supervisor": {"operator": "is_missing", "match_mode": "null_or_empty"}},
+            metrics=["count"],
+            confidence=0.9,
+            source="rules",
+        )
+        resolved_query = ResolvedQuerySpec(
+            intent=intent,
+            semantic_context=_employee_data_quality_context(),
+            normalized_filters=dict(intent.filters or {}),
+            normalized_period={},
+        )
+        with patch.dict(
+            "os.environ",
+            {
+                "IA_DEV_QUERY_SQL_ASSISTED_ENABLED": "1",
+                "IA_DEV_QUERY_INTELLIGENCE_ENABLED": "1",
+                "IA_DEV_ATTENDANCE_EMPLOYEES_PILOT_ENABLED": "1",
+            },
+            clear=False,
+        ):
+            plan = planner.plan(
+                run_context=RunContext.create(message=intent.raw_query, session_id="dq-response", reset_memory=False),
+                resolved_query=resolved_query,
+            )
+
+        class _FakeCursor:
+            description = [("cedula",), ("nombre",), ("apellido",), ("cargo",), ("zona_nodo",), ("area",), ("carpeta",), ("movil",), ("supervisor",)]
+
+            def execute(self, _query):
+                return None
+
+            def fetchall(self):
+                return [("123", "Ana", "Lopez", "Tecnico", "Norte", "Operaciones", "A1", "MOV-1", "")]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        class _FakeConnection:
+            def cursor(self):
+                return _FakeCursor()
+
+        with patch("apps.ia_dev.application.semantic.query_execution_planner.connections", {"default": _FakeConnection()}):
+            result = planner.execute_sql_assisted(
+                run_context=RunContext.create(message=intent.raw_query, session_id="dq-response", reset_memory=False),
+                resolved_query=resolved_query,
+                execution_plan=plan,
+            )
+
+        self.assertTrue(bool(result.get("ok")))
+        payload = dict(result.get("response") or {})
+        business_response = dict((payload.get("data") or {}).get("business_response") or {})
+        self.assertIn("sin supervisor", str(payload.get("reply") or "").lower())
+        self.assertTrue(bool(str(business_response.get("hallazgo") or "").strip()))
+        self.assertTrue(bool(str(business_response.get("riesgo") or "").strip()))
+        self.assertTrue(bool(str(business_response.get("recomendacion") or "").strip()))
 
     def test_pilot_report_counts_sql_assisted_and_physical_columns(self):
         observability = MagicMock()
